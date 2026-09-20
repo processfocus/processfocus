@@ -151,9 +151,17 @@ export const preparePublicSourceWorkspace = (
     object(runtime["targets"]["dashboard-build"]["options"])
   ) {
     runtime["targets"]["dashboard-build"]["options"]["command"] =
-      "bash scripts/build-public-dashboard.sh"
+      "NODE_ENV=production DASHBOARD_DISTRIBUTION=generic bash scripts/build-public-dashboard.sh"
   }
   json("runtime/local/project.json", runtime)
+  const graphqlSteps = "apps/graphql-e2e/steps/index.ts"
+  write(
+    graphqlSteps,
+    readFileSync(join(directory, graphqlSteps), "utf8").replace(
+      'export * from "./cloud-org.steps"\n',
+      "",
+    ),
+  )
   const lock = read("bun.lock")
   if (!object(lock["workspaces"]) || !object(lock["packages"]))
     throw new Error("Unsupported Bun lockfile structure")

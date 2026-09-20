@@ -209,6 +209,7 @@ export const VERIFIED_BUNDLED_DEPENDENCIES = {
 } as const
 
 export const PUBLIC_SNAPSHOT_ROOT_INPUTS = [
+  ".github/workflows/public-source.yml",
   "LICENSE.md",
   ".gitignore",
   "CONTEXT-MAP.md",

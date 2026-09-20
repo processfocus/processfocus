@@ -685,12 +685,17 @@ describe("project boundary policy", () => {
         ),
       ].sort()
       expect(examples).toEqual(["demo", "on-boarding"])
+      expect(
+        receipt.files
+          .map((file) => file.path)
+          .filter((path) => path.startsWith(".github/workflows/")),
+      ).toEqual([".github/workflows/public-source.yml"])
       expect(PRIVATE_SOURCE_PROJECT_ROOTS).toContain("examples/school")
       expect(PRIVATE_SOURCE_PROJECT_ROOTS).toContain("examples/tbsnz")
-      expect(receipt.excluded).toContain(
+      expect(receipt.files.map((file) => file.path)).not.toContain(
         "packages/auth-local-cedar/test/delegation.spec.ts",
       )
-      expect(receipt.excluded).toContain(
+      expect(receipt.files.map((file) => file.path)).not.toContain(
         "packages/sqlite-operations/test/delegation-management.test.ts",
       )
       const manifest = await Bun.file(join(destination, "package.json")).json()
@@ -715,8 +720,13 @@ describe("project boundary policy", () => {
         join(destination, "runtime/local/project.json"),
       ).json()
       expect(runtime.targets["dashboard-build"].options.command).toBe(
-        "bash scripts/build-public-dashboard.sh",
+        "NODE_ENV=production DASHBOARD_DISTRIBUTION=generic bash scripts/build-public-dashboard.sh",
       )
+      expect(
+        await Bun.file(
+          join(destination, "apps/graphql-e2e/steps/index.ts"),
+        ).text(),
+      ).not.toContain("cloud-org.steps")
       for (const path of [
         "scripts/build-public-dashboard.sh",
         "scripts/ci-frontend-build-lifecycle.sh",

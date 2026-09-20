@@ -24,7 +24,7 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": "{workspaceRoot}",
-        "command": "bash scripts/build-public-dashboard.sh",
+        "command": "NODE_ENV=production DASHBOARD_DISTRIBUTION=generic bash scripts/build-public-dashboard.sh",
         "env": {
           "SQLITE_DATABASE_PATH": ""
         }
