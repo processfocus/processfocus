@@ -1,0 +1,35 @@
+---
+title: Process
+description: Define your first business process with steps and forms.
+---
+
+Now that your project is set up, let's define your first process.
+
+## Define your process
+
+Open `src/processes/approval.ts` and define your first process:
+
+```typescript
+import { Process, Step, Form } from "@pf/sdk"
+
+export const approvalProcess = Process.create("approval", {
+  name: "Approval Workflow",
+  description: "A simple approval workflow",
+})
+  .addStep(
+    Step.form("submit-request", {
+      title: "Submit Request",
+      form: Form.create()
+        .addTextField("title", { required: true })
+        .addTextArea("description", { required: true }),
+    })
+  )
+  .addStep(
+    Step.approval("review", {
+      title: "Review Request",
+      assignTo: "manager",
+    })
+  )
+```
+
+This creates a two-step process: first a form to collect information, then an approval step assigned to a manager.

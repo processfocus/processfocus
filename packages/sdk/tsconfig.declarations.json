@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.lib.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "composite": false,
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "incremental": false,
+    "jsx": "react-jsx",
+    "noEmit": false,
+    "outDir": "dist",
+    "plugins": []
+  },
+  "include": [
+    "src/**/*.ts",
+    "../frontend-plugin-host/src/**/*.ts",
+    "../frontend-plugin-host/src/**/*.tsx",
+    "../form-client-representation/src/**/*.ts",
+    "../form-submission-schema/src/**/*.ts"
+  ],
+  "exclude": ["../**/*.spec.ts", "../**/*.spec.tsx"]
+}

@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Process Focus
+    folder: Process Focus
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    options:
+      path: /otel-lgtm/process-focus-dashboards
+      foldersFromFilesStructure: false

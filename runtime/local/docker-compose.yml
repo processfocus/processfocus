@@ -1,0 +1,41 @@
+services:
+  grafana:
+    image: docker.io/grafana/otel-lgtm
+    container_name: pf-local-grafana
+    ports:
+      - "3030:3000"   # Grafana UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "3100:3100"   # Loki API
+      - "9090:9090"   # Prometheus API
+    volumes:
+      - pf-local-grafana-data:/data
+      - ./grafana/dashboards:/otel-lgtm/process-focus-dashboards:ro
+      - ./grafana/provisioning/process-focus-dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/process-focus-dashboards.yaml:ro
+      - ./grafana/loki.yaml:/otel-lgtm/loki-config.yaml:ro
+      - ./grafana/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:alpine
+    container_name: pf-local-postgres
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${PGPASSWORD:-postgres}
+    volumes:
+      - pf-local-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pf-local-grafana-data:
+    name: pf-local-grafana-data
+  pf-local-postgres-data:
+    name: pf-local-postgres-data

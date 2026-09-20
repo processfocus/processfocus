@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-policy/tsconfig.lib.json"
+    }
+  ]
+}

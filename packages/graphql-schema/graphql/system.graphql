@@ -1,0 +1,1200 @@
+scalar DateTimeISO
+
+directive @auth(tag: String, action: String) on FIELD_DEFINITION
+
+type Role {
+  id: ID!
+  name: String!
+  path: String!
+}
+
+"""
+Column metadata for list output fields.
+"""
+type ListColumn {
+  "Field name (used in GraphQL query)"
+  field: String!
+  "Display label (from title annotation or capitalized field name)"
+  label: String!
+  "Optional description from schema annotations"
+  description: String
+  "Whether this field should be shown in the generic list table"
+  visibleInList: Boolean!
+  "Whether this field can be used as a standard list sort key"
+  sortable: Boolean!
+}
+
+enum ListSortDirection {
+  ASC
+  DESC
+}
+
+input ListSortInput {
+  field: String!
+  direction: ListSortDirection!
+}
+
+"""
+Information about a list that the user can access.
+Used by the frontend sidebar to display available lists.
+"""
+type ListInfo {
+  "Whether this caller may create records in this List."
+  canCreate: Boolean!
+  id: ID!
+  path: String!
+  name: String!
+  "Display name for a single item detail view"
+  detailName: String
+  purpose: String
+  queryName: String!
+  "Column definitions with field names and labels for the output schema"
+  outputColumns: [ListColumn!]!
+  "GraphQL query name for fetching a single item's detail (null if no detail form)"
+  itemQueryName: String
+  "GraphQL mutation name for updating a list item (null if not updatable)"
+  updateMutationName: String
+  "GraphQL input type name for list item updates (null if not updatable)"
+  updateInputTypeName: String
+  "GraphQL mutation name for deleting a list item (null if not deletable)"
+  deleteMutationName: String
+  "Column definitions for editable fields only (excludes read-only fields)"
+  editableColumns: [ListColumn!]!
+}
+
+"""
+Information about a stats view that the user can access.
+Used by the frontend sidebar to display available stats views.
+"""
+type StatsViewInfo {
+  id: ID!
+  path: String!
+  name: String!
+  purpose: String
+  "Built-in renderer type (e.g. \"timeline\")"
+  renderer: String!
+  "GraphQL query name for fetching the stats data"
+  queryName: String!
+}
+
+# Organisation unit, Board, organisation, division, department, team, however
+# the organisation has been structured.
+type OrgUnit {
+  id: ID!
+  name: String!
+  "Optional shortened form of the name (e.g., 'IT' for 'Information Technology')"
+  acronym: String
+  "First day of business week (0=Sunday, 6=Saturday). Defaults to 0."
+  startDayOfWeek: Int
+  level: String!
+  subunits: [OrgUnit!]!
+  processes: [OldProcess!]!
+  roles: [Role!]!
+}
+
+type OrgLevel {
+  level: String!
+  maxDepth: Int!
+}
+
+type ProviderUser {
+  id: ID!
+  email: String!
+  name: String!
+  firstName: String!
+  lastName: String!
+  picture: String!
+  locale: String!
+  """
+  Roles the provider user is permitted to switch to (validated by Cedar authorization)
+  """
+  permittedRoles: [Role!]!
+}
+
+type OldProcess {
+  id: ID!
+  path: ID!
+  name: String!
+  category: String!
+  purpose: String!
+  duration: String!
+  activeInstances: Int!
+  formFieldCount: Int!
+  isFavorite: Boolean!
+  orgUnit: OrgUnit!
+}
+
+"""
+Complete form metadata needed to render a dynamic form
+"""
+type FormMetadata {
+  """
+  Path to the step (format: orgUnit/processName/stepName)
+  """
+  stepPath: String!
+  """
+  Display name of the process
+  """
+  processName: String!
+  """
+  Display name of the step. Uses the configured name if set, otherwise the step's construct ID.
+  """
+  stepName: String!
+  """
+  Public form title override, when configured by the form step.
+  """
+  publicFormTitle: String
+  """
+  Public form description override, when configured by the form step.
+  """
+  publicFormDescription: String
+  """
+  Path to the process (format: orgUnit/processName)
+  """
+  processPath: String!
+  """
+  GraphQL mutation name for starting the process
+  """
+  mutationName: String!
+  """
+  GraphQL input type name for the form
+  """
+  inputTypeName: String!
+  """
+  GraphQL mutation name for completing this step
+  """
+  completeMutationName: String!
+  """
+  Number of fields in the form
+  """
+  totalFields: Int!
+  """
+  Structured browser-safe form definition. Components and serialized rules
+  have separate authoritative members.
+  """
+  formDefinition: JSON
+  """
+  Default values for form initialization.
+  When todoId is provided, state-referenced defaults are resolved.
+  """
+  defaultValues: JSON
+  """
+  JSON Schema for client-side validation
+  """
+  jsonSchema: JSON
+}
+
+enum PublicTodoStatus {
+  ACTIVE
+  COMPLETED
+  EXPIRED
+  UNAVAILABLE
+}
+
+type PublicTodo {
+  todoId: ID!
+  status: PublicTodoStatus!
+  organisationName: String
+  completionMessage: String
+  formMetadata: FormMetadata
+}
+
+type PublicCompletionCorrection {
+  todoId: ID!
+  processName: String!
+  stepName: String!
+  correctedEmail: String!
+  failureReason: String
+}
+
+"""
+Role information for workflow visualization
+"""
+type WorkflowRole {
+  id: ID!
+  name: String!
+  path: String!
+}
+
+"""
+Phase information for workflow visualization
+"""
+type WorkflowPhase {
+  id: ID!
+  name: String!
+  path: String!
+  """
+  1-indexed order for phase display/sorting
+  """
+  order: Int!
+}
+
+"""
+Role responsibility in a specific process
+"""
+type WorkflowResponsibility {
+  roleId: ID!
+  roleName: String!
+  rolePath: String!
+  responsibility: String!
+  """
+  1-based display order within the process for swimlane ordering
+  """
+  order: Int
+}
+
+"""
+Step in a workflow with optional role assignment.
+System steps (NodeSteps) have no role and will have null role field.
+"""
+type WorkflowStep {
+  id: ID!
+  name: String!
+  path: String!
+  purpose: String!
+  processId: ID!
+  role: WorkflowRole
+  """
+  Optional phase that this step belongs to
+  """
+  phase: WorkflowPhase
+  isStartStep: Boolean!
+  "True when this step is available as an anonymous embedded form"
+  isEmbedded: Boolean!
+  """
+  1-indexed column position based on flow order (start steps = 1, subsequent steps = max source column + 1)
+  """
+  column: Int!
+}
+
+"""
+Flow connection between workflow steps
+"""
+type WorkflowFlow {
+  id: ID!
+  sourceStepId: ID!
+  targetStepId: ID!
+  condition: String
+  "True if this is a fallback/else branch"
+  isElse: Boolean!
+  "True if this branch runs after terminal system-step failure"
+  isOnError: Boolean!
+  "Optional case-sensitive error tags matched by this error branch"
+  taggedErrors: [String!]
+  "Schedule expression for timed transitions (e.g., 'next Monday at 9am')"
+  schedule: String
+}
+
+"""
+Complete workflow data for a process
+"""
+type ProcessWorkflow {
+  processId: ID!
+  processName: String!
+  processPath: String!
+  processPurpose: String!
+  steps: [WorkflowStep!]!
+  flows: [WorkflowFlow!]!
+  """
+  Role responsibilities for this process
+  """
+  responsibilities: [WorkflowResponsibility!]!
+}
+
+"""
+A Todo returned by the organisation-runtime list API.
+This deliberately excludes RxDB replication fields.
+"""
+type TodoListItem {
+  id: ID!
+  processExecutionId: ID!
+  processName: String!
+  stepName: String!
+  stepPath: String!
+  role: String!
+  status: String!
+  priority: String!
+  assignedAt: DateTimeISO!
+  dueAt: DateTimeISO
+  description: String!
+  summary: [TodoListSummaryItem!]!
+}
+
+type TodoListSummaryItem {
+  label: String!
+  value: String!
+}
+
+type TodoListPage {
+  nodes: [TodoListItem!]!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+"""
+A Process returned by the organisation-runtime catalog API.
+This deliberately excludes RxDB replication and Dashboard-only fields.
+"""
+type ProcessListItem {
+  id: ID!
+  path: String!
+  name: String!
+  category: String!
+  purpose: String!
+  startStepPath: String!
+  activeInstances: Int!
+}
+
+type ProcessListPage {
+  nodes: [ProcessListItem!]!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+"""
+A Process Execution returned by the organisation-runtime list API.
+This deliberately excludes RxDB replication fields and the step timeline.
+"""
+type ExecutionListItem {
+  withoutWaiting: Boolean!
+  id: ID!
+  processPath: String!
+  processName: String!
+  status: String!
+  startedAt: DateTimeISO!
+  finishedAt: DateTimeISO
+  completedSteps: Int!
+  totalSteps: Int!
+  failureReason: String
+}
+
+type ExecutionListPage {
+  nodes: [ExecutionListItem!]!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+type SettingsUser {
+  id: ID!
+  provider: String!
+  sub: String!
+  lastLoggedIn: DateTimeISO!
+  isProviderUser: Boolean!
+  providerUserName: String
+  providerUserEmail: String
+}
+
+type SettingsUserPage {
+  items: [SettingsUser!]!
+  totalCount: Int!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+type SettingsOAuthProvider {
+  id: ID!
+  providerName: String!
+}
+
+type SettingsOAuthProviderPage {
+  items: [SettingsOAuthProvider!]!
+  totalCount: Int!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+"""
+Invitation lifecycle outcome for Invited Users dashboard rows.
+Deleted invitations are soft-deleted and excluded from ordinary lists.
+"""
+enum InvitationLifecycleStatus {
+  PENDING
+  ACCEPTED
+  LEGACY_CLOSED
+}
+
+"""
+Registration Link lifecycle for a pending Invitation.
+Never exposes the bearer token, hash, or encrypted envelope.
+"""
+enum RegistrationLinkStatus {
+  NOT_GENERATED
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+type SettingsInvitation {
+  id: ID!
+  email: String!
+  status: InvitationLifecycleStatus!
+  roles: [Role!]!
+  """
+  When known, the time the Invitation was accepted.
+  """
+  acceptedAt: DateTimeISO
+  """
+  Human identity provider that accepted the Invitation, when known.
+  """
+  acceptedByProvider: String
+  """
+  Provider subject that accepted the Invitation, when known.
+  """
+  acceptedBySubject: String
+  """
+  Provider User created or matched at acceptance/legacy close, when known.
+  """
+  acceptedByProviderUserId: ID
+  """
+  When migration closed the Invitation against an existing Provider User.
+  """
+  legacyClosedAt: DateTimeISO
+  """
+  Why migration closed the Invitation without claiming historical acceptance.
+  """
+  legacyClosureReason: String
+  """
+  Registration Link status for passkey Invitation bootstrap.
+  Accepted and legacy-closed invitations always report NOT_GENERATED.
+  """
+  registrationLinkStatus: RegistrationLinkStatus!
+  """
+  When the current or last live Registration Link expires / expired.
+  """
+  registrationLinkExpiresAt: DateTimeISO
+  """
+  Latest generation or rotation actor and time.
+  """
+  registrationLinkGeneratedAt: DateTimeISO
+  registrationLinkGeneratedBy: String
+  """
+  Latest authorised reveal actor and time.
+  """
+  registrationLinkRevealedAt: DateTimeISO
+  registrationLinkRevealedBy: String
+  """
+  Latest revocation actor and time.
+  """
+  registrationLinkRevokedAt: DateTimeISO
+  registrationLinkRevokedBy: String
+}
+
+type SettingsInvitationPage {
+  items: [SettingsInvitation!]!
+  totalCount: Int!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+input SaveInvitationInput {
+  email: String!
+  roleIds: [ID!]!
+}
+
+type SaveInvitationSuccess {
+  invitation: SettingsInvitation!
+}
+
+type SaveInvitationFailure {
+  error: String!
+}
+
+union SaveInvitationResult = SaveInvitationSuccess | SaveInvitationFailure
+
+type DeleteInvitationResult {
+  success: Boolean!
+  error: String
+}
+
+"""
+Result of generating, revealing, or rotating a Registration Link.
+The raw bearer URL is returned only from these explicit mutations.
+"""
+type RegistrationLinkActionSuccess {
+  invitation: SettingsInvitation!
+  """
+  Full Registration Link URL with the bearer token in the URI fragment.
+  """
+  registrationLinkUrl: String!
+  expiresAt: DateTimeISO!
+}
+
+type RegistrationLinkActionFailure {
+  error: String!
+}
+
+union RegistrationLinkActionResult =
+  | RegistrationLinkActionSuccess
+  | RegistrationLinkActionFailure
+
+type SettingsRole {
+  id: ID!
+  name: String!
+  path: String!
+}
+
+type SettingsRolePage {
+  items: [SettingsRole!]!
+  totalCount: Int!
+  page: Int!
+  limit: Int!
+  hasNextPage: Boolean!
+}
+
+type SettingsUserDetail {
+  id: ID!
+  provider: String!
+  sub: String!
+  lastLoggedIn: DateTimeISO!
+  providerUser: SettingsProviderUser
+}
+
+type SettingsProviderUser {
+  id: ID!
+  email: String!
+  name: String!
+  firstName: String!
+  lastName: String!
+  roleIds: [ID!]!
+  notificationPreferences: NotificationPreferences!
+}
+
+"""
+User notification preferences structure.
+"""
+type NotificationPreferences {
+  notifications: NotificationCategories!
+}
+
+"""
+Notification preferences for user email events.
+Contains settings for different notification channels.
+"""
+type NotificationCategories {
+  todoAssignment: NotificationChannelSettings!
+  executionFailure: NotificationChannelSettings!
+}
+
+"""
+Channel-specific settings for a notification type.
+"""
+type NotificationChannelSettings {
+  email: Boolean!
+}
+
+"""
+Input for updating notification preferences.
+"""
+input NotificationPreferencesInput {
+  notifications: NotificationCategoriesInput!
+}
+
+"""
+Input for notification category settings.
+"""
+input NotificationCategoriesInput {
+  todoAssignment: NotificationChannelSettingsInput
+  executionFailure: NotificationChannelSettingsInput
+}
+
+"""
+Input for channel-specific notification settings.
+"""
+input NotificationChannelSettingsInput {
+  email: Boolean!
+}
+
+input UpdateProviderUserInput {
+  roleIds: [ID!]!
+}
+
+type UpdateProviderUserSuccess {
+  providerUser: SettingsProviderUser!
+}
+
+type UpdateProviderUserFailure {
+  error: String!
+}
+
+union UpdateProviderUserResult =
+  | UpdateProviderUserSuccess
+  | UpdateProviderUserFailure
+
+"""
+A single item returned by a lookup field query
+"""
+type LookupItem {
+  value: String!
+  label: String!
+}
+
+"""
+A single calendar slot returned by a calendar slot form field query.
+"""
+type CalendarSlotItem {
+  value: String!
+  label: String
+  startsAt: String!
+  endsAt: String!
+}
+
+type CedarPolicies {
+  policies: [String!]!
+  schema: String!
+}
+
+enum SubscriptionTransportKind {
+  GRAPHQL_WS
+  APPSYNC_EVENTS
+}
+
+type SubscriptionTransport {
+  kind: SubscriptionTransportKind!
+  appSyncEventsHttpHost: String
+}
+
+type Query {
+  # Top level, either the Organisation or the Board if the organisation has one
+  org: OrgUnit
+  """
+  Cedar authorization policies and schema.
+  """
+  cedarPolicies: CedarPolicies!
+  # Return all organisation unit levels we have with the maximum depth we find them.
+  # Results are sorted by maxDepth.
+  # This allows for some better color coding.
+  orgLevels: [OrgLevel!]!
+  """
+  Processes the current provider user is authorized to start.
+  Pagination is applied after Cedar authorization.
+  """
+  processes(
+    page: Int! = 1
+    limit: Int! = 50
+    processPath: String
+    status: String
+  ): ProcessListPage!
+  """
+  Todos the current provider user is authorized to complete.
+  Pagination is applied after Cedar authorization.
+  """
+  todos(
+    page: Int! = 1
+    limit: Int! = 50
+    processPath: String
+    status: String
+  ): TodoListPage!
+  """
+  Process Executions the current provider user is authorized to view.
+  Pagination is applied after Cedar authorization.
+  """
+  executions(
+    page: Int! = 1
+    limit: Int! = 50
+    processPath: String
+    status: String
+  ): ExecutionListPage!
+  # Current logged-in provider user
+  currentProviderUser: ProviderUser!
+  """
+  Get form metadata for a step. Returns null if step not found or user not authorized.
+  The stepPath format is: "orgUnit/processName/stepName" (e.g., "finance/expense-report/Submit").
+  When todoId is provided, state-referenced defaults are resolved against the process state.
+  """
+  formMetadata(stepPath: String!, todoId: ID): FormMetadata
+  """
+  Resolve the single-email correction form for a Correction Required Public Completion Todo.
+  Uses default provider-user auth; the resolver checks correction-specific todo authorization.
+  """
+  publicCompletionCorrection(todoId: ID!): PublicCompletionCorrection
+  """
+  Resolve public todo status and form metadata from an encrypted public todo token.
+  Uses the embed tag because frontend route handlers call this with the frontend
+  service-account JWT; the public token is validated inside the resolver.
+  """
+  publicTodo(token: String!): PublicTodo! @auth(tag: "embed")
+  """
+  Resolve lookup suggestions for a public to-do form using its capability token.
+  Only token-authorized public completion lookups are exposed by the resolver.
+  """
+  publicTodoLookupSuggestions(
+    token: String!
+    field: String!
+    filter: String
+    limit: Int
+  ): [LookupItem!]! @auth(tag: "embed")
+  """
+  Resolve calendar slots for a public to-do form using its capability token.
+  """
+  publicTodoCalendarSlots(token: String!, field: String!): [CalendarSlotItem!]!
+    @auth(tag: "embed")
+  """
+  Get workflow visualization data for a process by its path.
+  Returns null if process not found.
+  """
+  processWorkflow(processPath: String!): ProcessWorkflow
+  """
+  Check if there are pending scheduled flows for a process execution.
+  Returns true if there are jobs pending (not yet processed by job worker).
+  Useful for polling to wait for background job completion in tests.
+  """
+  hasPendingScheduledFlows(processExecutionId: ID!): Boolean! @auth(tag: "ci")
+  """
+  Remint the public completion URL for a waiting Public Form without sending email.
+  Uses the latest invitation attempt and current form expiry. Does not persist a token.
+  """
+  publicCompletionUrl(todoId: ID!): String! @auth(tag: "ci")
+  """
+  Paginated list of users with provider user status
+  """
+  allUsers(page: Int! = 1, limit: Int! = 20): SettingsUserPage!
+    @auth(action: "administerUsers")
+  """
+  Paginated list of OAuth providers
+  """
+  allOAuthProviders(
+    page: Int! = 1
+    limit: Int! = 20
+  ): SettingsOAuthProviderPage! @auth(action: "administerOAuthProviders")
+  """
+  Paginated Invited Users list. Defaults to pending invitations; pass status
+  to inspect accepted or legacy-closed history.
+  """
+  allInvitations(
+    page: Int! = 1
+    limit: Int! = 20
+    status: InvitationLifecycleStatus = PENDING
+  ): SettingsInvitationPage! @auth(action: "administerUsers")
+  """
+  Get a single invitation by ID
+  """
+  invitationDetail(invitationId: ID!): SettingsInvitation
+    @auth(action: "administerUsers")
+  """
+  Get detailed user information including provider user data
+  """
+  userDetail(userId: ID!): SettingsUserDetail @auth(action: "administerUsers")
+  """
+  Get notification preferences for a user.
+  Returns default-off preferences (email: false) if no settings exist.
+  """
+  notificationPreferences(userId: ID!): NotificationPreferences!
+    @auth(action: "administerUsers")
+  """
+  Paginated list of roles in the system
+  """
+  allRoles(page: Int! = 1, limit: Int! = 20): SettingsRolePage!
+    @auth(action: "administerUsers")
+  """
+  Get the process state JSON for an execution (debugging feature).
+  Returns null if execution not found.
+  """
+  processStateForExecution(executionId: ID!): JSON
+    @auth(action: "showProcessState")
+  """
+  Discover which realtime transport clients should use for subscriptions.
+  """
+  subscriptionTransport: SubscriptionTransport!
+  """
+  Get lists that the current user has access to.
+  Returns lists filtered by the user's roles.
+  """
+  availableLists: [ListInfo!]!
+  """
+  Returns stats views filtered by the user's roles.
+  """
+  availableStatsViews: [StatsViewInfo!]!
+  """
+  Get form metadata for editing a list item.
+  Returns the client representation, JSON schema, and default values
+  needed to render a dynamic form for the editable fields.
+  Returns null if the list doesn't support editing or is not found.
+  """
+  listFormMetadata(listPath: String!): ListFormMetadata
+  "Get an independent create form, gated by List view and create permission."
+  listCreateFormMetadata(listPath: String!): ListCreateFormMetadata
+  """
+  Get lookup suggestions for a searchable select field within a form step.
+  Returns matching items for the given filter text.
+  """
+  # Shared by embedded and authenticated forms; Cedar keeps provider-user access.
+  lookupSuggestions(
+    stepPath: String!
+    field: String!
+    filter: String
+    limit: Int
+    todoId: ID
+  ): [LookupItem!]! @auth(tag: "embed")
+  """
+  Get calendar slots for a calendar slot field within a form step.
+  """
+  calendarSlots(
+    stepPath: String!
+    field: String!
+    todoId: ID
+  ): [CalendarSlotItem!]! @auth(tag: "embed")
+  """
+  Request a presigned URL for downloading a previously uploaded file.
+  Returns a URL to GET the file from.
+  Requires stepPath to verify the user can access this document store.
+  """
+  requestDownloadUrl(
+    stepPath: String!
+    documentStore: String!
+    fileId: String!
+  ): DownloadUrlResult!
+}
+
+"""
+Form metadata for editing a list item.
+Contains everything needed to render a dynamic edit form.
+"""
+type ListFormMetadata {
+  "The list path"
+  listPath: String!
+  "Display name of the list"
+  listName: String!
+  "GraphQL mutation name for updating the item (null for read-only forms)"
+  updateMutationName: String
+  "GraphQL input type name for the update mutation (null for read-only forms)"
+  updateInputTypeName: String
+  "GraphQL mutation name for deleting the item (null if not deletable)"
+  deleteMutationName: String
+  "Structured browser-safe form definition"
+  formDefinition: JSON
+  "Default values for form initialization, merged with item data"
+  defaultValues: JSON
+  "JSON Schema for client-side validation of editable fields"
+  jsonSchema: JSON
+}
+
+"""
+Result of a request role operation
+"""
+type RequestRoleResult {
+  """
+  Whether the request was successful
+  """
+  success: Boolean!
+  """
+  The role path that was requested (if successful)
+  """
+  rolePath: String
+  """
+  Error message if the request failed
+  """
+  error: String
+}
+
+"""
+Result of a request provider user permissions operation
+"""
+type RequestEmailResult {
+  """
+  Whether the request was successful
+  """
+  success: Boolean!
+  """
+  The provider user email that was requested (if successful)
+  """
+  email: String
+  """
+  Error message if the request failed
+  """
+  error: String
+}
+
+"""
+Result of cleanup operation for e2e test isolation
+"""
+type CleanupResult {
+  """
+  Number of todos deleted
+  """
+  todosDeleted: Int!
+  """
+  Number of scheduled flows deleted
+  """
+  scheduledFlowsDeleted: Int!
+  """
+  Number of process executions deleted
+  """
+  executionsDeleted: Int!
+  """
+  Number of process states deleted
+  """
+  statesDeleted: Int!
+  """
+  Number of job queue entries deleted
+  """
+  jobsDeleted: Int!
+}
+
+"""
+Result of restarting a failed execution
+"""
+type RestartExecutionResult {
+  """
+  Whether the restart was successful
+  """
+  success: Boolean!
+  """
+  Number of failed todos that were restarted
+  """
+  restartedCount: Int
+  """
+  Error message if restart failed
+  """
+  error: String
+}
+
+"""
+Result of abandoning a running execution
+"""
+type AbandonExecutionResult {
+  """
+  Whether the abandon was successful
+  """
+  success: Boolean!
+  """
+  Error message if abandon failed
+  """
+  error: String
+}
+
+"""
+Result of requesting a presigned upload URL
+"""
+type UploadUrlResult {
+  fileId: String!
+  uploadUrl: String!
+  expiresAt: DateTimeISO!
+}
+
+"""
+Result of requesting a presigned download URL
+"""
+type DownloadUrlResult {
+  downloadUrl: String!
+  expiresAt: DateTimeISO!
+}
+
+enum DatabaseTransferStatus {
+  READY_FOR_UPLOAD
+}
+
+type DatabaseTransferTarget {
+  "CLI-supplied target metadata for correlation; later snapshot/apply operations enforce target access."
+  project: String!
+  env: String!
+}
+
+"""
+Signed upload metadata for a database transfer artifact. SQLite bytes must be
+sent to uploadUrl, never through GraphQL.
+"""
+type DatabaseTransferUploadRequest {
+  "Transient correlation ID for this GraphQL coordination request; not persisted."
+  operationId: ID!
+  target: DatabaseTransferTarget!
+  fileId: ID!
+  documentStore: String!
+  uploadUrl: String!
+  expiresAt: DateTimeISO!
+  status: DatabaseTransferStatus!
+}
+
+"""
+Result of deleting a file
+"""
+type DeleteFileResult {
+  """
+  Whether the delete was successful (or idempotent - file already didn't exist)
+  """
+  success: Boolean!
+}
+
+"""
+Result of successfully updating notification preferences
+"""
+type UpdateNotificationPreferencesSuccess {
+  preferences: NotificationPreferences!
+}
+
+"""
+Result of a failed notification preferences update
+"""
+type UpdateNotificationPreferencesFailure {
+  error: String!
+}
+
+"""
+Union result type for notification preferences update
+"""
+union UpdateNotificationPreferencesResult =
+  | UpdateNotificationPreferencesSuccess
+  | UpdateNotificationPreferencesFailure
+
+type Mutation {
+  """
+  Complete the todo bound to an encrypted public todo token.
+  Uses the embed tag because frontend route handlers call this with the frontend
+  service-account JWT; the public token is validated inside the resolver.
+  """
+  completePublicTodo(token: String!, input: JSON): PublicTodo!
+    @auth(tag: "embed")
+  """
+  Request a fresh public to-do link for a token-bound todo. Expired tokens are
+  accepted only after token decryption succeeds; arbitrary todo IDs are not.
+  """
+  requestFreshPublicTodoLink(token: String!): PublicTodo! @auth(tag: "embed")
+  """
+  Submit the corrected recipient email for a Correction Required Public Completion Todo.
+  Applies the process-authored correction rule and reissues the public invitation.
+  Uses default provider-user auth; the resolver checks correction-specific todo authorization.
+  """
+  submitPublicCompletionCorrection(
+    todoId: ID!
+    correctedEmail: String!
+  ): PublicCompletionCorrection!
+  """
+  Export a list as CSV. Returns a signed download URL for the generated CSV file.
+  Uses the list's export schema and query with the current filter and sort state.
+  Fails if the list is not found, the user is not authorized, the sort field is
+  unsupported, or the export exceeds the row limit.
+  """
+  exportListCsv(
+    listPath: String!
+    filter: String
+    sort: ListSortInput
+  ): DownloadUrlResult!
+  """
+  Request a specific role. Validates via Cedar authorization and updates
+  the permitted_role table (for employees) or permitted_client_role table
+  (for M2M clients) so the auth server can issue tokens with this role.
+  The rolePath is the path of the role to request (e.g., "Manager").
+  After a successful request, the frontend should call the auth refresh endpoint
+  with the role scope to get a new access token.
+  """
+  requestRole(rolePath: String!): RequestRoleResult!
+  """
+  Request permission to impersonate a provider user. Validates via Cedar authorization
+  and updates the permitted_client_email table so the auth server can issue
+  provider user tokens for M2M clients.
+  """
+  requestProviderUserPermissions(email: String!): RequestEmailResult!
+  """
+  Delete all execution-related data for e2e test isolation.
+  This includes todos, scheduled flows, process executions,
+  process states, and job queue entries.
+  IMPORTANT: Only use in test environments.
+  """
+  cleanupExecutions: CleanupResult! @auth(tag: "ci")
+  """
+  Update a provider user's details and role assignments
+  """
+  updateProviderUser(
+    providerUserId: ID!
+    input: UpdateProviderUserInput!
+  ): UpdateProviderUserResult! @auth(action: "administerUsers")
+  """
+  Update notification preferences for a user.
+  Returns the updated preferences on success.
+  """
+  updateNotificationPreferences(
+    userId: ID!
+    preferences: NotificationPreferencesInput!
+  ): UpdateNotificationPreferencesResult! @auth(action: "administerUsers")
+  """
+  Create a new invitation with assigned roles
+  """
+  createInvitation(input: SaveInvitationInput!): SaveInvitationResult!
+    @auth(action: "administerUsers")
+  """
+  Update an existing invitation's email address and role assignments
+  """
+  updateInvitation(
+    invitationId: ID!
+    input: SaveInvitationInput!
+  ): SaveInvitationResult! @auth(action: "administerUsers")
+  """
+  Delete an invitation
+  """
+  deleteInvitation(invitationId: ID!): DeleteInvitationResult!
+    @auth(action: "administerUsers")
+  """
+  Generate a seven-day Registration Link when no active link exists.
+  Unavailable while the passkey provider is disabled.
+  """
+  generateRegistrationLink(invitationId: ID!): RegistrationLinkActionResult!
+    @auth(action: "administerUsers")
+  """
+  Reveal the current live Registration Link without extending its expiry.
+  """
+  revealRegistrationLink(invitationId: ID!): RegistrationLinkActionResult!
+    @auth(action: "administerUsers")
+  """
+  Rotate the Registration Link: invalidate the current token and issue a new
+  seven-day link.
+  """
+  rotateRegistrationLink(invitationId: ID!): RegistrationLinkActionResult!
+    @auth(action: "administerUsers")
+  """
+  Revoke the live Registration Link while preserving the pending Invitation.
+  """
+  revokeRegistrationLink(invitationId: ID!): SaveInvitationResult!
+    @auth(action: "administerUsers")
+  """
+  Restart a failed execution by clearing failure reasons and re-enqueueing system steps.
+  Requires a custom Cedar permit for the restart action.
+  """
+  restartExecution(executionId: ID!): RestartExecutionResult!
+  """
+  Abandon a running execution by marking it as abandoned and cleaning up active todos and scheduled flows.
+  Requires Cedar authorization checked against the active steps.
+  An optional reason can be provided to explain why the execution was abandoned.
+  """
+  abandonExecution(executionId: ID!, reason: String): AbandonExecutionResult!
+  """
+  Request a presigned URL for uploading a file to the document store.
+  Returns a fileId to reference the file later, and a URL to PUT the file to.
+  Requires stepPath to verify the user can access this document store.
+  """
+  requestUploadUrl(
+    stepPath: String!
+    documentStore: String!
+    contentType: String
+    filename: String
+  ): UploadUrlResult!
+  """
+  Request a presigned upload URL for a SQLite database transfer artifact.
+  The artifact bytes must be uploaded to the returned URL.
+  """
+  requestDatabaseUploadUrl(
+    project: String!
+    env: String!
+    contentType: String
+    filename: String
+  ): DatabaseTransferUploadRequest! @auth(action: "databaseTransfer")
+  """
+  Delete a file owned by the authenticated user, whether or not the upload completed.
+  Only the file owner can delete their files.
+  Returns success: true if the file was deleted or didn't exist (idempotent).
+  """
+  deleteFile(fileId: ID!): DeleteFileResult!
+}
+
+"Create form metadata; returned only to callers with List view and create permission."
+type ListCreateFormMetadata {
+  createMutationName: String!
+  createInputTypeName: String!
+  formDefinition: JSON
+  defaultValues: JSON
+  jsonSchema: JSON
+}

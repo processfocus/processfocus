@@ -1,0 +1,1 @@
+export const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 5000

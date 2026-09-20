@@ -1,0 +1,8 @@
+{
+  "name": "@pf/eslint-react-compiler",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "tools/eslint-react-compiler",
+  "projectType": "library",
+  "tags": ["tools", "lint"],
+  "targets": {}
+}

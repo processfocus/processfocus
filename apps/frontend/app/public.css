@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./theme.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@source "../app/layout.tsx";
+@source "../app/login/**/*.{ts,tsx}";
+@source "../app/embed/**/*.{ts,tsx}";
+@source "../app/public/**/*.{ts,tsx}";
+
+/*
+ * Keep this public-route source list intentionally explicit to avoid pulling
+ * protected-app utilities into login and embed bundles. If login or embed
+ * starts using a new shared component file, add that file here or Tailwind may
+ * purge its classes from the production public CSS.
+ */
+@source "../../../packages/form/src/lib/client-components-to-form.tsx";
+@source "../../../packages/form/src/lib/walker.tsx";
+@source "../../../packages/shadcn-components/src/lib/boolean-field.tsx";
+@source "../../../packages/shadcn-components/src/lib/field-set.tsx";
+@source "../../../packages/shadcn-components/src/lib/file-field.tsx";
+@source "../../../packages/shadcn-components/src/lib/lookup-field.tsx";
+@source "../../../packages/shadcn-components/src/lib/text-field.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/button.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/checkbox.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/command.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/field.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/input.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/label.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/popover.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/separator.tsx";
+@source "../../../packages/shadcn-components/src/lib/ui/textarea.tsx";

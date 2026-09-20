@@ -1,0 +1,1 @@
+ALTER TABLE `pf_process_execution` ADD `without_waiting` integer DEFAULT false NOT NULL;

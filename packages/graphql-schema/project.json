@@ -1,0 +1,50 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "targets": {
+    "build-rxdb": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "commands": ["bun cli/generate-rxdb/src/main.ts"]
+      },
+      "inputs": [
+        "{workspaceRoot}/packages/rxdb-collections/src/lib/rxdb-collections.ts",
+        "{workspaceRoot}/cli/generate-rxdb/src/**/*.ts"
+      ],
+      "outputs": [
+        "{projectRoot}/graphql/rxdb.graphql",
+        "{workspaceRoot}/packages/rxdb-collections/generated"
+      ],
+      "cache": true
+    },
+    "graphql-codegen": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["graphql-codegen"]
+      },
+      "inputs": ["{projectRoot}/graphql/*.graphql", "{projectRoot}/codegen.ts"],
+      "outputs": ["{projectRoot}/src/generated"],
+      "cache": true
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo --build tsconfig.lib.json"]
+      },
+      "outputs": ["{projectRoot}/out-tsc/lib"],
+      "dependsOn": ["graphql-codegen"]
+    },
+    "typecheck": {
+      "dependsOn": ["graphql-codegen"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["bun test"]
+      }
+    }
+  }
+}

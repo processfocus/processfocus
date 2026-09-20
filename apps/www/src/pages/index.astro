@@ -1,0 +1,308 @@
+---
+import "../styles/global.css"
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+    <title>Process Focus</title>
+    <meta name="description" content="The modern open source toolkit for Business Process Modeling and Execution" />
+  </head>
+
+  <body class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+    <div class="pointer-events-none absolute inset-0 overflow-hidden">
+      <div class="absolute left-1/2 top-[-20%] h-[40rem] w-[40rem] -translate-x-1/2 rounded-full bg-indigo-500/10 blur-3xl"></div>
+      <div class="absolute right-[-10%] top-[20%] h-[34rem] w-[34rem] rounded-full bg-cyan-400/10 blur-3xl"></div>
+    </div>
+
+    <main class="relative mx-auto flex min-h-screen max-w-6xl items-center px-6 py-16 lg:py-24">
+      <div class="grid w-full grid-cols-1 items-center gap-12 lg:grid-cols-2 lg:gap-16">
+        <!-- Visual -->
+        <section aria-label="Product visual" class="order-1 lg:order-none">
+          <div class="pf-float relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/10 to-white/5 shadow-2xl">
+            <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.18),rgba(2,6,23,0)_60%)]"></div>
+            <div class="relative p-6 sm:p-8">
+              <svg
+                class="h-auto w-full"
+                viewBox="0 0 600 420"
+                role="img"
+                aria-labelledby="pf-visual-title pf-visual-desc"
+                >
+                <title id="pf-visual-title">Process Focus overview visual</title>
+                <desc id="pf-visual-desc">An illustration cycling between an organisation chart, a process flow, and a form.</desc>
+
+                <defs>
+                  <linearGradient id="pfStroke" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.95" />
+                    <stop offset="55%" stop-color="#818cf8" stop-opacity="0.95" />
+                    <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.9" />
+                  </linearGradient>
+                  <filter id="pfGlow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feColorMatrix
+                      in="blur"
+                      type="matrix"
+                      values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.35 0"
+                      result="glow"
+                      />
+                    <feMerge>
+                      <feMergeNode in="glow" />
+                      <feMergeNode in="SourceGraphic" />
+                    </feMerge>
+                  </filter>
+                </defs>
+
+                <rect x="18" y="18" width="564" height="384" rx="20" fill="rgba(15,23,42,0.55)" stroke="rgba(255,255,255,0.10)" />
+
+                <!-- Org chart -->
+                <g class="pf-state pf-state--1" filter="url(#pfGlow)">
+                  <path d="M300 120 V165" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+                  <path d="M150 165 H450" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+                  <path d="M150 165 V215" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+                  <path d="M300 165 V215" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+                  <path d="M450 165 V215" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+
+                  <rect x="230" y="78" width="140" height="64" rx="14" fill="rgba(99,102,241,0.16)" stroke="rgba(255,255,255,0.16)" />
+                  <text x="300" y="116" text-anchor="middle" font-size="16" fill="rgba(226,232,240,0.95)" font-family="ui-sans-serif, system-ui">Organisation</text>
+
+                  <rect x="95" y="215" width="110" height="58" rx="14" fill="rgba(34,211,238,0.12)" stroke="rgba(255,255,255,0.14)" />
+                  <rect x="245" y="215" width="110" height="58" rx="14" fill="rgba(34,211,238,0.10)" stroke="rgba(255,255,255,0.14)" />
+                  <rect x="395" y="215" width="110" height="58" rx="14" fill="rgba(34,211,238,0.12)" stroke="rgba(255,255,255,0.14)" />
+
+                  <text x="150" y="250" text-anchor="middle" font-size="14" fill="rgba(226,232,240,0.9)" font-family="ui-sans-serif, system-ui">Teams</text>
+                  <text x="300" y="250" text-anchor="middle" font-size="14" fill="rgba(226,232,240,0.9)" font-family="ui-sans-serif, system-ui">Roles</text>
+                  <text x="450" y="250" text-anchor="middle" font-size="14" fill="rgba(226,232,240,0.9)" font-family="ui-sans-serif, system-ui">Permissions</text>
+
+                  <path d="M120 320 H480" stroke="rgba(148,163,184,0.25)" stroke-width="2" stroke-dasharray="6 10" />
+                  <text x="300" y="352" text-anchor="middle" font-size="13" fill="rgba(148,163,184,0.85)" font-family="ui-sans-serif, system-ui">Powerful and fine-grained permission system</text>
+                </g>
+
+                <!-- Process flow -->
+                <g class="pf-state pf-state--2" filter="url(#pfGlow)">
+                  <rect x="86" y="110" width="160" height="64" rx="16" fill="rgba(99,102,241,0.14)" stroke="rgba(255,255,255,0.14)" />
+                  <rect x="310" y="110" width="204" height="64" rx="16" fill="rgba(34,211,238,0.10)" stroke="rgba(255,255,255,0.14)" />
+                  <rect x="200" y="240" width="200" height="64" rx="16" fill="rgba(129,140,248,0.12)" stroke="rgba(255,255,255,0.14)" />
+
+                  <path d="M246 142 H300" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+                  <path d="M300 142 l-10 -8 M300 142 l-10 8" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+
+                  <path d="M412 174 V232" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+                  <path d="M412 232 l-8 -10 M412 232 l8 -10" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" />
+
+                  <path d="M188 174 V232" stroke="url(#pfStroke)" stroke-width="3" stroke-linecap="round" opacity="0.75" />
+
+                  <text x="166" y="148" text-anchor="middle" font-size="14" fill="rgba(226,232,240,0.9)" font-family="ui-sans-serif, system-ui">Trigger</text>
+                  <text x="412" y="148" text-anchor="middle" font-size="14" fill="rgba(226,232,240,0.9)" font-family="ui-sans-serif, system-ui">Workflow</text>
+                  <text x="300" y="278" text-anchor="middle" font-size="14" fill="rgba(226,232,240,0.9)" font-family="ui-sans-serif, system-ui">Step execution</text>
+
+                  <circle cx="188" cy="254" r="8" fill="rgba(34,211,238,0.55)" />
+                  <circle cx="412" cy="254" r="8" fill="rgba(99,102,241,0.55)" />
+                  <circle cx="300" cy="254" r="8" fill="rgba(129,140,248,0.55)" />
+
+                  <path d="M120 330 H480" stroke="rgba(148,163,184,0.25)" stroke-width="2" stroke-dasharray="6 10" />
+                  <text x="300" y="362" text-anchor="middle" font-size="13" fill="rgba(148,163,184,0.85)" font-family="ui-sans-serif, system-ui">Self-host or run in the Cloud</text>
+                </g>
+
+                <!-- Form -->
+                <g class="pf-state pf-state--3" filter="url(#pfGlow)">
+                  <rect x="120" y="86" width="360" height="250" rx="20" fill="rgba(15,23,42,0.35)" stroke="rgba(255,255,255,0.14)" />
+                  <rect x="150" y="120" width="210" height="18" rx="9" fill="rgba(148,163,184,0.35)" />
+                  <rect x="150" y="152" width="300" height="34" rx="12" fill="rgba(99,102,241,0.12)" stroke="rgba(255,255,255,0.12)" />
+                  <rect x="150" y="200" width="300" height="34" rx="12" fill="rgba(34,211,238,0.10)" stroke="rgba(255,255,255,0.12)" />
+                  <rect x="150" y="248" width="180" height="34" rx="12" fill="rgba(129,140,248,0.12)" stroke="rgba(255,255,255,0.12)" />
+
+                  <rect x="364" y="248" width="86" height="34" rx="12" fill="rgba(99,102,241,0.18)" stroke="rgba(255,255,255,0.12)" />
+                  <text x="407" y="270" text-anchor="middle" font-size="12" fill="rgba(226,232,240,0.92)" font-family="ui-sans-serif, system-ui">Submit</text>
+
+                  <path d="M150 308 H450" stroke="rgba(148,163,184,0.25)" stroke-width="2" />
+                  <text x="300" y="362" text-anchor="middle" font-size="13" fill="rgba(148,163,184,0.85)" font-family="ui-sans-serif, system-ui">Forms generated from the model</text>
+                </g>
+              </svg>
+            </div>
+          </div>
+        </section>
+
+        <!-- Copy -->
+        <section class="space-y-8">
+          <div class="space-y-5">
+            <div class="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-slate-200">
+              <span class="h-1.5 w-1.5 rounded-full bg-indigo-400"></span>
+              Open source toolkit for modeling and execution
+            </div>
+
+            <h1 class="text-5xl font-semibold tracking-tight text-white sm:text-6xl">
+              Process Focus
+            </h1>
+
+            <p class="text-lg leading-relaxed text-slate-300 sm:text-xl">
+              The modern opensource toolkit for Business Process Modeling and execution
+            </p>
+
+            <div class="relative min-h-[3.25rem]">
+              <p class="pf-text pf-text--1 text-base font-medium text-slate-200">
+                The Business Process SDK — model steps, decisions, and data in TypeScript.
+              </p>
+              <p class="pf-text pf-text--2 text-base font-medium text-slate-200">
+                Define reusable business rules. Rules which are followed everywhere.
+              </p>
+              <p class="pf-text pf-text--3 text-base font-medium text-slate-200">
+                Complex forms — turn processes into real user-facing flows.
+              </p>
+            </div>
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p class="text-sm font-semibold text-white">Model and execute</p>
+              <p class="mt-1 text-sm text-slate-300">Your business works as you designed it.</p>
+            </div>
+            <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p class="text-sm font-semibold text-white">Dashboard</p>
+              <p class="mt-1 text-sm text-slate-300">Monitor KPIs and SLAs in real-time.</p>
+            </div>
+            <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p class="text-sm font-semibold text-white">Business Rules</p>
+              <p class="mt-1 text-sm text-slate-300">Define business rules which can be accessed everywhere.</p>
+            </div>
+            <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p class="text-sm font-semibold text-white">Run anywhere</p>
+              <p class="mt-1 text-sm text-slate-300">Self-host or run in the cloud.</p>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <span class="inline-flex items-center justify-center rounded-lg bg-indigo-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20">
+              Coming Soon
+            </span>
+            <span class="text-sm text-slate-400">Early days — polishing docs and releases.</span>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="relative border-t border-white/5 py-10 text-center text-sm text-slate-500">
+      <p>&copy; {new Date().getFullYear()} Process Focus. All rights reserved.</p>
+    </footer>
+
+    <style>
+      .pf-state {
+      opacity: 0;
+      transition: opacity 600ms ease;
+      }
+
+      .pf-state--1 {
+      opacity: 1;
+      animation: pfState1 18s ease-in-out infinite;
+      }
+
+      .pf-state--2 {
+      animation: pfState2 18s ease-in-out infinite;
+      }
+
+      .pf-state--3 {
+      animation: pfState3 18s ease-in-out infinite;
+      }
+
+      .pf-text {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 600ms ease;
+      }
+
+      .pf-text--1 {
+      opacity: 1;
+      animation: pfState1 18s ease-in-out infinite;
+      }
+
+      .pf-text--2 {
+      animation: pfState2 18s ease-in-out infinite;
+      }
+
+      .pf-text--3 {
+      animation: pfState3 18s ease-in-out infinite;
+      }
+
+      @keyframes pfState1 {
+      0%,
+      27% {
+      opacity: 1;
+      }
+      33%,
+      100% {
+      opacity: 0;
+      }
+      }
+
+      @keyframes pfState2 {
+      0%,
+      30% {
+      opacity: 0;
+      }
+      36%,
+      60% {
+      opacity: 1;
+      }
+      66%,
+      100% {
+      opacity: 0;
+      }
+      }
+
+      @keyframes pfState3 {
+      0%,
+      63% {
+      opacity: 0;
+      }
+      69%,
+      93% {
+      opacity: 1;
+      }
+      100% {
+      opacity: 0;
+      }
+      }
+
+      @keyframes pfFloat {
+      0%,
+      100% {
+      transform: translateY(0px);
+      }
+      50% {
+      transform: translateY(-8px);
+      }
+      }
+
+      .pf-float {
+      animation: pfFloat 12s ease-in-out infinite;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+      .pf-state--1,
+      .pf-state--2,
+      .pf-state--3,
+      .pf-text--1,
+      .pf-text--2,
+      .pf-text--3,
+      .pf-float {
+      animation: none !important;
+      }
+
+      .pf-state--2,
+      .pf-state--3,
+      .pf-text--2,
+      .pf-text--3 {
+      opacity: 0 !important;
+      }
+
+      .pf-state--1,
+      .pf-text--1 {
+      opacity: 1 !important;
+      }
+      }
+    </style>
+  </body>
+</html>

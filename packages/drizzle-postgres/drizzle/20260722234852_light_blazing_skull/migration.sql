@@ -1,0 +1,1 @@
+ALTER TABLE "pf_job_queue" ADD COLUMN "claim_receipt" varchar(64);

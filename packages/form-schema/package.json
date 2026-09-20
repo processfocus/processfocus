@@ -1,0 +1,25 @@
+{
+  "name": "@pf/form-schema",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@pf/frontend-manifest": "workspace:*",
+    "effect": "^3.22.2",
+    "validator": "^13.15.35"
+  },
+  "devDependencies": {
+    "@types/validator": "^13.15.10"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

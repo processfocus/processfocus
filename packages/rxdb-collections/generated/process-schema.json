@@ -1,0 +1,77 @@
+{
+  "properties": {
+    "canSkipScheduleWaits": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "maxLength": 41
+    },
+    "updatedAt": {
+      "type": "number"
+    },
+    "name": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "activeInstances": {
+      "type": "integer"
+    },
+    "category": {
+      "type": "string"
+    },
+    "duration": {
+      "type": "string"
+    },
+    "formFieldCount": {
+      "type": "integer"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "isFavorite": {
+      "type": "boolean"
+    },
+    "orgUnit": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "level"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string"
+        }
+      }
+    },
+    "startStepPath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "updatedAt",
+    "name",
+    "path",
+    "activeInstances",
+    "category",
+    "duration",
+    "formFieldCount",
+    "purpose",
+    "isFavorite",
+    "orgUnit",
+    "startStepPath"
+  ]
+}

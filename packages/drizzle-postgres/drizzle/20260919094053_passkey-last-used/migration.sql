@@ -1,0 +1,1 @@
+ALTER TABLE "pf_passkey_credential" ADD COLUMN "passkey_last_used_at" timestamp without time zone;

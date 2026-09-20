@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "tsBuildInfoFile": "./out-tsc/fixtures.tsbuildinfo"
+  },
+  "include": ["test/fixtures/**/*.ts"],
+  "references": [
+    {
+      "path": "../../packages/process/tsconfig.lib.json"
+    }
+  ]
+}

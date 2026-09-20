@@ -1,0 +1,157 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "defaultBase": "trunk",
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/drizzle.config.ts",
+      "!{projectRoot}/CLAUDE.md",
+      "!{projectRoot}/AGENTS.md",
+      "sharedGlobals"
+    ],
+    "production": [
+      "default",
+      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
+      "!{projectRoot}/tsconfig.spec.json",
+      "!{projectRoot}/src/test-setup.[jt]s"
+    ],
+    "typecheck-default": [
+      "{workspaceRoot}/tsconfig.base.json",
+      "{projectRoot}/tsconfig.json",
+      "{projectRoot}/tsconfig.*.json",
+      "{projectRoot}/**/*.ts",
+      "{projectRoot}/**/*.tsx",
+      {
+        "dependentTasksOutputFiles": "**/*.(d.ts)",
+        "transitive": true
+      }
+    ],
+    "sharedGlobals": [
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/nx.json"
+    ]
+  },
+  "plugins": [
+    {
+      "plugin": "./tools/project-boundaries/nx-plugin.ts",
+      "exclude": ["fixtures/external-plugins/*/host/**"]
+    },
+    {
+      "plugin": "@nx/js/typescript",
+      "exclude": ["fixtures/external-plugins/*/host/**"],
+      "options": {
+        "compiler": "tsgo",
+        "typecheck": {
+          "targetName": "typecheck"
+        },
+        "build": {
+          "targetName": "build",
+          "configName": "tsconfig.lib.json",
+          "buildDepsName": "build-deps",
+          "watchDepsName": "watch-deps"
+        }
+      }
+    },
+    {
+      "plugin": "@nx/next/plugin",
+      "options": {
+        "startTargetName": "start",
+        "buildTargetName": "next-build",
+        "devTargetName": "dev",
+        "serveStaticTargetName": "serve-static",
+        "buildDepsTargetName": "build-deps",
+        "watchDepsTargetName": "watch-deps"
+      }
+    },
+    {
+      "plugin": "@nx/playwright/plugin",
+      "options": {
+        "targetName": "e2e"
+      }
+    },
+    {
+      "plugin": "@nx/vite/plugin",
+      "options": {
+        "buildTargetName": "build",
+        "serveTargetName": "serve",
+        "devTargetName": "dev",
+        "previewTargetName": "preview",
+        "serveStaticTargetName": "serve-static",
+        "typecheckTargetName": "typecheck",
+        "buildDepsTargetName": "build-deps",
+        "watchDepsTargetName": "watch-deps"
+      }
+    },
+    {
+      "plugin": "@nx/vitest",
+      "options": {
+        "testTargetName": "test"
+      }
+    },
+    {
+      "plugin": "@berenddeboer/nx-biome",
+      "options": {
+        "targetName": "lint"
+      }
+    },
+    {
+      "plugin": "@berenddeboer/nx-knip",
+      "exclude": ["fixtures/external-plugins/*/host/**"],
+      "options": {
+        "targetName": "knip",
+        "env": {
+          "SQLITE_DATABASE_PATH": "/tmp/knip-dummy.db"
+        }
+      }
+    }
+  ],
+  "targetDefaults": {
+    "build": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"]
+    },
+    "test": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["default", "^production"]
+    },
+    "typecheck": {
+      "cache": true,
+      "dependsOn": ["build", "^build"],
+      "inputs": ["typecheck-default"],
+      "outputs": []
+    },
+    "@nx/esbuild:esbuild": {
+      "cache": true,
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"]
+    },
+    "knip": {
+      "cache": true
+    },
+    "lint": {
+      "cache": true
+    },
+    "pack-check": {
+      "cache": true
+    }
+  },
+  "tui": {
+    "enabled": true,
+    "autoExit": true
+  },
+  "sync": {
+    "applyChanges": true
+  },
+  "generators": {
+    "@nx/next": {
+      "application": {
+        "style": "none",
+        "linter": "none"
+      }
+    }
+  },
+  "analytics": true
+}

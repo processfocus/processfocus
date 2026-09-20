@@ -1,0 +1,1 @@
+ALTER TABLE `pf_process_state` ADD `started_by_role` text(41) REFERENCES pf_role(id);

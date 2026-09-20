@@ -1,0 +1,61 @@
+---
+title: Organisation
+description: Understanding organisations and organisational units in Process Focus.
+---
+
+An **Organisation** in Process Focus represents your company, department, or team—the top-level entity that contains all your processes, users, and configurations.
+
+## The Organisation Hierarchy
+
+The top level organisation can contain organisational units. This
+allows you to model an organisation with departments, or a company
+with teams.
+
+Process Focus uses a hierarchical model to represent your organisation:
+
+```
+Organisation
+├── Org Units
+│   ├── Sales Department
+│   ├── Engineering Team
+│   └── Finance Department
+├── Teams
+│   └── Members (Users)
+└── Roles
+    └── Permissions
+```
+
+## Organisational Units (Org Units)
+
+Org Units let you model the structure of your organisation. They are hierarchical containers that can represent:
+
+- **Departments** - Sales, Engineering, HR, Finance
+- **Teams** - Product Team A, Support Team B
+- **Divisions** - Regional offices, business units
+- **Projects** - Temporary structures for specific initiatives
+
+Each org unit can have its own:
+
+- Members and managers
+- Processes and workflows
+- Data visibility rules
+- Approval hierarchies
+
+> **Note:** For detailed information about creating and configuring org units, see the [Organisational Units](/docs/org-units) section.
+
+## Organisation Settings
+
+Organisation settings include:
+
+- **Display Name** - How the organisation appears in the UI
+- **Timezone** - Default timezone for dates and scheduling
+- **Default Language** - Language for generated forms and notifications
+- **Security Policies** - Password requirements, session timeouts
+- **Branding** - Custom colors and logos (Enterprise plans)
+
+## Best Practices
+
+- Align org units with your actual business structure
+- Use meaningful names that everyone understands
+- Define clear ownership and responsibilities per org unit
+- Regularly review and update the structure as your organisation evolves

@@ -1,0 +1,70 @@
+{
+  "name": "processfocus",
+  "version": "0.1.0-next.0",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/processfocus/processfocus.git",
+    "directory": "packages/sdk"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.mjs"
+    },
+    "./calendar": {
+      "types": "./dist/calendar.d.ts",
+      "import": "./dist/calendar.mjs"
+    },
+    "./forms": {
+      "types": "./dist/forms.d.ts",
+      "import": "./dist/forms.mjs"
+    },
+    "./manifest": {
+      "types": "./dist/manifest.d.ts",
+      "import": "./dist/manifest.mjs"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.mjs"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@processfocus/runtime": "workspace:*",
+    "constructs": "^10.8.1",
+    "effect": "^3.22.2",
+    "graphology": "^0.26.0",
+    "validator": "^13.15.35"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
+  "nx": {
+    "tags": [
+      "visibility:public-source",
+      "distribution:publishable"
+    ]
+  },
+  "devDependencies": {
+    "@pf/frontend-plugin-host": "workspace:*"
+  }
+}

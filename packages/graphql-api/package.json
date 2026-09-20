@@ -1,0 +1,60 @@
+{
+  "name": "@pf/graphql-api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@effect/platform": "^0.97.2",
+    "@effect/platform-node": "^0.108.2",
+    "@effect/sql": "^0.52.1",
+    "@envelop/core": "^5.6.0",
+    "@graphql-tools/executor": "^2.0.1",
+    "@graphql-tools/merge": "^9.2.4",
+    "@graphql-tools/utils": "^12.0.1",
+    "@graphql-yoga/plugin-jwt": "^3.17.0",
+    "@opentelemetry/exporter-logs-otlp-proto": "^0.222.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-logs": "0.222.0",
+    "@pf/auth-api": "workspace:*",
+    "@pf/auth-local-cedar": "workspace:*",
+    "@pf/auth-policy": "workspace:*",
+    "@pf/auth-session": "workspace:*",
+    "@pf/business-calendar": "workspace:*",
+    "@pf/business-metrics": "workspace:*",
+    "@pf/db-info": "workspace:*",
+    "@pf/document-store-service": "workspace:*",
+    "@pf/form-client-representation": "workspace:*",
+    "@pf/form-schema": "workspace:*",
+    "@pf/form-submission-schema": "workspace:*",
+    "@pf/graphql-db-operations": "workspace:*",
+    "@pf/graphql-schema": "workspace:*",
+    "@pf/process": "workspace:*",
+    "@pf/queue-service": "workspace:*",
+    "@pf/request-time": "workspace:*",
+    "@pf/todo-summary": "workspace:*",
+    "@processfocus/runtime": "workspace:*",
+    "effect": "^3.22.2",
+    "graphql": "^17.0.2",
+    "graphql-scalars": "^1.26.0",
+    "graphql-yoga": "^5.23.0"
+  },
+  "devDependencies": {
+    "@pf/drizzle-sqlite": "workspace:*",
+    "@pf/job-handler": "workspace:*",
+    "@pf/org-to-db": "workspace:*",
+    "@pf/service-drizzle-sqlite": "workspace:*",
+    "@pf/sqlite-operations": "workspace:*",
+    "@types/bun": "^1.4.2"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

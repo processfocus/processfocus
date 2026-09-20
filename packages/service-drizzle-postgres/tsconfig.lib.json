@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../db-info/tsconfig.lib.json"
+    },
+    {
+      "path": "../drizzle-postgres/tsconfig.lib.json"
+    }
+  ]
+}

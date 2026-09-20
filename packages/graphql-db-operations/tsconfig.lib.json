@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../graphql-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../business-calendar/tsconfig.lib.json"
+    }
+  ]
+}

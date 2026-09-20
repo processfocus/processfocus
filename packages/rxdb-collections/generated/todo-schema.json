@@ -1,0 +1,94 @@
+{
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 41
+    },
+    "updatedAt": {
+      "type": "number"
+    },
+    "processExecutionId": {
+      "type": "string"
+    },
+    "flowId": {
+      "type": "string"
+    },
+    "processName": {
+      "type": "string"
+    },
+    "stepName": {
+      "type": "string"
+    },
+    "stepPath": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "Active",
+        "Completed",
+        "Correction Required"
+      ]
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    },
+    "assignedAt": {
+      "type": "string"
+    },
+    "dueAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "formComplexity": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "id",
+    "updatedAt",
+    "processExecutionId",
+    "flowId",
+    "processName",
+    "stepName",
+    "stepPath",
+    "role",
+    "description",
+    "status",
+    "priority",
+    "assignedAt",
+    "formComplexity",
+    "summary"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "targets": {
+    "build:schema": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "commands": [
+          "bun cli/xplain2drizzle/src/main --database=postgres --prefix=pf_ packages/db-schema/xplain/schema.ddl packages/drizzle-postgres/src/lib/db-schema.ts"
+        ]
+      },
+      "inputs": [
+        "{workspaceRoot}/packages/db-schema/xplain/schema.ddl",
+        "{workspaceRoot}/cli/xplain2drizzle/src/*.ts"
+      ],
+      "outputs": [
+        "{projectRoot}/src/lib/db-schema.ts",
+        "{projectRoot}/src/lib/triggers.sql"
+      ],
+      "cache": true
+    },
+    "generate": {
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/drizzle.config.ts",
+        "{projectRoot}/drizzle/meta/_journal.json",
+        "{projectRoot}/src/lib/db-schema.ts",
+        "{workspaceRoot}/packages/xplain-ddl/src/lib/*.ts",
+        "{workspaceRoot}/cli/xplain2drizzle/src/*.ts"
+      ],
+      "outputs": ["{projectRoot}/drizzle"],
+      "dependsOn": ["build:schema"]
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo --build tsconfig.lib.json"]
+      },
+      "inputs": ["default", "!{projectRoot}/drizzle/**"],
+      "outputs": ["{projectRoot}/out-tsc/lib"]
+    },
+    "generate-triggers": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["bun ../../cli/generate-triggers/src/main.ts"]
+      },
+      "dependsOn": ["build:schema"]
+    }
+  }
+}

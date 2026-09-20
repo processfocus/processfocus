@@ -1,0 +1,26 @@
+{
+  "name": "external-processfocus-authoring-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "bun build src/organisation.ts --outdir dist --target bun --external processfocus --external constructs --external effect --external validator",
+    "validate": "bun dist/organisation.js",
+    "cross-copy": "bun src/cross-copy.ts"
+  },
+  "dependencies": {
+    "@processfocus/plugin-aws-lambda": "0.1.0-next.0",
+    "@processfocus/plugin-posthog": "0.1.0-next.0",
+    "@processfocus/runtime": "0.1.0-next.0",
+    "processfocus": "0.1.0-next.0",
+    "constructs": "^10.8.1",
+    "effect": "^3.22.1",
+    "react": "^19.2.7",
+    "validator": "^13.15.35"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "typescript": "^6.0.3"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

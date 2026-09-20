@@ -1,0 +1,5979 @@
+{
+  "dialect": "sqlite",
+  "id": "8090f7e4-6aa5-49db-928f-0ef4acd7c4ad",
+  "prevIds": [
+    "2d345b7a-8101-4df7-a568-02cd4e1af1df"
+  ],
+  "version": "7",
+  "ddl": [
+    {
+      "name": "pf_calendar_period",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_calendar_period_pk",
+      "table": "pf_calendar_period",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(64)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "period_kind",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "period_title",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "period_start",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "period_end",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "period_active",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "period_schedule",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_calendar_period",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "period_kind",
+          "isExpression": false
+        },
+        {
+          "value": "period_start",
+          "isExpression": false
+        },
+        {
+          "value": "period_end",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_calendar_period_kinddateidx_idx",
+      "table": "pf_calendar_period",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_calendar_period_updated_at_id_idx",
+      "table": "pf_calendar_period",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_calendar_period\".\"period_title\") <= 256",
+      "name": "period_title_length_check",
+      "table": "pf_calendar_period",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_calendar_period_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_calendar_period",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_completed_job",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_completed_job_pk",
+      "table": "pf_completed_job",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(512)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "queue",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(1024)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "job_id",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_completed_job",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "queue",
+          "isExpression": false
+        },
+        {
+          "value": "job_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_completed_job_job_id_ix_idx",
+      "table": "pf_completed_job",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_completed_job_updated_at_id_idx",
+      "table": "pf_completed_job",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_date_exception",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_date_exception_pk",
+      "table": "pf_date_exception",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "exception_date",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "exception_slots",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "exception_note",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_date_exception",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_unit_id",
+          "isExpression": false
+        },
+        {
+          "value": "exception_date",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_date_exception_orgunitdateidx_idx",
+      "table": "pf_date_exception",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_date_exception_updated_at_id_idx",
+      "table": "pf_date_exception",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_date_exception_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_date_exception",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_document_store",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_document_store_pk",
+      "table": "pf_document_store",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "accepted_types",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "size_limit",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_document_store",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_document_store_pathidx_idx",
+      "table": "pf_document_store",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_document_store_updated_at_id_idx",
+      "table": "pf_document_store",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_document_store\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_document_store",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_document_store_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_document_store",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_external_participant",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_external_participant_pk",
+      "table": "pf_external_participant",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(320)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_external_participant",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "email",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_external_participant_emailidx_idx",
+      "table": "pf_external_participant",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_external_participant_updated_at_id_idx",
+      "table": "pf_external_participant",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_file",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_file_pk",
+      "table": "pf_file",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "document_store_id",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "file_size",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "media_kind",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "true",
+      "generated": null,
+      "name": "upload_pending",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_file",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_file_updated_at_id_idx",
+      "table": "pf_file",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "document_store_id"
+      ],
+      "tableTo": "pf_document_store",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_file_document_store_id_pf_document_store_id_fk",
+      "table": "pf_file",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_flow",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_flow_pk",
+      "table": "pf_flow",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(128)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "flow_key",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_step",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_step",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "condition",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "schedule",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "fallback_branch",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "error_branch",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error_tags",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_flow",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "source_step",
+          "isExpression": false
+        },
+        {
+          "value": "target_step",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_flow_sourcetargetidx_idx",
+      "table": "pf_flow",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "flow_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_flow_flowkeyidx_idx",
+      "table": "pf_flow",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_flow_updated_at_id_idx",
+      "table": "pf_flow",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "source_step"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_flow_source_step_pf_step_id_fk",
+      "table": "pf_flow",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "target_step"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_flow_target_step_pf_step_id_fk",
+      "table": "pf_flow",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_holiday_instance",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_holiday_instance_pk",
+      "table": "pf_holiday_instance",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "holiday_title",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "holiday_rule",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "holiday_date",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_holiday_instance",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_unit_id",
+          "isExpression": false
+        },
+        {
+          "value": "holiday_title",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_holiday_instance_orgunittitleidx_idx",
+      "table": "pf_holiday_instance",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_holiday_instance_updated_at_id_idx",
+      "table": "pf_holiday_instance",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_holiday_instance\".\"holiday_title\") <= 256",
+      "name": "holiday_title_length_check",
+      "table": "pf_holiday_instance",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_holiday_instance_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_holiday_instance",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_invitation",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_invitation_pk",
+      "table": "pf_invitation",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(128)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "invitation_id",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(320)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_invitation",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "invitation_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_invitation_invitationididx_idx",
+      "table": "pf_invitation",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "email",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_invitation_emailidx_idx",
+      "table": "pf_invitation",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_invitation_updated_at_id_idx",
+      "table": "pf_invitation",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_invitation_role",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_invitation_role_pk",
+      "table": "pf_invitation_role",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "invitation_id",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_invitation_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "invitation_id",
+          "isExpression": false
+        },
+        {
+          "value": "role_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_invitation_role_invitationroleidx_idx",
+      "table": "pf_invitation_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_invitation_role_updated_at_id_idx",
+      "table": "pf_invitation_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "invitation_id"
+      ],
+      "tableTo": "pf_invitation",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_invitation_role_invitation_id_pf_invitation_id_fk",
+      "table": "pf_invitation_role",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_invitation_role_role_id_pf_role_id_fk",
+      "table": "pf_invitation_role",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_job_queue",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_job_queue_pk",
+      "table": "pf_job_queue",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(512)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "queue",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "job_payload",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "job_attempts",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "5",
+      "generated": null,
+      "name": "job_retry_limit",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "available_at",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "locked_until",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_job_queue",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "queue",
+          "isExpression": false
+        },
+        {
+          "value": "locked_until",
+          "isExpression": false
+        },
+        {
+          "value": "job_attempts",
+          "isExpression": false
+        },
+        {
+          "value": "available_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_job_queue_ready_idx_idx",
+      "table": "pf_job_queue",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_job_queue_updated_at_id_idx",
+      "table": "pf_job_queue",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_oauth_client",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_oauth_client_pk",
+      "table": "pf_oauth_client",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(128)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "client_id",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "client_secret_hash",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(128)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "audience",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_oauth_client",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "client_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_oauth_client_clientididx_idx",
+      "table": "pf_oauth_client",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_oauth_client_updated_at_id_idx",
+      "table": "pf_oauth_client",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_oauth_provider",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_oauth_provider_pk",
+      "table": "pf_oauth_provider",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(64)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_name",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_config",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_oauth_provider",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "provider_name",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_oauth_provider_nameidx_idx",
+      "table": "pf_oauth_provider",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_oauth_provider_updated_at_id_idx",
+      "table": "pf_oauth_provider",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_oauth_storage",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_oauth_storage_pk",
+      "table": "pf_oauth_storage",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "oauth_key",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(64)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key_kind",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key_value",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key_expiry",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_oauth_storage",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "oauth_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_oauth_storage_keyidx_idx",
+      "table": "pf_oauth_storage",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_oauth_storage_updated_at_id_idx",
+      "table": "pf_oauth_storage",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_org_unit",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_org_unit_pk",
+      "table": "pf_org_unit",
+      "entityType": "pks"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(64)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_level",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_org_unit",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "acronym",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(64)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'UTC'",
+      "generated": null,
+      "name": "timezone",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "start_day_of_week",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_org_unit",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_org_unit_pathidx_idx",
+      "table": "pf_org_unit",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_org_unit_updated_at_id_idx",
+      "table": "pf_org_unit",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_org_unit\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_org_unit",
+      "entityType": "checks"
+    },
+    {
+      "value": "length(\"pf_org_unit\".\"acronym\") <= 64",
+      "name": "acronym_length_check",
+      "table": "pf_org_unit",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "parent_org_unit"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_org_unit_parent_org_unit_pf_org_unit_id_fk",
+      "table": "pf_org_unit",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_permitted_client_email",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_permitted_client_email_pk",
+      "table": "pf_permitted_client_email",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "oauth_client_id",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(320)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_permitted_client_email",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "oauth_client_id",
+          "isExpression": false
+        },
+        {
+          "value": "email",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_permitted_client_email_oauthclientemailidx_idx",
+      "table": "pf_permitted_client_email",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_permitted_client_email_updated_at_id_idx",
+      "table": "pf_permitted_client_email",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "oauth_client_id"
+      ],
+      "tableTo": "pf_oauth_client",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_permitted_client_email_oauth_client_id_pf_oauth_client_id_fk",
+      "table": "pf_permitted_client_email",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_permitted_client_role",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_permitted_client_role_pk",
+      "table": "pf_permitted_client_role",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "oauth_client_id",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_permitted_client_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "oauth_client_id",
+          "isExpression": false
+        },
+        {
+          "value": "role_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_permitted_client_role_oauthclientroleidx_idx",
+      "table": "pf_permitted_client_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_permitted_client_role_updated_at_id_idx",
+      "table": "pf_permitted_client_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "oauth_client_id"
+      ],
+      "tableTo": "pf_oauth_client",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_permitted_client_role_oauth_client_id_pf_oauth_client_id_fk",
+      "table": "pf_permitted_client_role",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_permitted_client_role_role_id_pf_role_id_fk",
+      "table": "pf_permitted_client_role",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_permitted_role",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_permitted_role_pk",
+      "table": "pf_permitted_role",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_user_id",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_permitted_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "provider_user_id",
+          "isExpression": false
+        },
+        {
+          "value": "role_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_permitted_role_provideruserroleidx_idx",
+      "table": "pf_permitted_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_permitted_role_updated_at_id_idx",
+      "table": "pf_permitted_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "provider_user_id"
+      ],
+      "tableTo": "pf_provider_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_permitted_role_provider_user_id_pf_provider_user_id_fk",
+      "table": "pf_permitted_role",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_permitted_role_role_id_pf_role_id_fk",
+      "table": "pf_permitted_role",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_phase",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_phase_pk",
+      "table": "pf_phase",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_id",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "phase_order",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_phase",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_phase_pathidx_idx",
+      "table": "pf_phase",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_phase_updated_at_id_idx",
+      "table": "pf_phase",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_phase\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_phase",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "process_id"
+      ],
+      "tableTo": "pf_process",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_phase_process_id_pf_process_id_fk",
+      "table": "pf_phase",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_process",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_process_pk",
+      "table": "pf_process",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "purpose",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_value",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(16)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_unit",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_warning",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_process",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_process_pathidx_idx",
+      "table": "pf_process",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_process_updated_at_id_idx",
+      "table": "pf_process",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_process\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_process",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_process",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_process_execution",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_process_execution_pk",
+      "table": "pf_process_execution",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_state_id",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "finished_at",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "business_duration",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "abandoned_at",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "abandoned_reason",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_process_execution",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_process_execution_updated_at_id_idx",
+      "table": "pf_process_execution",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "process_state_id"
+      ],
+      "tableTo": "pf_process_state",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_execution_process_state_id_pf_process_state_id_fk",
+      "table": "pf_process_execution",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_process_state",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_process_state_pk",
+      "table": "pf_process_state",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_id",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "start_step",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "started_by_user",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "started_by_external_participant",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "started_by_role",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_process_state",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_process_state_updated_at_id_idx",
+      "table": "pf_process_state",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "process_id"
+      ],
+      "tableTo": "pf_process",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_state_process_id_pf_process_id_fk",
+      "table": "pf_process_state",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "start_step"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_state_start_step_pf_step_id_fk",
+      "table": "pf_process_state",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "started_by_user"
+      ],
+      "tableTo": "pf_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_state_started_by_user_pf_user_id_fk",
+      "table": "pf_process_state",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "started_by_external_participant"
+      ],
+      "tableTo": "pf_external_participant",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_state_started_by_external_participant_pf_external_participant_id_fk",
+      "table": "pf_process_state",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "started_by_role"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_process_state_started_by_role_pf_role_id_fk",
+      "table": "pf_process_state",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_provider_user",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_provider_user_pk",
+      "table": "pf_provider_user",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(320)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_name",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_name",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(1024)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "picture",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(35)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "locale",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_provider_user",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "email",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_provider_user_emailidx_idx",
+      "table": "pf_provider_user",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_provider_user_user_unique_idx",
+      "table": "pf_provider_user",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_provider_user_updated_at_id_idx",
+      "table": "pf_provider_user",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_provider_user\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_provider_user",
+      "entityType": "checks"
+    },
+    {
+      "value": "length(\"pf_provider_user\".\"first_name\") <= 128",
+      "name": "first_name_length_check",
+      "table": "pf_provider_user",
+      "entityType": "checks"
+    },
+    {
+      "value": "length(\"pf_provider_user\".\"last_name\") <= 128",
+      "name": "last_name_length_check",
+      "table": "pf_provider_user",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "pf_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_provider_user_user_id_pf_user_id_fk",
+      "table": "pf_provider_user",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_provider_user_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_provider_user",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_provider_user_role",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_provider_user_role_pk",
+      "table": "pf_provider_user_role",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_user_id",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_provider_user_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "provider_user_id",
+          "isExpression": false
+        },
+        {
+          "value": "role_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_provider_user_role_provideruserroleidx_idx",
+      "table": "pf_provider_user_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_provider_user_role_updated_at_id_idx",
+      "table": "pf_provider_user_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "provider_user_id"
+      ],
+      "tableTo": "pf_provider_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_provider_user_role_provider_user_id_pf_provider_user_id_fk",
+      "table": "pf_provider_user_role",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_provider_user_role_role_id_pf_role_id_fk",
+      "table": "pf_provider_user_role",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_role",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_role_pk",
+      "table": "pf_role",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_role_pathidx_idx",
+      "table": "pf_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_unit_id",
+          "isExpression": false
+        },
+        {
+          "value": "name",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_role_orgunitunameidx_idx",
+      "table": "pf_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_role_updated_at_id_idx",
+      "table": "pf_role",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_role\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_role",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_role_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_role",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_role_responsibility",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_role_responsibility_pk",
+      "table": "pf_role_responsibility",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_id",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "responsibility",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "responsibility_order",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_role_responsibility",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "process_id",
+          "isExpression": false
+        },
+        {
+          "value": "role_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_role_responsibility_processroleidx_idx",
+      "table": "pf_role_responsibility",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_role_responsibility_updated_at_id_idx",
+      "table": "pf_role_responsibility",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "process_id"
+      ],
+      "tableTo": "pf_process",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_role_responsibility_process_id_pf_process_id_fk",
+      "table": "pf_role_responsibility",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_role_responsibility_role_id_pf_role_id_fk",
+      "table": "pf_role_responsibility",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_scheduled_flow",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_scheduled_flow_pk",
+      "table": "pf_scheduled_flow",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_execution_id",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_step",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_step",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scheduled_at",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "for_each_barrier",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_by_role",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_scheduled_flow",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_scheduled_flow_updated_at_id_idx",
+      "table": "pf_scheduled_flow",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "process_execution_id"
+      ],
+      "tableTo": "pf_process_execution",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_scheduled_flow_process_execution_id_pf_process_execution_id_fk",
+      "table": "pf_scheduled_flow",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "source_step"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_scheduled_flow_source_step_pf_step_id_fk",
+      "table": "pf_scheduled_flow",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "target_step"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_scheduled_flow_target_step_pf_step_id_fk",
+      "table": "pf_scheduled_flow",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "completed_by_role"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_scheduled_flow_completed_by_role_pf_role_id_fk",
+      "table": "pf_scheduled_flow",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_step",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_step_pk",
+      "table": "pf_step",
+      "entityType": "pks"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(2048)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "purpose",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_id",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "form_fields",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "phase_id",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_value",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(16)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_unit",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_warning",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "has_for_each",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "embedded",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "retry_limit",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_step",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_step_pathidx_idx",
+      "table": "pf_step",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_step_updated_at_id_idx",
+      "table": "pf_step",
+      "entityType": "indexes"
+    },
+    {
+      "value": "length(\"pf_step\".\"name\") <= 1024",
+      "name": "name_length_check",
+      "table": "pf_step",
+      "entityType": "checks"
+    },
+    {
+      "columns": [
+        "process_id"
+      ],
+      "tableTo": "pf_process",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_process_id_pf_process_id_fk",
+      "table": "pf_step",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_role_id_pf_role_id_fk",
+      "table": "pf_step",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "phase_id"
+      ],
+      "tableTo": "pf_phase",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_phase_id_pf_phase_id_fk",
+      "table": "pf_step",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_step_document_store",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_step_document_store_pk",
+      "table": "pf_step_document_store",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "step_id",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "document_store_id",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_step_document_store",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "step_id",
+          "isExpression": false
+        },
+        {
+          "value": "document_store_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_step_document_store_stepdocstoreidx_idx",
+      "table": "pf_step_document_store",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_step_document_store_updated_at_id_idx",
+      "table": "pf_step_document_store",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "step_id"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_document_store_step_id_pf_step_id_fk",
+      "table": "pf_step_document_store",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "document_store_id"
+      ],
+      "tableTo": "pf_document_store",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_document_store_document_store_id_pf_document_store_id_fk",
+      "table": "pf_step_document_store",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_step_supporting_role",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_step_supporting_role_pk",
+      "table": "pf_step_supporting_role",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "step_id",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "role_id",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_step_supporting_role",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "step_id",
+          "isExpression": false
+        },
+        {
+          "value": "role_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_step_supporting_role_steproleidx_idx",
+      "table": "pf_step_supporting_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_step_supporting_role_updated_at_id_idx",
+      "table": "pf_step_supporting_role",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "step_id"
+      ],
+      "tableTo": "pf_step",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_supporting_role_step_id_pf_step_id_fk",
+      "table": "pf_step_supporting_role",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "role_id"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_step_supporting_role_role_id_pf_role_id_fk",
+      "table": "pf_step_supporting_role",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_to_do",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_to_do_pk",
+      "table": "pf_to_do",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "process_execution_id",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "flow_id",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_by_user",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_by_external_participant",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "assigned_to_provider_user",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "business_duration",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_target_at",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sla_warning_at",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text collate nocase",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "failure_reason",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "item_data",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "barrier_scheduled_flow_id",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_by_role",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_to_do",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_to_do_updated_at_id_idx",
+      "table": "pf_to_do",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "process_execution_id"
+      ],
+      "tableTo": "pf_process_execution",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_to_do_process_execution_id_pf_process_execution_id_fk",
+      "table": "pf_to_do",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "flow_id"
+      ],
+      "tableTo": "pf_flow",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_to_do_flow_id_pf_flow_id_fk",
+      "table": "pf_to_do",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "completed_by_user"
+      ],
+      "tableTo": "pf_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_to_do_completed_by_user_pf_user_id_fk",
+      "table": "pf_to_do",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "completed_by_external_participant"
+      ],
+      "tableTo": "pf_external_participant",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_to_do_completed_by_external_participant_pf_external_participant_id_fk",
+      "table": "pf_to_do",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "assigned_to_provider_user"
+      ],
+      "tableTo": "pf_provider_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_to_do_assigned_to_provider_user_pf_provider_user_id_fk",
+      "table": "pf_to_do",
+      "entityType": "fks"
+    },
+    {
+      "columns": [
+        "completed_by_role"
+      ],
+      "tableTo": "pf_role",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_to_do_completed_by_role_pf_role_id_fk",
+      "table": "pf_to_do",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_user",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_user_pk",
+      "table": "pf_user",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(128)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sub",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_logged_in",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_user",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "provider",
+          "isExpression": false
+        },
+        {
+          "value": "sub",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_user_uniquesub_idx",
+      "table": "pf_user",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_user_updated_at_id_idx",
+      "table": "pf_user",
+      "entityType": "indexes"
+    },
+    {
+      "name": "pf_user_settings",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_user_settings_pk",
+      "table": "pf_user_settings",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "notification_preference",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_user_settings",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_user_settings_user_unique_idx",
+      "table": "pf_user_settings",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_user_settings_updated_at_id_idx",
+      "table": "pf_user_settings",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "pf_user",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_user_settings_user_id_pf_user_id_fk",
+      "table": "pf_user_settings",
+      "entityType": "fks"
+    },
+    {
+      "name": "pf_weekly_schedule",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "pf_weekly_schedule_pk",
+      "table": "pf_weekly_schedule",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(41)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "org_unit_id",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "day_of_week",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_ranges",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "pf_weekly_schedule",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        {
+          "value": "org_unit_id",
+          "isExpression": false
+        },
+        {
+          "value": "day_of_week",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "_deleted = 0",
+      "origin": "manual",
+      "name": "pf_weekly_schedule_orgunitdayidx_idx",
+      "table": "pf_weekly_schedule",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        {
+          "value": "updated_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "pf_weekly_schedule_updated_at_id_idx",
+      "table": "pf_weekly_schedule",
+      "entityType": "indexes"
+    },
+    {
+      "columns": [
+        "org_unit_id"
+      ],
+      "tableTo": "pf_org_unit",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "pf_weekly_schedule_org_unit_id_pf_org_unit_id_fk",
+      "table": "pf_weekly_schedule",
+      "entityType": "fks"
+    },
+    {
+      "definition": "\n  select\n    pf_process.id,\n    count(distinct pf_to_do.id) as active_processes\n  from pf_process\n  left outer join pf_process_state on pf_process_state.process_id = pf_process.id and pf_process_state._deleted = false\n  left outer join pf_process_execution on pf_process_execution.process_state_id = pf_process_state.id and pf_process_execution._deleted = false\n  left outer join pf_to_do on pf_to_do.process_execution_id = pf_process_execution.id and pf_to_do._deleted = false\n  group by\n    pf_process.id\n",
+      "isExisting": false,
+      "error": null,
+      "name": "pf_process_its_active_processes",
+      "entityType": "views"
+    },
+    {
+      "definition": "\n  select\n    id,\n    not exists (select 1 from pf_process_execution\n    join pf_process_state on pf_process_execution.process_state_id = pf_process_state.id and pf_process_state._deleted = false\n    where pf_process_state.process_id = pf_process.id and pf_process_execution._deleted = false) as no_drafts\n  from pf_process\n",
+      "isExisting": false,
+      "error": null,
+      "name": "pf_process_its_no_drafts",
+      "entityType": "views"
+    },
+    {
+      "definition": "\n  select\n    id,\n    (select pf_step.id from pf_step\n    join pf_step_its_can_start_process on pf_step.id = pf_step_its_can_start_process.id\n    where pf_step.process_id = pf_process.id\n    and pf_step_its_can_start_process.can_start_process = 1\n    and pf_step._deleted = false\n    limit 1) as start_step\n  from pf_process\n",
+      "isExisting": false,
+      "error": null,
+      "name": "pf_process_its_start_step",
+      "entityType": "views"
+    },
+    {
+      "definition": "\n  select\n    id,\n    not exists (select 1 from pf_process_execution where pf_process_execution.process_state_id = pf_process_state.id and pf_process_execution._deleted = false) as is_draft\n  from pf_process_state\n",
+      "isExisting": false,
+      "error": null,
+      "name": "pf_process_state_its_is_draft",
+      "entityType": "views"
+    },
+    {
+      "definition": "\n  select\n    id,\n    not exists (select 1 from pf_flow where pf_flow.target_step = pf_step.id and pf_flow._deleted = false) as can_start_process\n  from pf_step\n",
+      "isExisting": false,
+      "error": null,
+      "name": "pf_step_its_can_start_process",
+      "entityType": "views"
+    }
+  ],
+  "renames": []
+}

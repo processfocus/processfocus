@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../frontend-manifest/tsconfig.lib.json"
+    }
+  ],
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+}

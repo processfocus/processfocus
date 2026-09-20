@@ -1,0 +1,35 @@
+{
+  "name": "@processfocus/pforg",
+  "version": "0.1.0-next.0",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/processfocus/processfocus.git",
+    "directory": "cli/pforg"
+  },
+  "type": "module",
+  "bin": {
+    "pforg": "./dist/main.mjs"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "dependencies": {
+    "effect": "^3.22.2"
+  },
+  "devDependencies": {
+    "@effect/cli": "^0.77.1",
+    "@effect/platform": "^0.97.2",
+    "@effect/platform-node": "^0.108.2",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

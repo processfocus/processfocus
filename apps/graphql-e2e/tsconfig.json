@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "out-tsc",
+    "sourceMap": false,
+    "types": ["node", "bun"],
+    "rootDir": "."
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.js",
+    "cucumber.js",
+    "steps/**/*.ts",
+    "support/**/*.ts",
+    "features/**/*.ts"
+  ],
+  "exclude": ["out-tsc", "reports"],
+  "references": [
+    {
+      "path": "../../packages/auth-session"
+    },
+    {
+      "path": "../../packages/graphql-schema"
+    },
+    {
+      "path": "../../packages/frontend-endpoints"
+    }
+  ]
+}

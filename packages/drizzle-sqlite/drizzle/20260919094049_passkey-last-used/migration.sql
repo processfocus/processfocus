@@ -1,0 +1,1 @@
+ALTER TABLE `pf_passkey_credential` ADD `passkey_last_used_at` real;

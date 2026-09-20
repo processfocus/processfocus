@@ -1,0 +1,19 @@
+{
+  "name": "external-processfocus-plugin-google-drive-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "exercise": "bun src/exercise.ts"
+  },
+  "dependencies": {
+    "@processfocus/plugin-google-drive": "0.1.0-next.0",
+    "effect": "^3.22.1",
+    "processfocus": "0.1.0-next.0",
+    "react": "^19.2.7"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

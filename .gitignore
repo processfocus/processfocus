@@ -1,0 +1,87 @@
+# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+
+# compiled output
+dist
+tmp
+out-tsc
+
+# dependencies
+node_modules
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+*.map
+
+# System Files
+.DS_Store
+Thumbs.db
+
+.nx/cache
+.nx/workspace-data
+.envrc
+.env
+.cursor/rules/nx-rules.mdc
+.github/instructions/nx.instructions.md
+
+vite.config.*.timestamp*
+vitest.config.*.timestamp*
+.claude/hooks/.edited
+.playwright-mcp
+
+# Next.js
+.next
+.open-next
+out
+test-output
+cloud/org/console/next-env.d.ts
+cloud/org/console-e2e/playwright-report/
+apps/frontend-e2e/playwright-report/
+apps/frontend-e2e/test-results/
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+# Local dev server port files (JSON format)
+.auth-port.json
+.graphql-port.json
+.frontend-port.json
+
+.claude/worktrees
+.claude/settings.local.json
+.opencode/package-lock.json
+
+# Nx task terminal output artifact occasionally appears at the workspace root.
+/terminalOutput
+
+# Generated frontend inputs (regenerated at build/deploy/serve time)
+apps/frontend/lib/generated/
+apps/frontend/public/_pf/
+
+.nx/polygraph
+.nx/self-healing
+
+.nx/migrate-runs

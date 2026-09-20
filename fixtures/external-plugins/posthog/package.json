@@ -1,0 +1,21 @@
+{
+  "name": "external-processfocus-plugin-posthog-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "exercise": "bun src/exercise.ts"
+  },
+  "dependencies": {
+    "@processfocus/plugin-posthog": "0.1.0-next.0",
+    "constructs": "^10.8.1",
+    "next": "^16.3.5",
+    "processfocus": "0.1.0-next.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

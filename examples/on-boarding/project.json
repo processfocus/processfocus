@@ -1,0 +1,40 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "tags": ["example"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "commands": ["bun run cli/pfcli/src/main.ts build examples/on-boarding"]
+      },
+      "inputs": [
+        "production",
+        "^production",
+        { "input": "production", "projects": ["@processfocus/cli"] }
+      ],
+      "outputs": ["{projectRoot}/dist"],
+      "dependsOn": [
+        "^build",
+        "@processfocus/cli:build",
+        "@pf/graphql-schema:graphql-codegen"
+      ]
+    },
+    "import": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "commands": [
+          "bun run cli/pfcli/src/main.ts import examples/on-boarding"
+        ]
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo -p tsconfig.app.json --noEmit"]
+      }
+    }
+  }
+}

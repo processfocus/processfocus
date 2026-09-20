@@ -1,0 +1,276 @@
+namespace PF {
+    entity Role in [OrgUnit];
+
+    entity OrgUnit in [OrgUnit] {
+        name: String,
+    };
+
+    entity ProviderUser in [OrgUnit, Role] {
+        roles?: Set<Role>,
+        orgUnit?: OrgUnit,
+    };
+
+    entity ServiceAccount {
+        roles: Set<Role>,
+    };
+
+    // Membership does not inherit ProviderUser's type or attributes.
+    entity Delegation in [ProviderUser, OrgUnit, Role] {
+        owner: ProviderUser,
+        name: String,
+        roles: Set<Role>,
+        orgUnit: OrgUnit,
+    };
+
+    entity PublicLink {
+        todo: Todo,
+    };
+
+    entity Todo in [Step, Process] {
+        step?: Step,
+        role?: Role,
+        assignedTo?: ProviderUser,
+    };
+
+    entity Step in [Process] {
+        role?: Role,
+        startsProcess: Bool,
+        embedded: Bool,
+    };
+
+    entity FormField in [Step] {
+        step: Step,
+        process: Process,
+        fieldName: String,
+        role?: Role,
+    };
+
+    entity Process in [OrgUnit] {};
+
+    action skipScheduleWaits appliesTo {
+        principal: [ProviderUser, ServiceAccount, Delegation],
+        resource: Process,
+        context: { requestTime: datetime, nodeEnv: String }
+    };
+
+    entity List in [OrgUnit] {
+        roles: Set<Role>,
+    };
+
+    entity Execution in [Process, OrgUnit] {
+        startedBy?: ProviderUser,
+        startedByRole?: Role,
+    };
+
+    entity File in [OrgUnit] {
+        owner: ProviderUser,
+        documentStore: String,
+    };
+
+    entity Application;
+
+    entity GraphQLField {
+        tag?: String,
+    };
+
+    // Context available for all authorization requests
+    type RequestContext = {
+        requestTime: datetime,
+        nodeEnv: String,
+    };
+
+    // Complete action for steps
+    action complete appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount, PublicLink],
+        resource: [Step, Todo],
+        context: RequestContext,
+    };
+
+    // Provider-user action for correcting Public Completion delivery failures.
+    action publicCompletionCorrection appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: Todo,
+        context: RequestContext,
+    };
+
+    // View action for executions and lists
+    action view appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: [Execution, List],
+        context: RequestContext,
+    };
+
+    // Restart action for executions (retry failed system steps)
+    action restart appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Execution,
+        context: RequestContext,
+    };
+
+    // Abandon action for cancelling running executions (checked against active steps)
+    action abandon appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Step,
+        context: RequestContext,
+    };
+
+    // Update action for lists
+    action create appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: List,
+        context: RequestContext,
+    };
+
+    action update appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: List,
+        context: RequestContext,
+    };
+
+    action login appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action requestRole appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Role,
+        context: RequestContext,
+    };
+
+    action requestProviderUserPermissions appliesTo {
+        principal: [Delegation, ServiceAccount],
+        resource: ProviderUser,
+        context: RequestContext,
+    };
+
+    action actOnBehalfOf appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: ProviderUser,
+        context: RequestContext,
+    };
+
+    action issueDelegationSecret appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: ProviderUser,
+        context: {
+            requestTime: datetime,
+            nodeEnv: String,
+            ownerProviderUserId: String,
+            humanSession: Bool,
+            humanAuthentication?: {
+                providerUserId: String,
+                method: String,
+                ageMillis: Long,
+            },
+        },
+    };
+
+    action renameDelegation, replaceDelegation, revokeDelegation appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Delegation,
+        context: RequestContext,
+    };
+
+    action listDelegationTokens appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: ProviderUser,
+        context: RequestContext,
+    };
+
+    // Draft action for viewing/editing draft process executions
+    action draft appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: Step,
+        context: RequestContext,
+    };
+
+    action modifyField appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: FormField,
+        context: RequestContext,
+    };
+
+    // GraphQL field authorization actions
+    action query appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: GraphQLField,
+        context: RequestContext,
+    };
+
+    action mutation appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: GraphQLField,
+        context: RequestContext,
+    };
+
+    action subscription appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: GraphQLField,
+        context: RequestContext,
+    };
+
+    // Download action for files
+    action download appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: File,
+        context: RequestContext,
+    };
+
+    // Delete action for files and lists
+    action delete appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: [File, List],
+        context: RequestContext,
+    };
+
+    // Feature-level authorization actions targeting Application
+    action administerUsers appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action administerOAuthProviders appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action administerProjectStageConfig appliesTo {
+        principal: [ProviderUser, Delegation],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action recoverProviderUser appliesTo {
+        principal: [ProviderUser],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action showProcessState appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action viewAuthorization appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action databaseShell appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Application,
+        context: RequestContext,
+    };
+
+    action databaseTransfer appliesTo {
+        principal: [ProviderUser, Delegation, ServiceAccount],
+        resource: Application,
+        context: RequestContext,
+    };
+}

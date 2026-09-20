@@ -1,0 +1,66 @@
+---
+title: Authorisation
+description: Understanding authorisation in Process Focus.
+---
+
+Authorisation determines what authenticated users can do within the
+system. Process Focus uses [Cedar](https://www.cedarpolicy.com/) for
+fine-grained access control. You can grant access based on having a
+role, being in an organisation or department, or even based on your
+identity.
+
+## Roles and Permissions
+
+Define roles with specific permissions:
+
+```typescript
+const reviewerRole = Role.create("reviewer", {
+  permissions: [
+    "process:view",
+    "process:execute",
+    "task:complete",
+  ],
+})
+
+const managerRole = Role.create("manager", {
+  permissions: [
+    "process:view",
+    "process:execute",
+    "process:cancel",
+    "approval:grant",
+    "team:manage",
+  ],
+})
+```
+
+## Cedar Policies
+
+[Cedar policies](https://www.cedarpolicy.com/) allow you to express complex authorisation rules:
+
+```cedar
+permit (
+  principal in Team::"engineering",
+  action == Action::"execute",
+  resource in ProcessCategory::"internal"
+);
+```
+
+## Step-Level Authorisation
+
+Control who can execute specific steps:
+
+```typescript
+Step.approval("executive-approval", {
+  title: "Executive Approval",
+  assignTo: Role.find("executive"),
+  permissions: ["approval:executive"],
+})
+```
+
+## Best Practices
+
+- Follow the principle of least privilege
+- Regularly audit permissions
+- Use roles instead of assigning permissions directly to users
+- Document your authorisation policies
+- Test authorisation rules thoroughly

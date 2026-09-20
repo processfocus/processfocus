@@ -1,0 +1,11 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./theme.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@source "../components/**/*.{ts,tsx}";
+@source "../app/(protected)/**/*.{ts,tsx}";
+@source "../app/app-shell.tsx";
+@source "../../../packages/shadcn-components/src/**/*.{ts,tsx}";
+@source "../../../packages/form/src/**/*.{ts,tsx}";

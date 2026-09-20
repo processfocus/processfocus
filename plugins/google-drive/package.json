@@ -1,0 +1,84 @@
+{
+  "name": "@processfocus/plugin-google-drive",
+  "version": "0.1.0-next.0",
+  "private": true,
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/processfocus/processfocus.git",
+    "directory": "plugins/google-drive"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/lib/register-client.d.ts",
+      "bun": "./src/lib/register-client.tsx",
+      "import": "./dist/lib/register-client.js",
+      "default": "./dist/lib/register-client.js"
+    },
+    "./register-client": {
+      "types": "./dist/lib/register-client.d.ts",
+      "bun": "./src/lib/register-client.tsx",
+      "import": "./dist/lib/register-client.js",
+      "default": "./dist/lib/register-client.js"
+    },
+    "./browser": {
+      "types": "./dist/lib/browser.d.ts",
+      "bun": "./src/lib/browser.ts",
+      "import": "./dist/lib/browser.js",
+      "default": "./dist/lib/browser.js"
+    },
+    "./register-walker": {
+      "types": "./dist/lib/register-walker.d.ts",
+      "bun": "./src/lib/register-walker.ts",
+      "import": "./dist/lib/register-walker.js",
+      "default": "./dist/lib/register-walker.js"
+    },
+    "./prepare-client": {
+      "types": "./dist/lib/prepare-client.d.ts",
+      "bun": "./src/lib/prepare-client.ts",
+      "import": "./dist/lib/prepare-client.js",
+      "default": "./dist/lib/prepare-client.js"
+    },
+    "./styles.css": "./styles.css"
+  },
+  "files": [
+    "dist",
+    "styles.css",
+    "README.md",
+    "LICENSE.md",
+    "!**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@googleworkspace/drive-picker-element": "^0.7.3",
+    "@pf/form-client-representation": "workspace:*",
+    "@pf/form-schema": "workspace:*",
+    "@pf/frontend-plugin-host": "workspace:*",
+    "@pf/process": "workspace:*",
+    "@processfocus/runtime": "workspace:*",
+    "constructs": "^10.8.1",
+    "effect": "^3.22.2",
+    "tailwindcss": "4.3.3"
+  },
+  "peerDependencies": {
+    "react": "^19.2.8"
+  },
+  "devDependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

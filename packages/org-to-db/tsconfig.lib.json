@@ -1,0 +1,32 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "types": ["node", "bun"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../process/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-config/tsconfig.lib.json"
+    }
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.tsx",
+    "src/**/*.test.js",
+    "src/**/*.spec.js",
+    "src/**/*.test.jsx",
+    "src/**/*.spec.jsx"
+  ]
+}

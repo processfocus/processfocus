@@ -1,0 +1,102 @@
+---
+title: Steps
+description: Understanding steps in Process Focus - the individual units of work within a process.
+---
+
+A **Step** is an individual unit of work within a process. Steps can be manual (requiring human interaction) or automated (executed by the system).
+
+## Step Types
+
+Process Focus provides several built-in step types:
+
+### Form Steps
+
+Collect data from users through generated forms:
+
+```typescript
+Step.form("collect-info", {
+  title: "Collect Information",
+  form: Form.create()
+    .addTextField("name", { required: true })
+    .addEmailField("email", { required: true })
+    .addSelectField("department", {
+      options: ["Sales", "Engineering", "Support"],
+    }),
+})
+```
+
+### Approval Steps
+
+Request approval from designated users or roles:
+
+```typescript
+Step.approval("manager-approval", {
+  title: "Manager Approval",
+  assignTo: "manager",
+  actions: ["approve", "reject", "request-changes"],
+})
+```
+
+### Task Steps
+
+Assign work to specific users or teams:
+
+```typescript
+Step.task("review-document", {
+  title: "Review Document",
+  assignTo: "reviewer",
+  instructions: "Please review the attached document for accuracy.",
+})
+```
+
+### Automated Steps
+
+Execute code without human intervention:
+
+```typescript
+Step.automated("send-email", {
+  title: "Send Confirmation Email",
+  execute: async (context) => {
+    await sendEmail({
+      to: context.data.email,
+      subject: "Request Received",
+      body: "Your request has been submitted.",
+    })
+  },
+})
+```
+
+## Step Transitions
+
+By default, steps execute in sequence. Use conditions for branching:
+
+```typescript
+process
+  .addStep(Step.approval("review", { ... }))
+  .addTransition({
+    from: "review",
+    to: "approved-step",
+    condition: (ctx) => ctx.data.approved === true,
+  })
+  .addTransition({
+    from: "review",
+    to: "rejected-step",
+    condition: (ctx) => ctx.data.approved === false,
+  })
+```
+
+## Step Context
+
+Each step receives a context object containing:
+
+- `data` - All data collected in the process so far
+- `instance` - The current process instance
+- `user` - The user executing the step
+- `metadata` - Additional process metadata
+
+## Best Practices
+
+- Keep steps atomic and focused
+- Use descriptive titles and instructions
+- Validate data at each step
+- Handle errors gracefully in automated steps

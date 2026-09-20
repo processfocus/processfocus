@@ -1,0 +1,55 @@
+{
+  "name": "@pf/graphql-e2e",
+  "tags": ["graphql-api"],
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["codegen", "^build"],
+      "options": {
+        "command": "bun test support/",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "codegen": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cat ../../packages/graphql-schema/graphql/system.graphql ../../packages/graphql-schema/graphql/rxdb.graphql | bunx genql --esm --schema /dev/stdin --output ./generated",
+        "cwd": "{projectRoot}"
+      },
+      "inputs": [
+        "{workspaceRoot}/packages/graphql-schema/graphql/system.graphql",
+        "{workspaceRoot}/packages/graphql-schema/graphql/rxdb.graphql"
+      ],
+      "outputs": ["{projectRoot}/generated"],
+      "cache": true
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build", "codegen"],
+      "options": {
+        "command": "bun build --target=node --external '@cucumber/*' --sourcemap --outdir dist --entry-naming '[name].js' steps/index.ts",
+        "cwd": "{projectRoot}"
+      },
+      "inputs": [
+        "{projectRoot}/tsconfig.json",
+        "{projectRoot}/**/*.ts",
+        "^production"
+      ],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "e2e": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build", "@pf/demo:build"],
+      "options": {
+        "command": "NODE_ENV=development NODE_OPTIONS='--enable-source-maps' bun cucumber-js --import 'dist/index.js' ${CI:+--retry 2}",
+        "cwd": "{projectRoot}"
+      },
+      "inputs": [
+        "{workspaceRoot}/packages/graphql-api/**/*.ts",
+        "{workspaceRoot}/runtime/local/src/graphql-server/**/*.ts"
+      ]
+    }
+  },
+  "implicitDependencies": ["@pf/graphql-api", "@pf/job-handler", "@pf/demo"]
+}

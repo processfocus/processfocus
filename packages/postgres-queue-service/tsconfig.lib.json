@@ -1,0 +1,32 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts"],
+  "references": [
+    {
+      "path": "../runtime/tsconfig.lib.json"
+    },
+    {
+      "path": "../service-drizzle-postgres/tsconfig.lib.json"
+    },
+    {
+      "path": "../request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../queue-service/tsconfig.lib.json"
+    },
+    {
+      "path": "../graphql-db-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../drizzle-postgres/tsconfig.lib.json"
+    }
+  ]
+}

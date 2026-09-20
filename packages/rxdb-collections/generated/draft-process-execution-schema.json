@@ -1,0 +1,45 @@
+{
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 41
+    },
+    "updatedAt": {
+      "type": "number"
+    },
+    "processId": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "startStepPath": {
+      "type": "string"
+    },
+    "state": {
+      "type": "object",
+      "required": [],
+      "properties": {}
+    },
+    "fieldsCompleted": {
+      "type": "integer"
+    },
+    "totalFields": {
+      "type": "integer"
+    },
+    "lastSaved": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "updatedAt",
+    "processId",
+    "name",
+    "startStepPath",
+    "state",
+    "fieldsCompleted",
+    "totalFields",
+    "lastSaved"
+  ]
+}

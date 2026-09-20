@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noPropertyAccessFromIndexSignature": false,
+    "noImplicitAny": false,
+    "lib": ["esnext"],
+    "outDir": "./out-tsc/bun",
+    "types": ["bun", "node"],
+    "rootDir": "."
+  },
+  "include": ["test/**/*.ts"],
+  "references": [
+    {
+      "path": "./tsconfig.lib.json"
+    }
+  ]
+}

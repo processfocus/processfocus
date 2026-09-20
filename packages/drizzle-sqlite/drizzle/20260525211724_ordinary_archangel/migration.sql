@@ -1,0 +1,1 @@
+ALTER TABLE `pf_scheduled_flow` ADD `completed_by_role` text(41) REFERENCES pf_role(id);

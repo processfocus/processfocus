@@ -1,0 +1,5 @@
+#!/usr/bin/env bun
+// Only the external browser-launch integration is substituted by the probe.
+const target = process.env["PF_PROBE_BROWSER_URL"]
+if (!target || !process.argv[2]) process.exit(1)
+await Bun.write(target, process.argv[2], { mode: 0o600 })

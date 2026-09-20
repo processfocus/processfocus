@@ -1,0 +1,38 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "..",
+    "composite": false,
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.lib.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../form-rule/tsconfig.lib.json"
+    },
+    {
+      "path": "../frontend-plugin-host/tsconfig.lib.json"
+    },
+    {
+      "path": "../frontend-manifest/tsconfig.lib.json"
+    },
+    {
+      "path": "../process/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../business-calendar/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-config/tsconfig.lib.json"
+    },
+    {
+      "path": "../runtime/tsconfig.lib.json"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+ALTER TABLE `pf_passkey_credential` ADD `passkey_name` text(128);

@@ -1,0 +1,108 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "paths": {
+      "@pf/frontend-endpoints/port-files": [
+        "../../packages/frontend-endpoints/src/port-files.ts"
+      ]
+    },
+    "types": ["node", "bun"],
+    "rootDir": "src",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "exclude": ["eslint.config.js", "eslint.config.cjs", "eslint.config.mjs"],
+  "references": [
+    {
+      "path": "../../packages/runtime"
+    },
+    {
+      "path": "../../cli/pfcli"
+    },
+    {
+      "path": "../../packages/todo-summary"
+    },
+    {
+      "path": "../../packages/sqlite-queue-service"
+    },
+    {
+      "path": "../../packages/sqlite-operations"
+    },
+    {
+      "path": "../../packages/service-drizzle-sqlite"
+    },
+    {
+      "path": "../../packages/service-drizzle-postgres"
+    },
+    {
+      "path": "../../packages/request-time"
+    },
+    {
+      "path": "../../packages/process"
+    },
+    {
+      "path": "../../packages/postgres-operations"
+    },
+    {
+      "path": "../../packages/org-to-graphql-schema"
+    },
+    {
+      "path": "../../packages/org-to-db"
+    },
+    {
+      "path": "../../packages/openauth"
+    },
+    {
+      "path": "../../packages/layer-turso-local"
+    },
+    {
+      "path": "../../packages/layer-turso-cloud"
+    },
+    {
+      "path": "../../packages/job-handler"
+    },
+    {
+      "path": "../../packages/graphql-schema"
+    },
+    {
+      "path": "../../packages/graphql-db-operations"
+    },
+    {
+      "path": "../../packages/graphql-api"
+    },
+    {
+      "path": "../../packages/frontend-endpoints"
+    },
+    {
+      "path": "../../packages/form-schema"
+    },
+    {
+      "path": "../../packages/drizzle-sqlite"
+    },
+    {
+      "path": "../../packages/drizzle-postgres"
+    },
+    {
+      "path": "../../packages/document-store-service"
+    },
+    {
+      "path": "../../packages/db-info"
+    },
+    {
+      "path": "../../packages/auth-session"
+    },
+    {
+      "path": "../../packages/auth-policy"
+    },
+    {
+      "path": "../../packages/auth-local-cedar"
+    },
+    {
+      "path": "../../packages/auth-config"
+    },
+    {
+      "path": "../../packages/auth-api"
+    }
+  ]
+}

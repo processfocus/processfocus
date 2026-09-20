@@ -1,0 +1,13 @@
+/* Custom Starlight theme: indigo accent, all other colors use Starlight defaults */
+
+:root {
+  --sl-color-accent-low: hsl(243, 54%, 20%);
+  --sl-color-accent: hsl(239, 84%, 67%);
+  --sl-color-accent-high: hsl(232, 97%, 85%);
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: hsl(226, 100%, 94%);
+  --sl-color-accent: hsl(239, 84%, 67%);
+  --sl-color-accent-high: hsl(243, 75%, 37%);
+}

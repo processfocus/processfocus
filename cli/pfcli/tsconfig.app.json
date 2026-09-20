@@ -1,0 +1,83 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/app",
+    "tsBuildInfoFile": "./out-tsc/app/tsconfig.app.tsbuildinfo",
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "types": ["node", "bun"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": [
+    "eslint.config.js",
+    "eslint.config.cjs",
+    "eslint.config.mjs",
+    "**/*.spec.ts"
+  ],
+  "references": [
+    {
+      "path": "../../packages/sdk"
+    },
+    {
+      "path": "../../packages/runtime/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/hosting-contract/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/sqlite-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/service-drizzle-sqlite/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/process/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/org-to-graphql-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/org-to-db/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/openauth/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/layer-turso-local/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/layer-turso-cloud/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/graphql-db-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/frontend-endpoints/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/drizzle-sqlite/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/db-info/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/auth-session/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/auth-policy/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/auth-local-cedar/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/auth-config/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/auth-api/tsconfig.lib.json"
+    }
+  ]
+}

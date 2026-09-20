@@ -1,0 +1,109 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "preserve",
+    "noEmit": true,
+    "emitDeclarationOnly": false,
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "types": ["node"],
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true,
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./*"]
+    },
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "../../apps/frontend/.next/types/**/*.ts",
+    "index.d.ts",
+    "package.json",
+    "app/**/*.js",
+    "app/**/*.jsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "components/**/*.js",
+    "components/**/*.jsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "lib/**/*.js",
+    "lib/**/*.jsx",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
+    "lib/**/*.json",
+    "hooks/**/*.js",
+    "hooks/**/*.jsx",
+    "hooks/**/*.ts",
+    "hooks/**/*.tsx",
+    "next-env.d.ts",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "out-tsc",
+    "dist",
+    "node_modules",
+    "jest.config.ts",
+    "app/**/*.spec.ts",
+    "app/**/*.test.ts",
+    "lib/generated/organisation-plugin-loaders.tsx",
+    "lib/generated/organisation-plugin-preparation.ts",
+    ".next",
+    "eslint.config.js",
+    "eslint.config.cjs",
+    "eslint.config.mjs",
+    "../../packages/openauth/src/ui/**/*"
+  ],
+  "references": [
+    {
+      "path": "../../packages/graphql-api"
+    },
+    {
+      "path": "../../packages/aws-common"
+    },
+    {
+      "path": "../../packages/frontend-manifest"
+    },
+    {
+      "path": "../../packages/frontend-plugin-host"
+    },
+    {
+      "path": "../../packages/request-time"
+    },
+    {
+      "path": "../../packages/auth-local-cedar"
+    },
+    {
+      "path": "../../packages/effect-json-logger"
+    },
+    {
+      "path": "../../packages/frontend-endpoints"
+    },
+    {
+      "path": "../../packages/openauth"
+    },
+    {
+      "path": "../../packages/auth-policy"
+    },
+    {
+      "path": "../../packages/rxdb-collections"
+    },
+    {
+      "path": "../../packages/form-client-representation"
+    },
+    {
+      "path": "../../packages/form"
+    },
+    {
+      "path": "../../packages/auth-session"
+    },
+    {
+      "path": "../../packages/shadcn-components"
+    }
+  ]
+}

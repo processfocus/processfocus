@@ -1,0 +1,79 @@
+{
+  "name": "@processfocus/runtime-local",
+  "version": "0.1.0-next.0",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/processfocus/processfocus.git",
+    "directory": "runtime/local"
+  },
+  "type": "module",
+  "bin": {
+    "pf-runtime-local": "./dist/main.mjs"
+  },
+  "exports": {
+    "./package.json": "./package.json",
+    ".": "./dist/main.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "dependencies": {
+    "@effect/opentelemetry": "^0.64.1",
+    "@cedar-policy/cedar-wasm": "^4.12.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@processfocus/cli": "0.1.0-next.0",
+    "@processfocus/runtime": "0.1.0-next.0",
+    "@tursodatabase/database": "0.7.2",
+    "@tursodatabase/serverless": "1.4.0",
+    "@tursodatabase/sync": "0.7.2",
+    "effect": "^3.22.2"
+  },
+  "devDependencies": {
+    "@effect/platform": "^0.97.2",
+    "@effect/platform-node": "^0.108.2",
+    "@effect/sql": "^0.52.1",
+    "@envelop/types": "^5.2.1",
+    "@pf/auth-api": "workspace:*",
+    "@pf/auth-config": "workspace:*",
+    "@pf/auth-local-cedar": "workspace:*",
+    "@pf/auth-policy": "workspace:*",
+    "@pf/auth-session": "workspace:*",
+    "@pf/db-info": "workspace:*",
+    "@pf/document-store-service": "workspace:*",
+    "@pf/drizzle-postgres": "workspace:*",
+    "@pf/drizzle-sqlite": "workspace:*",
+    "@pf/form-schema": "workspace:*",
+    "@pf/frontend-endpoints": "workspace:*",
+    "@pf/graphql-api": "workspace:*",
+    "@pf/graphql-db-operations": "workspace:*",
+    "@pf/graphql-schema": "workspace:*",
+    "@pf/job-handler": "workspace:*",
+    "@pf/layer-turso-cloud": "workspace:*",
+    "@pf/layer-turso-local": "workspace:*",
+    "@pf/openauth": "workspace:*",
+    "@pf/org-to-db": "workspace:*",
+    "@pf/org-to-graphql-schema": "workspace:*",
+    "@pf/postgres-operations": "workspace:*",
+    "@pf/process": "workspace:*",
+    "@pf/request-time": "workspace:*",
+    "@pf/service-drizzle-postgres": "workspace:*",
+    "@pf/service-drizzle-sqlite": "workspace:*",
+    "@pf/sqlite-operations": "workspace:*",
+    "@pf/sqlite-queue-service": "workspace:*",
+    "@pf/todo-summary": "workspace:*",
+    "@types/ws": "^8.18.1",
+    "graphql-ws": "^6.2.1",
+    "jose": "^6.2.12",
+    "ws": "^8.21.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

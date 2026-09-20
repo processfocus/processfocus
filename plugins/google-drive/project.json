@@ -1,0 +1,86 @@
+{
+  "name": "@processfocus/plugin-google-drive",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": ["plugins"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun ../../scripts/clean-package-distribution.ts && tsgo --build tsconfig.lib.json"
+      },
+      "outputs": ["{projectRoot}/dist"],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/clean-package-distribution.ts"
+      ]
+    },
+    "pack-check": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "bun scripts/verify-distribution.ts @processfocus/plugin-google-drive"
+      },
+      "outputs": [
+        "{workspaceRoot}/dist/packages/processfocus-plugin-google-drive",
+        "{workspaceRoot}/dist/package-inspection/@processfocus-plugin-google-drive"
+      ],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/verify-distribution.ts",
+        "{workspaceRoot}/scripts/finalize-plugin-distribution.ts"
+      ]
+    },
+    "external-fixture": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": [
+        "pack-check",
+        {
+          "projects": ["processfocus"],
+          "target": "pack-check"
+        },
+        {
+          "projects": ["@processfocus/runtime"],
+          "target": "pack-check"
+        }
+      ],
+      "options": {
+        "command": "bun scripts/verify-external-plugins.ts @processfocus/plugin-google-drive"
+      },
+      "outputs": []
+    },
+    "nx-release-publish": {
+      "executor": "@nx/js:release-publish",
+      "dependsOn": ["pack-check"],
+      "options": {
+        "packageRoot": "dist/package-inspection/@processfocus-plugin-google-drive/package"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build", "build"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo -p tsconfig.spec.json --noEmit"]
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "biome check --error-on-warnings ."
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun test"
+      }
+    }
+  }
+}

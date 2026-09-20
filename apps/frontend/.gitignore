@@ -1,0 +1,5 @@
+lib/generated/
+# include schemas, changes there are important as we need to write migrations
+# keeps changing, I don't think I need this despite AI telling me, but
+# everytime I run the local runtime it changes, and gets committed all the time.
+next-env.d.ts

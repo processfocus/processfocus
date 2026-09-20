@@ -1,0 +1,26 @@
+[
+  {
+    "input": "engineering/bug-report-fix/Report bug",
+    "expected": "EngineeringBugReportFixReportBug"
+  },
+  {
+    "input": "/engineering/bug-report-fix/Report bug",
+    "expected": "EngineeringBugReportFixReportBug"
+  },
+  {
+    "input": "//engineering//bug-fix//",
+    "expected": "EngineeringBugFix"
+  },
+  {
+    "input": "Demo",
+    "expected": "Demo"
+  },
+  {
+    "input": "/Demo",
+    "expected": "Demo"
+  },
+  {
+    "input": "/operations/nightly-sync",
+    "expected": "OperationsNightlySync"
+  }
+]

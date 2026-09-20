@@ -1,0 +1,42 @@
+{
+  "name": "@pf/frontend-e2e",
+  "tags": ["frontend"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun bddgen --config apps/frontend-e2e/playwright.config.ts",
+        "cwd": "{workspaceRoot}"
+      },
+      "inputs": [
+        "{projectRoot}/src/features/**/*.feature",
+        "{projectRoot}/src/features-instant/**/*.feature",
+        "{projectRoot}/src/features-lifecycle/**/*.feature",
+        "{projectRoot}/src/features-boot-health-failure/**/*.feature",
+        "{projectRoot}/src/features-boot-health-plugin/**/*.feature",
+        "{projectRoot}/src/features-delegated-access/**/*.feature",
+        "{projectRoot}/src/features-delegated-access-artifacts/**/*.feature",
+        "{projectRoot}/src/steps/**/*.ts",
+        "{projectRoot}/playwright.config.ts",
+        { "env": "FRONTEND_E2E_FEATURES" },
+        { "env": "FRONTEND_E2E_TAGS" },
+        { "env": "PF_INSTANT_E2E" }
+      ],
+      "outputs": ["{projectRoot}/.features-gen"],
+      "cache": true,
+      "dependsOn": []
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "tsgo --build --emitDeclarationOnly"
+      },
+      "dependsOn": ["@pf/frontend-endpoints:build"]
+    },
+    "e2e": {
+      "dependsOn": ["build", "@pf/graphql-schema:graphql-codegen"],
+      "cache": false
+    }
+  }
+}

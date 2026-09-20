@@ -1,0 +1,49 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../runtime/tsconfig.lib.json"
+    },
+    {
+      "path": "../frontend-manifest/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-submission-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-rule/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-client-representation/tsconfig.lib.json"
+    },
+    {
+      "path": "../business-calendar/tsconfig.lib.json"
+    }
+  ],
+  "exclude": [
+    "vite.config.ts",
+    "vite.config.mts",
+    "vitest.config.ts",
+    "vitest.config.mts",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.tsx",
+    "src/**/*.test.js",
+    "src/**/*.spec.js",
+    "src/**/*.test.jsx",
+    "src/**/*.spec.jsx"
+  ]
+}

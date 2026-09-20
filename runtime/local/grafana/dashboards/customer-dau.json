@@ -1,0 +1,236 @@
+{
+  "uid": "pf-customer-dau",
+  "title": "Customer Dashboard daily active users",
+  "description": "Distinct normalized email identities from authenticated human Dashboard use. Project DAUs do not sum to global DAU. Current day is partial. Collection begins at rollout.",
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "time": {
+    "from": "now-29d/d",
+    "to": "now"
+  },
+  "refresh": "5m",
+  "tags": ["process-focus", "business"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "loki",
+        "current": {
+          "text": "Loki",
+          "value": "loki"
+        }
+      },
+      {
+        "name": "account",
+        "label": "Account",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "$datasource"
+        },
+        "query": {
+          "type": 1,
+          "label": "pf_account_id",
+          "stream": "{service_name=\"pf-dashboard-activity\"}"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      },
+      {
+        "name": "project",
+        "label": "Project",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "$datasource"
+        },
+        "query": {
+          "type": 1,
+          "label": "pf_project",
+          "stream": "{service_name=\"pf-dashboard-activity\",pf_account_id=~\"${account:regex}\"}"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "$datasource"
+        },
+        "query": {
+          "type": 1,
+          "label": "pf_environment",
+          "stream": "{service_name=\"pf-dashboard-activity\",pf_account_scope=\"customer\",pf_account_id=~\"${account:regex}\",pf_project=~\"${project:regex}\"}"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Global DAU by UTC day (current day partial)",
+      "description": "Distinct across the selected scope; never a sum of project counts. UTC dates come from server event time, not query evaluation time.",
+      "type": "barchart",
+      "datasource": {
+        "type": "loki",
+        "uid": "$datasource"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (day) (sum by (day, identity) (count_over_time({service_name=\"pf-dashboard-activity\",pf_account_scope=\"customer\",pf_account_id=~\"${account:regex}\",pf_project=~\"${project:regex}\",pf_environment=~\"${environment:regex}\"} | json | __error__=\"\" [$__range])))",
+          "queryType": "instant",
+          "editorMode": "code",
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "legendFormat": "{{day}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "day": "UTC day",
+              "Value #A": "Active users",
+              "Value": "Active users"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "UTC day"
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "xField": "UTC day",
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Project DAU by UTC day (top 1,000 project-days)",
+      "description": "One grouped query discovers projects automatically. A person can appear in several projects; environment counts are deduplicated within each project. Shows the 1,000 largest project-day counts to bound browser and query result size. Use project filters for full selected-project history. Project DAUs are non-additive.",
+      "type": "table",
+      "datasource": {
+        "type": "loki",
+        "uid": "$datasource"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(1000, count by (day, pf_project) (sum by (day, pf_project, identity) (count_over_time({service_name=\"pf-dashboard-activity\",pf_account_scope=\"customer\",pf_account_id=~\"${account:regex}\",pf_project=~\"${project:regex}\",pf_environment=~\"${environment:regex}\"} | json | __error__=\"\" [$__range]))))",
+          "queryType": "instant",
+          "editorMode": "code",
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "legendFormat": "{{day}} \u00b7 {{pf_project}}"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "day": "UTC day",
+              "pf_project": "Project",
+              "Value": "Active users",
+              "Value #A": "Active users"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "UTC day",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

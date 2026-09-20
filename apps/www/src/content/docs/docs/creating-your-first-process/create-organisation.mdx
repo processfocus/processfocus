@@ -1,0 +1,77 @@
+---
+title: Create organisation
+description: Set up your organisation and configure departments.
+---
+
+## Initializing your project
+
+The `pfcli init` command creates a new Process Focus project with all the necessary configuration. It requires an admin email and at least one identity provider:
+
+```bash
+pfcli init ~/src/new-org --email admin@example.com --identity-provider google
+cd ~/src/new-org
+```
+
+This sets up:
+- Project structure and configuration
+- Default organisation template
+- Development environment
+- Sample process definitions
+
+## Default organisation structure
+
+An **Organisation** is the top-level container for everything in Process Focus. When you ran `pfcli init`, a default organisation was set up for you, including the admin invitation for `--email` and authentication config for each `--identity-provider`.
+
+Your new project comes with a basic organisation that includes:
+
+- A default **Organisation** with your company name
+- A root **Admin** team with initial user
+- Default roles for common business functions
+
+## Viewing your organisation
+
+In the web UI, navigate to **Settings > Organisation** to see your organisation structure. Here you can:
+
+- View and edit organisation details
+- Manage teams and members
+- Configure roles and permissions
+
+## Adding departments
+
+As your business grows, you'll likely want to organize people into departments. Process Focus supports this through **Org Units**.
+
+### Example: Adding a Sales department
+
+```typescript
+import { OrgUnit } from "@pf/sdk"
+
+export const salesDepartment = OrgUnit.create("sales", {
+  name: "Sales Department",
+  description: "Handles customer acquisition and sales",
+})
+  .addMember("alice@example.com", { role: "manager" })
+  .addMember("bob@example.com", { role: "representative" })
+```
+
+### Department hierarchy
+
+Org Units can be nested to reflect your company structure:
+
+```
+My Company
+├── Sales
+│   ├── Enterprise Sales
+│   └── SMB Sales
+├── Engineering
+│   ├── Frontend Team
+│   └── Backend Team
+└── Operations
+```
+
+Departments can have:
+- **Members** — Users who belong to the department
+- **Managers** — Users with administrative control
+- **Processes** — Workflows specific to that department
+- **Permissions** — Scoped access to resources
+
+> For a complete guide to organisational units, see [Org Units](/docs/org-units).

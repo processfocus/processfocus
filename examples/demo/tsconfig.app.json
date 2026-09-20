@@ -1,0 +1,50 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "emitDeclarationOnly": true,
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["eslint.config.js", "eslint.config.cjs", "eslint.config.mjs"],
+  "references": [
+    {
+      "path": "../../plugins/posthog/tsconfig.lib.json"
+    },
+    {
+      "path": "../../plugins/aws/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/process/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/layer-turso-local/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/layer-turso-cloud/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/graphql-db-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/drizzle-sqlite/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/business-calendar/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/auth-config/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/org-to-graphql-schema/tsconfig.lib.json"
+    }
+  ]
+}

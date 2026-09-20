@@ -1,0 +1,154 @@
+{
+  "name": "@pf/openauth",
+  "version": "0.4.3",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./src/client.ts",
+      "default": "./src/client.ts"
+    },
+    "./subject": {
+      "types": "./src/subject.ts",
+      "import": "./src/subject.ts",
+      "default": "./src/subject.ts"
+    },
+    "./error": {
+      "types": "./src/error.ts",
+      "import": "./src/error.ts",
+      "default": "./src/error.ts"
+    },
+    "./storage": {
+      "types": "./src/storage/storage.ts",
+      "import": "./src/storage/storage.ts",
+      "default": "./src/storage/storage.ts"
+    },
+    "./storage/storage": {
+      "types": "./src/storage/storage.ts",
+      "import": "./src/storage/storage.ts",
+      "default": "./src/storage/storage.ts"
+    },
+    "./redirect-uri": {
+      "types": "./src/redirect-uri.ts",
+      "import": "./src/redirect-uri.ts",
+      "default": "./src/redirect-uri.ts"
+    },
+    "./provider/github": {
+      "types": "./src/provider/github.ts",
+      "import": "./src/provider/github.ts",
+      "default": "./src/provider/github.ts"
+    },
+    "./provider/microsoft": {
+      "types": "./src/provider/microsoft.ts",
+      "import": "./src/provider/microsoft.ts",
+      "default": "./src/provider/microsoft.ts"
+    },
+    "./provider/apple": {
+      "types": "./src/provider/apple.ts",
+      "import": "./src/provider/apple.ts",
+      "default": "./src/provider/apple.ts"
+    },
+    "./provider/discord": {
+      "types": "./src/provider/discord.ts",
+      "import": "./src/provider/discord.ts",
+      "default": "./src/provider/discord.ts"
+    },
+    "./provider/spotify": {
+      "types": "./src/provider/spotify.ts",
+      "import": "./src/provider/spotify.ts",
+      "default": "./src/provider/spotify.ts"
+    },
+    "./provider/slack": {
+      "types": "./src/provider/slack.ts",
+      "import": "./src/provider/slack.ts",
+      "default": "./src/provider/slack.ts"
+    },
+    "./provider/linkedin": {
+      "types": "./src/provider/linkedin.ts",
+      "import": "./src/provider/linkedin.ts",
+      "default": "./src/provider/linkedin.ts"
+    },
+    "./provider/twitch": {
+      "types": "./src/provider/twitch.ts",
+      "import": "./src/provider/twitch.ts",
+      "default": "./src/provider/twitch.ts"
+    },
+    "./provider/yahoo": {
+      "types": "./src/provider/yahoo.ts",
+      "import": "./src/provider/yahoo.ts",
+      "default": "./src/provider/yahoo.ts"
+    },
+    "./provider/x": {
+      "types": "./src/provider/x.ts",
+      "import": "./src/provider/x.ts",
+      "default": "./src/provider/x.ts"
+    },
+    "./provider/keycloak": {
+      "types": "./src/provider/keycloak.ts",
+      "import": "./src/provider/keycloak.ts",
+      "default": "./src/provider/keycloak.ts"
+    },
+    "./provider/cognito": {
+      "types": "./src/provider/cognito.ts",
+      "import": "./src/provider/cognito.ts",
+      "default": "./src/provider/cognito.ts"
+    },
+    "./provider/jumpcloud": {
+      "types": "./src/provider/jumpcloud.ts",
+      "import": "./src/provider/jumpcloud.ts",
+      "default": "./src/provider/jumpcloud.ts"
+    },
+    "./provider/facebook": {
+      "types": "./src/provider/facebook.ts",
+      "import": "./src/provider/facebook.ts",
+      "default": "./src/provider/facebook.ts"
+    },
+    "./provider/dummy": {
+      "types": "./src/provider/dummy.ts",
+      "import": "./src/provider/dummy.ts",
+      "default": "./src/provider/dummy.ts"
+    },
+    "./provider/oauth2": {
+      "types": "./src/provider/oauth2.ts",
+      "import": "./src/provider/oauth2.ts",
+      "default": "./src/provider/oauth2.ts"
+    },
+    "./provider/passkey": {
+      "types": "./src/provider/passkey.ts",
+      "import": "./src/provider/passkey.ts",
+      "default": "./src/provider/passkey.ts"
+    },
+    "./provider/provider": {
+      "types": "./src/provider/provider.ts",
+      "import": "./src/provider/provider.ts",
+      "default": "./src/provider/provider.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@effect/platform": "^0.97.2",
+    "@simplewebauthn/server": "^13.3.3",
+    "@simplewebauthn/types": "^12.0.0",
+    "@standard-schema/spec": "^1.1.0",
+    "aws4fetch": "^1.0.20",
+    "effect": "^3.22.2",
+    "jose": "^6.2.12",
+    "validator": "^13.15.35"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/bun": "1.4.2",
+    "@types/validator": "^13.15.10",
+    "arctic": "^3.7.0",
+    "valibot": "^1.5.0"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

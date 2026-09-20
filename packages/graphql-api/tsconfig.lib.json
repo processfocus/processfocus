@@ -1,0 +1,83 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../runtime/tsconfig.lib.json"
+    },
+    {
+      "path": "../todo-summary/tsconfig.lib.json"
+    },
+    {
+      "path": "../request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../queue-service/tsconfig.lib.json"
+    },
+    {
+      "path": "../process/tsconfig.lib.json"
+    },
+    {
+      "path": "../graphql-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../graphql-db-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-submission-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-client-representation/tsconfig.lib.json"
+    },
+    {
+      "path": "../document-store-service/tsconfig.lib.json"
+    },
+    {
+      "path": "../db-info/tsconfig.lib.json"
+    },
+    {
+      "path": "../business-metrics/tsconfig.lib.json"
+    },
+    {
+      "path": "../business-calendar/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-session/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-policy/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-local-cedar/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-api/tsconfig.lib.json"
+    },
+    {
+      "path": "../sqlite-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../service-drizzle-sqlite/tsconfig.lib.json"
+    },
+    {
+      "path": "../org-to-db/tsconfig.lib.json"
+    },
+    {
+      "path": "../job-handler/tsconfig.lib.json"
+    },
+    {
+      "path": "../drizzle-sqlite/tsconfig.lib.json"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+ALTER TABLE `pf_job_queue` ADD `claim_receipt` text(64);

@@ -1,0 +1,60 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    {
+      "path": "../service-drizzle-postgres/tsconfig.lib.json"
+    },
+    {
+      "path": "../request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../openauth/tsconfig.lib.json"
+    },
+    {
+      "path": "../graphql-db-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../drizzle-postgres/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-config/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-api/tsconfig.lib.json"
+    },
+    {
+      "path": "../process/tsconfig.lib.json"
+    },
+    {
+      "path": "../org-to-db/tsconfig.lib.json"
+    },
+    {
+      "path": "../form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../business-calendar/tsconfig.lib.json"
+    }
+  ],
+  "exclude": [
+    "vite.config.ts",
+    "vite.config.mts",
+    "vitest.config.ts",
+    "vitest.config.mts",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.tsx",
+    "src/**/*.test.js",
+    "src/**/*.spec.js",
+    "src/**/*.test.jsx",
+    "src/**/*.spec.jsx"
+  ]
+}

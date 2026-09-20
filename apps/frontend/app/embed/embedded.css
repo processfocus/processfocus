@@ -1,0 +1,48 @@
+html[data-pf-embed="true"],
+html[data-pf-embed="true"] body {
+  background: transparent !important;
+}
+
+html:not([data-pf-embed-align="left"]) .pf-embed-container {
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+@media (min-width: 640px) {
+  html:not([data-pf-embed-align="left"]) .pf-embed-container {
+    padding-inline: 1.5rem;
+  }
+}
+
+html[data-pf-embed="true"] body > div > section > .mb-6 > p {
+  color: var(--muted-foreground);
+}
+
+html[data-pf-embed="true"] body > div > section > .mb-6 > h1 {
+  color: var(--foreground);
+}
+
+html[data-pf-embed="true"] .pf-embed-form [data-slot="field-label"],
+html[data-pf-embed="true"] .pf-embed-form [data-slot="field-legend"],
+html[data-pf-embed="true"] .pf-embed-form [data-slot="static-field-label"] {
+  color: var(--foreground);
+}
+
+html[data-pf-embed="true"] .pf-embed-form [data-slot="field-description"],
+html[data-pf-embed="true"] .pf-embed-form [data-slot="static-field-content"] {
+  color: var(--muted-foreground);
+}
+
+html[data-pf-embed="true"] .pf-embed-form [data-slot="input"],
+html[data-pf-embed="true"] .pf-embed-form [data-slot="textarea"] {
+  background-color: var(--card) !important;
+  border-color: var(--input) !important;
+  border-radius: 0.75rem !important;
+  color: var(--foreground) !important;
+  box-shadow: none !important;
+}
+
+html[data-pf-embed="true"] .pf-embed-form [data-slot="input"]::placeholder,
+html[data-pf-embed="true"] .pf-embed-form [data-slot="textarea"]::placeholder {
+  color: var(--muted-foreground) !important;
+}

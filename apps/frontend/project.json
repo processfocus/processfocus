@@ -1,0 +1,108 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "tags": ["frontend"],
+  "targets": {
+    "graphql-codegen": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["graphql-codegen"]
+      },
+      "inputs": [
+        "{workspaceRoot}/packages/graphql-schema/graphql/*.graphql",
+        "{projectRoot}/codegen.ts",
+        "{projectRoot}/lib/**/*.ts",
+        "!{projectRoot}/lib/generated/**"
+      ],
+      "outputs": ["{projectRoot}/lib/generated/gql"],
+      "cache": true
+    },
+    "next-build": {
+      "dependsOn": ["^build", "graphql-codegen", "prepare-build-inputs"],
+      "inputs": [
+        { "env": "PF_INSTANT_E2E" },
+        "default",
+        "!{projectRoot}/.next/**/*",
+        "!{projectRoot}/.open-next/**/*",
+        "{projectRoot}/lib/generated/frontend-manifest.json",
+        "{projectRoot}/lib/generated/organisation-plugin-loaders.tsx",
+        "{projectRoot}/lib/generated/organisation-plugin-preparation.ts",
+        "{projectRoot}/lib/generated/organisation-plugin-composition.json",
+        "{projectRoot}/lib/generated/browser-plugins/**/*",
+        "{workspaceRoot}/bun.lock",
+        "{projectRoot}/lib/generated/docs/**/*",
+        "{projectRoot}/public/_pf/app-icons/**/*",
+        "{projectRoot}/public/_pf/public-form-branding/**/*",
+        { "env": "NODE_ENV" },
+        { "env": "GRAPHQL_ENDPOINT" },
+        { "env": "JWKS_URI" },
+        { "env": "FRONTEND_JWT_TOKEN" },
+        { "env": "PF_NEXT_BUILD_ID" },
+        { "env": "PF_ORG" },
+        { "env": "PF_ENV" }
+      ],
+      "outputs": [
+        "{projectRoot}/.next/*.json",
+        "{projectRoot}/.next/BUILD_ID",
+        "{projectRoot}/.next/server",
+        "{projectRoot}/.next/static",
+        "{projectRoot}/.next/standalone/apps/frontend/package.json",
+        "{projectRoot}/.next/standalone/apps/frontend/server.js",
+        "{projectRoot}/.next/standalone/apps/frontend/.next/BUILD_ID",
+        "{projectRoot}/.next/standalone/apps/frontend/.next/package.json",
+        "{projectRoot}/.next/standalone/apps/frontend/.next/server",
+        "{projectRoot}/.next/standalone/apps/frontend/.next/*.json"
+      ],
+      "cache": false
+    },
+    "prepare-build-inputs": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "bash apps/frontend/scripts/prepare-build-inputs.sh"
+      },
+      "inputs": [
+        { "env": "PF_ORG" },
+        "{projectRoot}/scripts/prepare-build-inputs.sh",
+        "{projectRoot}/scripts/generate-organisation-plugin-composition.ts",
+        "{workspaceRoot}/bun.lock"
+      ],
+      "outputs": [
+        "{projectRoot}/lib/generated/frontend-manifest.json",
+        "{projectRoot}/lib/generated/organisation-plugin-loaders.tsx",
+        "{projectRoot}/lib/generated/organisation-plugin-preparation.ts",
+        "{projectRoot}/lib/generated/organisation-plugin-composition.json",
+        "{projectRoot}/lib/generated/browser-plugins",
+        "{projectRoot}/lib/generated/docs",
+        "{projectRoot}/public/_pf/app-icons",
+        "{projectRoot}/public/_pf/public-form-branding"
+      ],
+      "cache": false
+    },
+    "dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "bun apps/frontend/scripts/serve-development.ts"
+      },
+      "dependsOn": ["build-deps", "graphql-codegen"],
+      "continuous": true
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo -p tsconfig.json --noEmit"]
+      },
+      "dependsOn": ["^build", "graphql-codegen"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun test --isolate"
+      },
+      "dependsOn": ["graphql-codegen"]
+    }
+  }
+}

@@ -1,0 +1,217 @@
+{
+  "properties": {
+    "withoutWaiting": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "maxLength": 41
+    },
+    "updatedAt": {
+      "type": "number"
+    },
+    "processStateId": {
+      "type": "string"
+    },
+    "processName": {
+      "type": "string"
+    },
+    "processPath": {
+      "type": "string"
+    },
+    "canAbandonExecution": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "canRestartExecution": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "Running",
+        "Completed",
+        "Failed",
+        "Abandoned"
+      ]
+    },
+    "failureReason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "abandonedReason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "startedAt": {
+      "type": "string"
+    },
+    "finishedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "durationMs": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "path",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "Completed",
+              "Waiting",
+              "Potential",
+              "Failed",
+              "Correction Required"
+            ]
+          },
+          "failureReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "submittedViaEmbeddedForm": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "externalSubmitterEmail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assignedProviderUserEmail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerUser": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "required": [
+              "id",
+              "firstName",
+              "lastName",
+              "picture",
+              "orgUnit"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "firstName": {
+                "type": "string"
+              },
+              "lastName": {
+                "type": "string"
+              },
+              "picture": {
+                "type": "string"
+              },
+              "orgUnit": {
+                "type": "string"
+              }
+            }
+          },
+          "startedAt": {},
+          "completedAt": {}
+        }
+      }
+    },
+    "completedSteps": {
+      "type": "integer"
+    },
+    "totalSteps": {
+      "type": "integer"
+    },
+    "estimatedCompletionAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slaWarningAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slaTargetAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "updatedAt",
+    "processStateId",
+    "processName",
+    "processPath",
+    "status",
+    "startedAt",
+    "steps",
+    "completedSteps",
+    "totalSteps"
+  ]
+}

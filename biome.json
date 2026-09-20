@@ -1,0 +1,230 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": [
+      "**",
+      "!!**/dist",
+      "!!**/out-tsc",
+      "!!**/.nx",
+      "!**/vite.config.*.timestamp*",
+      "!**/vitest.config.*.timestamp*",
+      "!**/sst-env.d.ts",
+      "!!**/.sst",
+      "!!**/test-output",
+      "!!**/.next",
+      "!**/next-env.d.ts",
+      "!!**/generated",
+      "!**/*.svg",
+      "!packages/drizzle-sqlite/src/lib/db-schema.ts",
+      "!packages/drizzle-postgres/src/lib/db-schema.ts",
+      "!**/drizzle/meta/*",
+      "!**/drizzle/*.sql",
+      "!**/drizzle/**/snapshot.json",
+      "!**/drizzle/**/migration.sql",
+      "!packages/graphql-schema/graphql/rxdb.graphql",
+      "!**/cdk.context.json"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 80
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "useArrowFunction": "error",
+        "useLiteralKeys": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noAsyncPromiseExecutor": "error"
+      },
+      "style": {
+        "useImportType": "warn",
+        "useConst": "warn",
+        "useNodejsImportProtocol": "warn",
+        "noNonNullAssertion": "error"
+      },
+      "correctness": {
+        "useExhaustiveDependencies": "error"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all",
+      "quoteProperties": "asNeeded",
+      "bracketSpacing": true,
+      "arrowParentheses": "always"
+    }
+  },
+  "json": {
+    "formatter": {
+      "indentWidth": 2,
+      "trailingCommas": "none"
+    },
+    "parser": {
+      "allowComments": true
+    }
+  },
+  "css": {
+    "parser": {
+      "cssModules": true,
+      "tailwindDirectives": true
+    },
+    "linter": {
+      "enabled": false
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": {
+          "level": "on",
+          "options": {
+            "groups": [
+              ":NODE:",
+              [":PACKAGE:", "!@pf/**"],
+              ["@pf/**"],
+              ":PATH:"
+            ],
+            "identifierOrder": "lexicographic"
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "apps/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "cli/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "examples/demo/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "examples/on-boarding/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "packages/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "plugins/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "runtime/local/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+        "tools/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@pf/access-review-inventory-role": "Private cloud source is not available to public-source projects.",
+                  "@pf/access-review-management-role": "Private cloud source is not available to public-source projects.",
+                  "@pf/bootstrap-aws-account": "Private cloud source is not available to public-source projects.",
+                  "@pf/cloud-org": "Private cloud source is not available to public-source projects.",
+                  "@pf/cloud-org-console": "Private cloud source is not available to public-source projects.",
+                  "@pf/cloud-org-console-e2e": "Private cloud source is not available to public-source projects.",
+                  "@pf/cloud-scripts": "Private cloud source is not available to public-source projects.",
+                  "@pf/demo-lambda": "Private infrastructure source is not available to public-source projects.",
+                  "@pf/github": "Private infrastructure source is not available to public-source projects.",
+                  "@pf/management-billing-role": "Private cloud source is not available to public-source projects.",
+                  "@pf/network": "Private infrastructure source is not available to public-source projects.",
+                  "@pf/runtime-aws": "The private AWS runtime must be consumed through a public contract.",
+                  "@pf/school": "Private organisation source is not available to public-source projects.",
+                  "@pf/soc2": "Private infrastructure source is not available to public-source projects.",
+                  "@pf/tbsnz": "Private organisation source is not available to public-source projects.",
+                  "private-processfocus-consumer-fixture": "Private consumer proof source is not available to public-source projects."
+                },
+                "patterns": [
+                  {
+                    "group": [
+                      "@pf/access-review-inventory-role/**",
+                      "@pf/access-review-management-role/**",
+                      "@pf/bootstrap-aws-account/**",
+                      "@pf/cloud-org/**",
+                      "@pf/cloud-org-console/**",
+                      "@pf/cloud-org-console-e2e/**",
+                      "@pf/cloud-scripts/**",
+                      "@pf/demo-lambda/**",
+                      "@pf/github/**",
+                      "@pf/management-billing-role/**",
+                      "@pf/network/**",
+                      "@pf/runtime-aws/**",
+                      "@pf/school/**",
+                      "@pf/soc2/**",
+                      "@pf/tbsnz/**",
+                      "private-processfocus-consumer-fixture/**"
+                    ],
+                    "message": "Public-source projects cannot import private-source packages."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "**/test/**",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test.ts",
+        "**/*.test.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/drizzle-postgres/src/lib/db-schema.ts",
+        "packages/drizzle-sqlite/src/lib/db-schema.ts"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "useArrowFunction": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/openauth/**/*.ts", "packages/openauth/**/*.tsx"],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off",
+            "noImplicitAnyLet": "off"
+          },
+          "correctness": {
+            "noUnusedVariables": "off"
+          },
+          "complexity": {
+            "noBannedTypes": "off",
+            "useArrowFunction": "off"
+          },
+          "style": {
+            "noNonNullAssertion": "off",
+            "useConst": "off"
+          }
+        }
+      }
+    }
+  ]
+}

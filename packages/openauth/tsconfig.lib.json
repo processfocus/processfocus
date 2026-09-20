@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "lib": ["esnext", "webworker", "dom.iterable"],
+    "types": ["node", "bun"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "references": [],
+  "exclude": ["test/**/*.test.ts"]
+}

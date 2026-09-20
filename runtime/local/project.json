@@ -1,0 +1,236 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "@processfocus/runtime-local",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun scripts/build-runtime.ts"
+      },
+      "outputs": ["{projectRoot}/out-tsc/runtime"],
+      "inputs": [
+        "production",
+        "^production",
+        {
+          "dependentTasksOutputFiles": "**/*",
+          "transitive": true
+        }
+      ],
+      "cache": true,
+      "dependsOn": ["^build", "@pf/graphql-schema:graphql-codegen"]
+    },
+    "dashboard-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{workspaceRoot}",
+        "command": "bash scripts/build-public-dashboard.sh",
+        "env": {
+          "SQLITE_DATABASE_PATH": ""
+        }
+      },
+      "outputs": [
+        "{workspaceRoot}/apps/frontend/.next/standalone",
+        "{workspaceRoot}/apps/frontend/.next/static"
+      ],
+      "cache": false,
+      "parallelism": false
+    },
+    "graphql-server:dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun --watch runtime/local/src/graphql-server/graphql-server.ts",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "continuous": true
+    },
+    "authentication-server:dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun --watch runtime/local/src/authentication-server/authentication-server.ts",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "continuous": true
+    },
+    "job-worker:dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun --watch runtime/local/src/job-worker/job-worker.ts",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "continuous": true,
+      "dependsOn": ["@pf/graphql-schema:graphql-codegen"]
+    },
+    "import:bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun cli/pfcli/src/main.ts import"
+      }
+    },
+    "job-worker:check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun runtime/local/src/job-worker/job-worker.ts --check",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "cache": false,
+      "dependsOn": [
+        "@processfocus/runtime-local:import:bootstrap",
+        "@pf/graphql-schema:graphql-codegen"
+      ]
+    },
+    "import:watch": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun cli/pfcli/src/main.ts import --watch --watch-skip-initial"
+      },
+      "continuous": true,
+      "dependsOn": [
+        "@processfocus/runtime-local:import:bootstrap",
+        "@processfocus/runtime-local:job-worker:check"
+      ]
+    },
+    "graphql-server:dev:bootstrapped": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun --watch runtime/local/src/graphql-server/graphql-server.ts",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "continuous": true,
+      "dependsOn": [
+        "@processfocus/runtime-local:import:bootstrap",
+        "@processfocus/runtime-local:job-worker:check"
+      ]
+    },
+    "authentication-server:dev:bootstrapped": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun --watch runtime/local/src/authentication-server/authentication-server.ts",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "continuous": true,
+      "dependsOn": [
+        "@processfocus/runtime-local:import:bootstrap",
+        "@processfocus/runtime-local:job-worker:check"
+      ]
+    },
+    "job-worker:dev:bootstrapped": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun --watch runtime/local/src/job-worker/job-worker.ts",
+        "env": {
+          "NODE_ENV": "development"
+        }
+      },
+      "continuous": true,
+      "dependsOn": [
+        "@processfocus/runtime-local:import:bootstrap",
+        "@processfocus/runtime-local:job-worker:check",
+        "@pf/graphql-schema:graphql-codegen"
+      ]
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun runtime/local/src/serve-frontend.ts"
+      },
+      "dependsOn": [
+        "@pf/frontend:build-deps",
+        "@pf/frontend:graphql-codegen",
+        "@processfocus/runtime-local:job-worker:check",
+        "@pf/graphql-schema:graphql-codegen",
+        "@processfocus/runtime-local:import:watch",
+        "@processfocus/runtime-local:authentication-server:dev:bootstrapped",
+        "@processfocus/runtime-local:graphql-server:dev:bootstrapped",
+        "@processfocus/runtime-local:job-worker:dev:bootstrapped"
+      ]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["bun test src"]
+      },
+      "dependsOn": ["@pf/demo:build"]
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo -p tsconfig.json --noEmit"]
+      },
+      "inputs": ["typecheck-default"],
+      "dependsOn": ["^build"]
+    },
+    "pack-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun scripts/verify-distribution.ts @processfocus/runtime-local"
+      },
+      "outputs": [
+        "{workspaceRoot}/dist/packages/processfocus-runtime-local",
+        "{workspaceRoot}/dist/package-inspection/@processfocus-runtime-local"
+      ],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/verify-distribution.ts"
+      ],
+      "dependsOn": [
+        "distribution-build",
+        "@processfocus/cli:build",
+        "@processfocus/runtime:build"
+      ]
+    },
+    "nx-release-publish": {
+      "executor": "@nx/js:release-publish",
+      "dependsOn": ["pack-check"],
+      "options": {
+        "packageRoot": "dist/package-inspection/@processfocus-runtime-local/package"
+      }
+    },
+    "up": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "docker compose up -d"
+      }
+    },
+    "down": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "docker compose down"
+      }
+    },
+    "logs": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "docker compose logs -f"
+      }
+    },
+    "distribution-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun scripts/build-distribution.ts"
+      },
+      "outputs": ["{projectRoot}/dist"],
+      "cache": false,
+      "dependsOn": ["build", "dashboard-build"]
+    }
+  }
+}

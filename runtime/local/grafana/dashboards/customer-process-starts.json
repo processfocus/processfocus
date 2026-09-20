@@ -1,0 +1,662 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Internal customer process starts, successfully persisted step completions, and terminal deployment outcomes. UTC daily reporting from rollout; no backfill.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Daily UTC increases of the successfully persisted process-start counter. Small export losses or duplicates are tolerated.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 35,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "legend": {
+          "calcs": ["sum"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "editorMode": "code",
+          "expr": "sum by (pf_trigger) (increase(pf_business_process_starts_total{pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\",pf_environment=~\"$environment\"}[1d]))",
+          "interval": "1d",
+          "legendFormat": "{{pf_trigger}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Daily process starts (UTC)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "One query groups the selected range by project; projects appear automatically without per-project panels.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Account ID"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 2,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Value"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "editorMode": "code",
+          "expr": "sum by (pf_account_id, pf_account_name, pf_project, pf_environment, pf_trigger) (increase(pf_business_process_starts_total{pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\",pf_environment=~\"$environment\"}[$__range]))",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Project breakdown",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "pf_account_id": true
+            },
+            "indexByName": {
+              "pf_account_name": 0,
+              "pf_account_id": 1,
+              "pf_project": 2,
+              "pf_environment": 3,
+              "pf_trigger": 4,
+              "Value": 5
+            },
+            "renameByName": {
+              "Value": "Starts",
+              "pf_account_id": "Account ID",
+              "pf_account_name": "Account",
+              "pf_environment": "Environment",
+              "pf_project": "Project",
+              "pf_trigger": "Trigger"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Terminal pipeline attempts, including cleanup. Activation followed by cleanup failure is a failure. Target customer dimensions; collection starts at rollout.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 35,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": ["sum"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "editorMode": "code",
+          "expr": "sum by (pf_outcome) (increase(pf_business_deployment_attempts_total{pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\",pf_environment=~\"$environment\"}[1d]))",
+          "interval": "1d",
+          "legendFormat": "{{pf_outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Daily deployment outcomes (UTC)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Successful and failed attempts by target account, project and environment. Retries within a build are one attempt.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Account ID"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "id": 4,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Value"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "editorMode": "code",
+          "expr": "sum by (pf_account_id, pf_account_name, pf_project, pf_environment, pf_outcome) (sum_over_time(increase(pf_business_deployment_attempts_total{pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\",pf_environment=~\"$environment\"}[1d])[$__range:1d]))",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Deployment project breakdown",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "pf_account_id": true
+            },
+            "indexByName": {
+              "pf_account_name": 0,
+              "pf_account_id": 1,
+              "pf_project": 2,
+              "pf_environment": 3,
+              "pf_outcome": 4,
+              "Value": 5
+            },
+            "renameByName": {
+              "Value": "Attempts",
+              "pf_account_id": "Account ID",
+              "pf_account_name": "Account",
+              "pf_environment": "Environment",
+              "pf_project": "Project",
+              "pf_outcome": "Outcome"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "Daily UTC increases of the successfully persisted step-completion counter. Small export losses or duplicates are tolerated. Includes submitted start steps and successful automated work; excludes failed or rolled-back completions.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 35,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "min": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": ["sum"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "editorMode": "code",
+          "expr": "sum by (pf_trigger) (increase(pf_business_step_completions_total{pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\",pf_environment=~\"$environment\"}[1d]))",
+          "interval": "1d",
+          "legendFormat": "{{pf_trigger}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Daily completed steps (UTC)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "$datasource"
+      },
+      "description": "One query groups the selected range by project; projects appear automatically without per-project panels. Includes submitted start steps and successful automated work; excludes failed or rolled-back completions.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Account ID"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "string"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "id": 6,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Value"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "editorMode": "code",
+          "expr": "sum by (pf_account_id, pf_account_name, pf_project, pf_environment, pf_trigger) (increase(pf_business_step_completions_total{pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\",pf_environment=~\"$environment\"}[$__range]))",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Completed steps by project",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "pf_account_id": true
+            },
+            "indexByName": {
+              "pf_account_name": 0,
+              "pf_account_id": 1,
+              "pf_project": 2,
+              "pf_environment": 3,
+              "pf_trigger": 4,
+              "Value": 5
+            },
+            "renameByName": {
+              "Value": "Completions",
+              "pf_account_id": "Account ID",
+              "pf_account_name": "Account",
+              "pf_environment": "Environment",
+              "pf_project": "Project",
+              "pf_trigger": "Trigger"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "$logsDatasource"
+      },
+      "description": "Distinct normalized human identities recorded from visible Dashboard activity. The current UTC day is partial; repeated activity is deduplicated at query time.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "$logsDatasource"
+          },
+          "editorMode": "code",
+          "expr": "count by (day) (sum by (day, identity) (count_over_time({service_name=\"pf-dashboard-activity\",pf_account_scope=\"customer\",pf_account_name=~\"${account:regex}\",pf_project=~\"${project:regex}\",pf_environment=~\"${environment:regex}\"} | json | __error__=\"\" [$__range])))",
+          "queryType": "instant",
+          "legendFormat": "{{day}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Daily active users (UTC)",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "day": "UTC day",
+              "Value": "Active users",
+              "Value #A": "Active users"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "UTC day"
+              }
+            ]
+          }
+        }
+      ],
+      "type": "barchart"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 41,
+  "tags": ["business-metrics", "internal"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "label": "Prometheus",
+        "name": "datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "text": "Loki",
+          "value": "loki"
+        },
+        "label": "Loki",
+        "name": "logsDatasource",
+        "query": "loki",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource"
+        },
+        "definition": "label_values({__name__=~\"pf_business_(process_starts|step_completions|deployment_attempts)_total\",pf_account_scope=\"customer\"}, pf_account_name)",
+        "includeAll": true,
+        "label": "Account",
+        "multi": true,
+        "name": "account",
+        "query": {
+          "query": "label_values({__name__=~\"pf_business_(process_starts|step_completions|deployment_attempts)_total\",pf_account_scope=\"customer\"}, pf_account_name)",
+          "refId": "VariableQueryEditor-Account"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource"
+        },
+        "definition": "label_values({__name__=~\"pf_business_(process_starts|step_completions|deployment_attempts)_total\",pf_account_scope=\"customer\",pf_account_name=~\"$account\"}, pf_project)",
+        "includeAll": true,
+        "label": "Project",
+        "multi": true,
+        "name": "project",
+        "query": {
+          "query": "label_values({__name__=~\"pf_business_(process_starts|step_completions|deployment_attempts)_total\",pf_account_scope=\"customer\",pf_account_name=~\"$account\"}, pf_project)",
+          "refId": "VariableQueryEditor-Project"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "$datasource"
+        },
+        "definition": "label_values({__name__=~\"pf_business_(process_starts|step_completions|deployment_attempts)_total\",pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\"}, pf_environment)",
+        "includeAll": true,
+        "label": "Environment",
+        "multi": true,
+        "name": "environment",
+        "query": {
+          "query": "label_values({__name__=~\"pf_business_(process_starts|step_completions|deployment_attempts)_total\",pf_account_scope=\"customer\",pf_account_name=~\"$account\",pf_project=~\"$project\"}, pf_environment)",
+          "refId": "VariableQueryEditor-Environment"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-29d/d",
+    "to": "now+1d/d"
+  },
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "Customer business activity",
+  "uid": "pf-customer-process-starts",
+  "version": 3,
+  "weekStart": "monday"
+}

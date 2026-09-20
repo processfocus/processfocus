@@ -1,0 +1,11 @@
+{
+  "default": {
+    "import": ["dist/**/*.js"],
+    "paths": ["features/**/*.feature"],
+    "format": [
+      "progress",
+      "html:reports/cucumber-report.html",
+      "junit:reports/junit.xml"
+    ]
+  }
+}

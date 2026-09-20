@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "./out-tsc/lib",
+    "tsBuildInfoFile": "./out-tsc/lib/tsconfig.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "lib": ["esnext"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "references": [
+    {
+      "path": "../request-time/tsconfig.lib.json"
+    },
+    {
+      "path": "../openauth/tsconfig.lib.json"
+    },
+    {
+      "path": "../db-info/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-session/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-policy/tsconfig.lib.json"
+    },
+    {
+      "path": "../auth-config/tsconfig.lib.json"
+    }
+  ],
+  "exclude": ["test/**/*.test.ts"]
+}

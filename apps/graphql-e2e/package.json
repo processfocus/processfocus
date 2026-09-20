@@ -1,0 +1,22 @@
+{
+  "name": "@pf/graphql-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@cucumber/cucumber": "^13.2.1",
+    "@effect/platform": "^0.97.2",
+    "@genql/cli": "^6.3.4",
+    "@genql/runtime": "^2.10.0",
+    "@pf/auth-session": "workspace:*",
+    "@pf/frontend-endpoints": "workspace:*",
+    "@pf/graphql-schema": "workspace:*",
+    "@types/ws": "^8.18.1",
+    "effect": "^3.22.2",
+    "graphql": "^17.0.2",
+    "graphql-ws": "^6.2.1",
+    "jose": "^6.2.12",
+    "ws": "^8.21.3"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

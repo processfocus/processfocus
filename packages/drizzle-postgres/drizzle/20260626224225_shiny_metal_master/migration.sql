@@ -1,0 +1,2 @@
+ALTER TABLE "pf_process_state" ADD CONSTRAINT "single_starter_check" CHECK ("started_by_user" is null or "started_by_external_participant" is null);--> statement-breakpoint
+ALTER TABLE "pf_to_do" ADD CONSTRAINT "single_completer_check" CHECK ("completed_by_user" is null or "completed_by_external_participant" is null);

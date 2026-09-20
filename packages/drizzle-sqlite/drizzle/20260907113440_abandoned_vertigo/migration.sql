@@ -1,0 +1,2 @@
+ALTER TABLE `pf_delegation_history` ADD `actor_delegation` text(41) REFERENCES pf_delegation(id);--> statement-breakpoint
+ALTER TABLE `pf_delegation_history` ADD `actor_secret_generation` text(41) REFERENCES pf_secret_generation(id);

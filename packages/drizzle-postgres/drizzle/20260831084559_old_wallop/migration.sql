@@ -1,0 +1,1 @@
+DROP TABLE "pf_external_credential_handoff";

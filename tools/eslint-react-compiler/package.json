@@ -1,0 +1,13 @@
+{
+  "name": "@pf/eslint-react-compiler",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Shared focused React Compiler ESLint config for console client gates",
+  "devDependencies": {
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript-eslint": "^8.70.0"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

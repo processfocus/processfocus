@@ -1,0 +1,62 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": [
+          "tsgo -p tsconfig.app.json && bun scripts/build-distribution.ts"
+        ]
+      },
+      "outputs": ["{projectRoot}/out-tsc/app", "{projectRoot}/dist"],
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun test test --isolate --max-concurrency=1"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/packages/process/test-fixtures/path-to-pascal-case.json"
+      ],
+      "parallelism": false
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo -p tsconfig.spec.json --noEmit"]
+      },
+      "inputs": ["default", "{projectRoot}/tsconfig.spec.json"],
+      "dependsOn": ["^build", "build"]
+    },
+    "pack-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun scripts/verify-distribution.ts @processfocus/pforg"
+      },
+      "outputs": [
+        "{workspaceRoot}/dist/packages/processfocus-pforg",
+        "{workspaceRoot}/dist/package-inspection/@processfocus-pforg"
+      ],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/verify-distribution.ts"
+      ],
+      "dependsOn": ["build"]
+    },
+    "nx-release-publish": {
+      "executor": "@nx/js:release-publish",
+      "dependsOn": ["pack-check"],
+      "options": {
+        "packageRoot": "dist/package-inspection/@processfocus-pforg/package"
+      }
+    }
+  }
+}

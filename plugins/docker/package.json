@@ -1,0 +1,40 @@
+{
+  "name": "@processfocus/plugin-docker",
+  "version": "0.1.0-next.0",
+  "private": true,
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/processfocus/processfocus.git",
+    "directory": "plugins/docker"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE.md",
+    "!**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@pf/process": "workspace:*",
+    "@processfocus/runtime": "workspace:*",
+    "effect": "^3.22.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@pf/xplain2drizzle",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "xplain2drizzle": "./src/main.ts"
+  },
+  "dependencies": {
+    "@pf/xplain-ddl": "*",
+    "@theothergothamdev/pluralize-ts": "^1.1.0",
+    "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
+    "effect": "^3.22.2"
+  },
+  "devDependencies": {
+    "@pf/service-drizzle-sqlite": "*",
+    "typescript": "^6.0.3"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

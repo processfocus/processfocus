@@ -1,0 +1,39 @@
+{
+  "name": "@processfocus/plugin-aws-lambda",
+  "version": "0.1.0-next.0",
+  "private": true,
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/processfocus/processfocus.git",
+    "directory": "plugins/aws"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md",
+    "!**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.1131.0",
+    "@pf/process": "workspace:*",
+    "effect": "^3.22.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  }
+}

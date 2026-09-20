@@ -1,0 +1,104 @@
+{
+  "dialect": "sqlite",
+  "id": "4b03a656-5c72-4121-9d6b-f490a355ec71",
+  "prevIds": [
+    "00000000-0000-0000-0000-000000000000"
+  ],
+  "version": "7",
+  "ddl": [
+    {
+      "name": "purchase_order",
+      "entityType": "tables"
+    },
+    {
+      "type": "text(41)",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "purchase_order_pk",
+      "table": "purchase_order",
+      "entityType": "pks"
+    },
+    {
+      "type": "text(200)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "item",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "price",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "created_at",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(julianday('now'))",
+      "generated": null,
+      "name": "updated_at",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "created_by",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "type": "text(256)",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'SYSTEM'",
+      "generated": null,
+      "name": "updated_by",
+      "table": "purchase_order",
+      "entityType": "columns"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "_deleted",
+      "table": "purchase_order",
+      "entityType": "columns"
+    }
+  ],
+  "renames": []
+}

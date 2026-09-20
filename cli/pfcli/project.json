@@ -1,0 +1,81 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": [
+          "tsgo -p tsconfig.app.json && bun scripts/build-distribution.ts"
+        ]
+      },
+      "outputs": ["{projectRoot}/out-tsc/app", "{projectRoot}/dist"],
+      "dependsOn": ["^build", "@pf/graphql-schema:graphql-codegen"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": [
+          "bash ./scripts/run-tests.spec.sh && PFCLI_TEST_RUN_ID=${NX_TASK_HASH:-$(date +%s%N)} bash ./scripts/run-tests.sh"
+        ]
+      },
+      "cache": true,
+      "parallelism": false
+    },
+    "slow-test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": [
+          "PFCLI_TEST_RUN_ID=${NX_TASK_HASH:-$(date +%s%N)} bash ./scripts/run-slow-tests.sh"
+        ]
+      },
+      "dependsOn": [
+        "^build",
+        "@pf/graphql-schema:graphql-codegen",
+        "processfocus:pack-check",
+        "@processfocus/runtime:pack-check"
+      ],
+      "cache": true,
+      "parallelism": true
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["tsgo -p tsconfig.spec.json --noEmit"]
+      },
+      "inputs": ["default", "{projectRoot}/tsconfig.spec.json"],
+      "dependsOn": ["^build", "build"]
+    },
+    "pack-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun scripts/verify-distribution.ts @processfocus/cli"
+      },
+      "outputs": [
+        "{workspaceRoot}/dist/packages/processfocus-cli",
+        "{workspaceRoot}/dist/package-inspection/@processfocus-cli"
+      ],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/verify-distribution.ts"
+      ],
+      "dependsOn": [
+        "build",
+        "@processfocus/runtime:build",
+        "@processfocus/hosting-contract:build"
+      ]
+    },
+    "nx-release-publish": {
+      "executor": "@nx/js:release-publish",
+      "dependsOn": ["pack-check"],
+      "options": {
+        "packageRoot": "dist/package-inspection/@processfocus-cli/package"
+      }
+    }
+  }
+}

@@ -1,0 +1,208 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreBinaries": [
+    "cli/xplain2drizzle/src/main",
+    "cli/generate-rxdb/src/main.ts",
+    "cli/pfcli/src/main.ts",
+    "cli/pforg/src/main.ts",
+    "cli/pfcli/src/run-temp-org.ts",
+    "canary-logs",
+    "custom-domain",
+    "db",
+    "dockerd-entrypoint.sh",
+    "get-frontend-jwt",
+    "import",
+    "logs",
+    "projects",
+    "scripts/nx-quiet.ts",
+    "skills",
+    "stage",
+    "codex",
+    "patch"
+  ],
+  "ignoreDependencies": ["@commitlint/cli"],
+  "ignoreFiles": [],
+  "ignoreIssues": {
+    "packages/openauth/src/**": ["exports", "types"],
+    "apps/frontend/lib/effect/**": ["exports", "types"],
+    "apps/frontend/components/ui/**": ["exports", "types"],
+    "apps/frontend/components/auth-provider.tsx": ["exports"],
+    "apps/frontend/app/global.css": ["unresolved"],
+    "apps/frontend/proxy.ts": ["unresolved"],
+    "apps/frontend-e2e/src/steps/school-enquiry.steps.ts": ["unresolved"],
+    "apps/graphql-e2e/support/hooks.ts": ["unresolved"],
+    "apps/frontend/lib/collections/collection-provider-factory.tsx": ["types"],
+    "apps/frontend/lib/frontend-plugin-loaders.ts": ["types"],
+    "apps/frontend/lib/notifications/notification-preference.ts": ["types"],
+    "cli/pfcli/src/commands/migrate-custom.ts": ["exports"],
+    "cli/pfcli/src/utils/execution-subscription.ts": ["types"],
+    "cli/pfcli/src/run-temp-org.ts": ["files"],
+    "cli/pfcli/src/utils/bundled-db-import.ts": ["exports"],
+    "cli/pfcli/src/utils/load-org.ts": ["types"],
+    "packages/form/src/lib/plugin-registry.ts": ["types"],
+    "plugins/google-drive/src/lib/types.ts": ["types"],
+    "plugins/google-drive/src/lib/register-client.tsx": ["exports"],
+    "runtime/local/src/job-worker/types.ts": ["types"]
+  },
+  "workspaces": {
+    "fixtures/external-authoring": {
+      "entry": ["src/index.ts", "src/cross-copy.ts"],
+      "ignoreDependencies": [
+        "@types/react",
+        "constructs",
+        "effect",
+        "react",
+        "validator"
+      ]
+    },
+    "tools/eslint-react-compiler": {
+      "entry": ["eslint.config.mjs", "run.mjs"]
+    },
+    "cli/generate-triggers": {
+      "ignoreBinaries": ["drizzle-kit"]
+    },
+    "packages/*": {
+      "entry": ["src/index.ts", "test/**/*.{test,spec}.ts"],
+      "project": ["src/**/*.{ts,tsx}", "test/**/*.ts"]
+    },
+    "packages/service-drizzle-sqlite": {
+      "ignoreDependencies": ["@pf/db-info"]
+    },
+    "packages/shadcn-components": {
+      "ignore": ["src/lib/ui/button.tsx"]
+    },
+    "plugins/google-drive": {
+      "ignoreDependencies": ["tailwindcss"]
+    },
+    "packages/service-drizzle-postgres": {
+      "ignore": ["test/postgres-test.ts", "test/postgres-alpine-container.ts"]
+    },
+    "packages/openauth": {
+      "entry": [
+        "src/index.ts",
+        "src/jwt.ts",
+        "src/provider/arctic.ts",
+        "src/provider/code.ts",
+        "src/provider/index.ts",
+        "src/provider/password.ts",
+        "src/storage/cloudflare.ts"
+      ],
+      "ignoreDependencies": ["@cloudflare/workers-types", "arctic"]
+    },
+    "runtime/local": {
+      "entry": [
+        "scripts/build-distribution.ts",
+        "scripts/delegation-next-runtime.ts",
+        "src/main.ts",
+        "src/authentication-server/authentication-server.ts",
+        "src/graphql-server/graphql-server.ts",
+        "src/graphql-server/graphql-internal-server.ts",
+        "src/job-worker/job-worker.ts",
+        "src/serve-frontend.ts",
+        "src/**/*.{test,spec}.ts"
+      ],
+      "ignoreDependencies": [
+        "@cedar-policy/cedar-wasm",
+        "@tursodatabase/database",
+        "@tursodatabase/serverless",
+        "@tursodatabase/sync"
+      ]
+    },
+    "cli/pfcli": {
+      "entry": ["src/main.ts", "src/prepare-deployment-artifact-main.ts"],
+      "ignoreDependencies": [
+        "@cedar-policy/cedar-wasm",
+        "@pf/auth-policy",
+        "@tursodatabase/serverless",
+        "processfocus"
+      ]
+    },
+    "cli/pforg": {
+      "entry": ["src/main.ts", "test/**/*.spec.ts"]
+    },
+    "apps/www": {
+      "entry": ["src/pages/**/*.astro", "astro.config.mjs"],
+      "ignore": ["src/styles/starlight-custom.css"],
+      "ignoreDependencies": ["@astrojs/check", "@astrojs/mdx"]
+    },
+    "apps/frontend": {
+      "entry": [
+        "scripts/generate-organisation-plugin-composition.ts",
+        "scripts/assert-dashboard-client-chunks.ts",
+        "test/fixtures/delegation-ui-probe.tsx"
+      ],
+      "ignore": [
+        "lib/effect/index.ts",
+        "lib/effect/params.ts",
+        "lib/effect/services/index.ts",
+        "lib/plugins.ts",
+        "public/processfocus-embed.js"
+      ],
+      "ignoreDependencies": [
+        "@cedar-policy/cedar-wasm",
+        "@graphql-typed-document-node/core",
+        "@opennextjs/aws",
+        "server-only"
+      ]
+    },
+    "apps/graphql-e2e": {
+      "entry": ["steps/**/*.ts", "cucumber.json", "config.ts", "scripts/*.ts"],
+      "project": ["**/*.ts", "!generated/**"],
+      "ignoreDependencies": ["@genql/runtime", "@pf/graphql-schema", "graphql"]
+    },
+    "apps/frontend-e2e": {
+      "entry": ["src/steps/**/*.ts", "playwright.config.ts"],
+      "project": ["src/**/*.ts", "playwright.config.ts"]
+    },
+    "plugins/docker": {
+      "entry": [
+        "src/index.ts",
+        "src/lib/global.d.ts",
+        "test/**/*.{test,spec}.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "test/**/*.ts"],
+      "ignore": ["assets/pf-docker-step-runner.mjs", "assets/pf-fetch-url.mjs"]
+    },
+    "examples/demo": {
+      "entry": ["src/index.ts", "test/fixtures/*.ts"],
+      "ignoreDependencies": [
+        "@pf/layer-turso-cloud",
+        "@pf/layer-turso-local",
+        "@tursodatabase/serverless"
+      ]
+    },
+    "examples/on-boarding": {
+      "ignoreDependencies": ["@tursodatabase/database"]
+    },
+    "plugins/*": {
+      "entry": [
+        "src/index.ts",
+        "src/runtime.ts",
+        "src/runtime.workspace.ts",
+        "src/server.ts",
+        "src/testing.ts",
+        "src/test-support.ts",
+        "src/lib/register-client.tsx",
+        "src/lib/register-walker.ts",
+        "src/lib/prepare-client.ts",
+        "src/lib/activation-policy.ts",
+        "src/lib/global.d.ts",
+        "test/**/*.{test,spec}.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx}", "test/**/*.ts"]
+    },
+    "fixtures/external-plugins/*": {
+      "entry": ["src/exercise.ts"],
+      "ignore": ["host/**"],
+      "ignoreDependencies": [
+        "@pf/form-client-representation",
+        "@pf/frontend-plugin-host",
+        "constructs",
+        "effect",
+        "next",
+        "react",
+        "react-dom"
+      ]
+    }
+  }
+}

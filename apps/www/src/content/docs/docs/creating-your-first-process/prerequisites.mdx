@@ -1,0 +1,26 @@
+---
+title: Prerequisites
+description: System requirements and CLI installation for Process Focus.
+---
+
+Before you begin, ensure you have either:
+
+- Node 24 or later
+- Bun 1.3.9 or later
+
+## Installing the CLI
+
+Process Focus provides a CLI tool (`pfcli`) to help you initialize and manage your projects.
+
+Install it globally:
+
+```bash
+bun install -g @pf/cli
+```
+
+Once installed, you're ready to initialize your project and create your organisation.
+
+When you run `pfcli init`, pass both:
+
+- `--email <admin-email>`
+- at least one `--identity-provider <name>`

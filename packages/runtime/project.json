@@ -1,0 +1,41 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "bun ../../scripts/clean-package-distribution.ts && tsgo --build tsconfig.lib.json"
+      },
+      "outputs": ["{projectRoot}/dist"],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/clean-package-distribution.ts"
+      ]
+    },
+    "pack-check": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "bun scripts/verify-distribution.ts @processfocus/runtime"
+      },
+      "outputs": [
+        "{workspaceRoot}/dist/packages/processfocus-runtime",
+        "{workspaceRoot}/dist/package-inspection/@processfocus-runtime"
+      ],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/verify-distribution.ts"
+      ]
+    },
+    "nx-release-publish": {
+      "executor": "@nx/js:release-publish",
+      "dependsOn": ["pack-check"],
+      "options": {
+        "packageRoot": "dist/package-inspection/@processfocus-runtime/package"
+      }
+    }
+  }
+}

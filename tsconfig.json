@@ -1,0 +1,230 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compileOnSave": false,
+  "files": [],
+  "references": [
+    {
+      "path": "./apps/frontend"
+    },
+    {
+      "path": "./apps/frontend-e2e"
+    },
+    {
+      "path": "./apps/graphql-e2e"
+    },
+    {
+      "path": "./apps/www"
+    },
+    {
+      "path": "./cli/generate-rxdb"
+    },
+    {
+      "path": "./cli/generate-triggers"
+    },
+    {
+      "path": "./cli/pfcli"
+    },
+    {
+      "path": "./cli/pforg"
+    },
+    {
+      "path": "./cli/xplain2drizzle"
+    },
+    {
+      "path": "./examples/demo"
+    },
+    {
+      "path": "./examples/on-boarding"
+    },
+    {
+      "path": "./fixtures/external-authoring"
+    },
+    {
+      "path": "./fixtures/external-plugins/aws-lambda"
+    },
+    {
+      "path": "./fixtures/external-plugins/docker"
+    },
+    {
+      "path": "./fixtures/external-plugins/google-drive"
+    },
+    {
+      "path": "./fixtures/external-plugins/posthog"
+    },
+    {
+      "path": "./fixtures/external-plugins/resend"
+    },
+    {
+      "path": "./fixtures/external-plugins/xero"
+    },
+    {
+      "path": "./packages/auth-api"
+    },
+    {
+      "path": "./packages/auth-config"
+    },
+    {
+      "path": "./packages/auth-local-cedar"
+    },
+    {
+      "path": "./packages/auth-policy"
+    },
+    {
+      "path": "./packages/auth-session"
+    },
+    {
+      "path": "./packages/aws-common"
+    },
+    {
+      "path": "./packages/business-calendar"
+    },
+    {
+      "path": "./packages/business-metrics"
+    },
+    {
+      "path": "./packages/db-info"
+    },
+    {
+      "path": "./packages/document-store-service"
+    },
+    {
+      "path": "./packages/drizzle-postgres"
+    },
+    {
+      "path": "./packages/drizzle-sqlite"
+    },
+    {
+      "path": "./packages/effect-json-logger"
+    },
+    {
+      "path": "./packages/form"
+    },
+    {
+      "path": "./packages/form-client-representation"
+    },
+    {
+      "path": "./packages/form-rule"
+    },
+    {
+      "path": "./packages/form-schema"
+    },
+    {
+      "path": "./packages/form-submission-schema"
+    },
+    {
+      "path": "./packages/frontend-endpoints"
+    },
+    {
+      "path": "./packages/frontend-manifest"
+    },
+    {
+      "path": "./packages/frontend-plugin-host"
+    },
+    {
+      "path": "./packages/graphql-api"
+    },
+    {
+      "path": "./packages/graphql-db-operations"
+    },
+    {
+      "path": "./packages/graphql-schema"
+    },
+    {
+      "path": "./packages/hosting-contract"
+    },
+    {
+      "path": "./packages/job-handler"
+    },
+    {
+      "path": "./packages/layer-sqlite-bun"
+    },
+    {
+      "path": "./packages/layer-turso-cloud"
+    },
+    {
+      "path": "./packages/layer-turso-local"
+    },
+    {
+      "path": "./packages/openauth"
+    },
+    {
+      "path": "./packages/org-to-db"
+    },
+    {
+      "path": "./packages/org-to-graphql-schema"
+    },
+    {
+      "path": "./packages/postgres-operations"
+    },
+    {
+      "path": "./packages/postgres-queue-service"
+    },
+    {
+      "path": "./packages/process"
+    },
+    {
+      "path": "./packages/process-test-runner"
+    },
+    {
+      "path": "./packages/queue-service"
+    },
+    {
+      "path": "./packages/request-time"
+    },
+    {
+      "path": "./packages/runtime"
+    },
+    {
+      "path": "./packages/sdk"
+    },
+    {
+      "path": "./packages/rxdb-collections"
+    },
+    {
+      "path": "./packages/service-drizzle-postgres"
+    },
+    {
+      "path": "./packages/service-drizzle-sqlite"
+    },
+    {
+      "path": "./packages/shadcn-components"
+    },
+    {
+      "path": "./packages/sqlite-operations"
+    },
+    {
+      "path": "./packages/sqlite-queue-service"
+    },
+    {
+      "path": "./packages/todo-summary"
+    },
+    {
+      "path": "./packages/usage-costs"
+    },
+    {
+      "path": "./packages/xplain-ddl"
+    },
+    {
+      "path": "./plugins/aws"
+    },
+    {
+      "path": "./plugins/docker"
+    },
+    {
+      "path": "./plugins/google-drive"
+    },
+    {
+      "path": "./plugins/posthog"
+    },
+    {
+      "path": "./plugins/resend"
+    },
+    {
+      "path": "./plugins/xero"
+    },
+    {
+      "path": "./runtime/local"
+    }
+  ],
+  "compilerOptions": {}
+}

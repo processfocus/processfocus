@@ -1,0 +1,24 @@
+{
+  "name": "@pf/generate-rxdb",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "generate-rxdb": "./src/main.ts"
+  },
+  "main": "./src/main.ts",
+  "types": "./src/main.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./src/main.ts",
+      "import": "./src/main.ts",
+      "default": "./src/main.ts"
+    }
+  },
+  "dependencies": {
+    "effect": "^3.22.2",
+    "@pf/rxdb-collections": "*"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

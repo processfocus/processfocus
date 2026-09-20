@@ -1,0 +1,1 @@
+ALTER TABLE "pf_passkey_credential" ADD COLUMN "passkey_name" varchar(128);

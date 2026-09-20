@@ -1,0 +1,66 @@
+---
+title: Processes
+description: Understanding processes in Process Focus - the core building blocks of your workflows.
+---
+
+A **Process** is the core building block in Process Focus. It represents a complete workflow that can be instantiated and executed.
+
+## What is a Process?
+
+A process defines:
+
+- A sequence of **steps** that need to be executed
+- **Transitions** between steps (linear or conditional)
+- **Data** that flows through the process
+- **Participants** who interact with the process
+
+## Creating a Process
+
+Use the `Process.create()` function to define a new process:
+
+```typescript
+import { Process } from "@pf/sdk"
+
+export const myProcess = Process.create("my-process", {
+  name: "My Business Process",
+  description: "A description of what this process does",
+})
+```
+
+## Adding Steps
+
+Processes are composed of steps. Add steps using the fluent API:
+
+```typescript
+const process = Process.create("order-fulfillment", {
+  name: "Order Fulfillment",
+})
+  .addStep(Step.form("receive-order", { ... }))
+  .addStep(Step.task("process-payment", { ... }))
+  .addStep(Step.approval("manager-approval", { ... }))
+  .addStep(Step.automated("send-notification", { ... }))
+```
+
+## Process Instances
+
+When a process is started, a **process instance** is created. Each instance:
+
+- Has a unique identifier
+- Maintains its own state and data
+- Tracks which step it's currently on
+- Records an audit trail of all actions
+
+## Process Lifecycle
+
+1. **Created** - Process instance is initialized
+2. **Running** - Process is actively executing steps
+3. **Waiting** - Process is waiting for user input or external event
+4. **Completed** - All steps have been executed successfully
+5. **Cancelled** - Process was terminated before completion
+
+## Best Practices
+
+- Keep processes focused on a single business objective
+- Use meaningful names for processes and steps
+- Document the purpose of each process
+- Version your process definitions
