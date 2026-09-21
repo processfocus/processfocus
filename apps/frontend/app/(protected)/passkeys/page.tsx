@@ -11,8 +11,8 @@ const Passkeys = BasePage.build(() =>
         <div>
           <h1 className="text-2xl font-semibold">Passkeys</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Add and name the Passkeys that can sign in to this organisation, and
-            see when each was last used.
+            Add, name, and remove the Passkeys that can sign in to this
+            organisation, and see when each was last used.
           </p>
         </div>
         {result.kind !== "success" ? (

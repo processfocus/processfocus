@@ -153,5 +153,39 @@
       }
     }
   },
-  "analytics": true
+  "analytics": true,
+  "release": {
+    "groups": {
+      "public": {
+        "projects": [
+          "processfocus",
+          "@processfocus/runtime",
+          "@processfocus/runtime-local",
+          "@processfocus/cli",
+          "@processfocus/hosting-contract",
+          "@processfocus/plugin-aws-lambda",
+          "@processfocus/plugin-docker",
+          "@processfocus/plugin-google-drive",
+          "@processfocus/plugin-posthog",
+          "@processfocus/plugin-resend"
+        ],
+        "projectsRelationship": "fixed"
+      }
+    },
+    "version": {
+      "currentVersionResolver": "disk",
+      "versionPrefix": "",
+      "updateDependents": "never",
+      "preserveLocalDependencyProtocols": true,
+      "git": {
+        "commit": false,
+        "tag": false,
+        "push": false
+      }
+    },
+    "changelog": {
+      "workspaceChangelog": false,
+      "projectChangelogs": false
+    }
+  }
 }

@@ -32,6 +32,16 @@ browser bundles and preparation stylesheets under
 | `@pf/runtime-aws:build-frontend-for-opennext` | AWS runtime | Runs `@pf/frontend:next-build` with the selected organisation artifact. |
 | `@pf/runtime-aws:build-opennext` | AWS runtime | Production-like OpenNext artifact used by hosted Dashboard deploys. |
 
+## Installed local distribution
+
+`@processfocus/runtime-local` ships the generic Dashboard as source. Its
+`pf-runtime-local --build --org .` command imports the organisation, supervises
+build-time auth/GraphQL, stages inputs with the same plugin artifact validator,
+and runs Next.js in ignored `.processfocus/dashboard/`. The launcher starts
+that project's build. See [consumer scripts and rebuild requirements](../../runtime/local/README.md).
+Release packaging does not build or publish `.next`; the separate generic and
+hosted CI build paths below remain available for contributor verification.
+
 ## Artifact validation and isolation
 
 Both local and hosted consumers read the frontend and browser manifests from

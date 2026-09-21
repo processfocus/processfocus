@@ -324,5 +324,128 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
           ).toBeNull()
         }),
     )
+
+    it.effect(
+      "removes one of two credentials atomically and rejects the last",
+      () =>
+        Effect.gen(function* () {
+          const userId = yield* seedPasskeyIdentity("remove")
+          const otherId = yield* seedPasskeyIdentity("remove-other")
+          const authDb = yield* AuthenticationDatabase
+
+          yield* authDb.createPasskeyCredential({
+            userId,
+            credentialId: "credential-keep",
+            publicKey: "public-key-keep",
+            counter: 0,
+          })
+          yield* authDb.createPasskeyCredential({
+            userId,
+            credentialId: "credential-drop",
+            publicKey: "public-key-drop",
+            counter: 0,
+            name: "Spare key",
+          })
+          yield* authDb.createPasskeyCredential({
+            userId: otherId,
+            credentialId: "credential-other-remove",
+            publicKey: "public-key-other",
+            counter: 0,
+          })
+
+          const listed = yield* authDb.listPasskeyCredentialsForUser(userId)
+          const spare = listed.find((item) => item.name === "Spare key")
+          expect(spare).toBeDefined()
+          expect(
+            yield* authDb.removePasskeyCredential({
+              userId,
+              id: spare?.id ?? "",
+            }),
+          ).toBe("removed")
+          expect(
+            yield* authDb.listPasskeyCredentialsForUser(userId),
+          ).toHaveLength(1)
+          expect(
+            Option.isNone(
+              yield* authDb.findPasskeyCredentialById("credential-drop"),
+            ),
+          ).toBe(true)
+          expect(
+            Option.isSome(
+              yield* authDb.findPasskeyCredentialById("credential-keep"),
+            ),
+          ).toBe(true)
+
+          const remaining = (yield* authDb.listPasskeyCredentialsForUser(
+            userId,
+          ))[0]
+          expect(
+            yield* authDb.removePasskeyCredential({
+              userId,
+              id: remaining?.id ?? "",
+            }),
+          ).toBe("last_credential")
+          expect(
+            Option.isSome(
+              yield* authDb.findPasskeyCredentialById("credential-keep"),
+            ),
+          ).toBe(true)
+          expect(
+            yield* authDb.removePasskeyCredential({
+              userId,
+              id:
+                (yield* authDb.listPasskeyCredentialsForUser(otherId))[0]?.id ??
+                "",
+            }),
+          ).toBe("not_found")
+          expect(
+            Option.isSome(
+              yield* authDb.findPasskeyCredentialById(
+                "credential-other-remove",
+              ),
+            ),
+          ).toBe(true)
+        }),
+    )
+
+    it.effect("leaves at least one credential when two removals race", () =>
+      Effect.gen(function* () {
+        const userId = yield* seedPasskeyIdentity("remove-race")
+        const authDb = yield* AuthenticationDatabase
+        yield* authDb.createPasskeyCredential({
+          userId,
+          credentialId: "race-one",
+          publicKey: "public-key-race-one",
+          counter: 0,
+        })
+        yield* authDb.createPasskeyCredential({
+          userId,
+          credentialId: "race-two",
+          publicKey: "public-key-race-two",
+          counter: 0,
+        })
+        const listed = yield* authDb.listPasskeyCredentialsForUser(userId)
+        expect(listed).toHaveLength(2)
+        const outcomes = yield* Effect.all(
+          [
+            authDb.removePasskeyCredential({
+              userId,
+              id: listed[0]?.id ?? "",
+            }),
+            authDb.removePasskeyCredential({
+              userId,
+              id: listed[1]?.id ?? "",
+            }),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect(new Set(outcomes)).toEqual(
+          new Set(["removed", "last_credential"]),
+        )
+        expect(
+          yield* authDb.listPasskeyCredentialsForUser(userId),
+        ).toHaveLength(1)
+      }),
+    )
   },
 )

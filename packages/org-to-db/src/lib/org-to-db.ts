@@ -12,6 +12,7 @@ import {
   type StepDocumentStoreKey,
   type WeeklyScheduleKey,
 } from "./db-operations"
+import { passkeyOriginOverride } from "./passkey-origin"
 import { hashSecret } from "./secret-hash"
 import {
   isTransientTursoServerError,
@@ -566,18 +567,9 @@ export const storeOrganisation = (
               unknown
             >
 
-            const issuerUrl = process.env["OAUTH_ISSUER_URL"]
-            if (issuerUrl) {
-              const url = new URL(issuerUrl)
-              passkeyConfig = {
-                ...passkeyConfig,
-                rpID: url.hostname,
-                origin: issuerUrl,
-              }
-            }
-
             passkeyConfig = {
               ...passkeyConfig,
+              ...passkeyOriginOverride(process.env),
               inviteOnly: authConfig.inviteOnly,
               delegatedAccess: authConfig.delegatedAccess,
             }

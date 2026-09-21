@@ -760,7 +760,7 @@ describe("passkey auth-server real round trip", () => {
             const started = yield* Effect.promise(() =>
               postJson(
                 context,
-                `${issuer}/passkeys`,
+                `${issuer}/oauth/passkeys`,
                 { name: "Spare key" },
                 { authorization: `Bearer ${token}` },
               ),
@@ -781,7 +781,7 @@ describe("passkey auth-server real round trip", () => {
             const enrolled = yield* Effect.promise(() =>
               postJson(
                 context,
-                `${issuer}/passkeys`,
+                `${issuer}/oauth/passkeys`,
                 {
                   challengeId: secondRegistration.challengeId,
                   response: secondRegistration.response,

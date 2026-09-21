@@ -32,7 +32,6 @@
     "@pf/business-calendar": "workspace:*",
     "@pf/form-schema": "workspace:*",
     "@pf/graphql-schema": "workspace:*",
-    "@pf/layer-sqlite-bun": "workspace:*",
     "@pf/openauth": "workspace:*",
     "@pf/org-to-db": "*",
     "@pf/process": "*",

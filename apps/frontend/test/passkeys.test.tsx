@@ -39,6 +39,7 @@ mock.module("@simplewebauthn/browser", () => ({
 
 const {
   listPasskeys,
+  removePasskey,
   renamePasskey,
   startPasskeyEnrollment,
   verifyPasskeyEnrollment,
@@ -46,6 +47,13 @@ const {
 const { PasskeysClient } = await import(
   "../app/(protected)/passkeys/passkeys-client"
 )
+
+const enrollmentOptions = {
+  challenge: "c",
+  rp: { id: "localhost", name: "Test" },
+  user: { id: "dXNlcg", name: "owner@example.com", displayName: "Owner" },
+  pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+}
 
 const unnamed: PasskeyCredential = {
   id: "pkc-1",
@@ -80,10 +88,10 @@ describe("passkey management server actions", () => {
     expect(await listPasskeys()).toEqual({ kind: "success", ...listBody })
     expect(request).toHaveBeenCalledTimes(1)
     const [url, init] = request.mock.calls[0] ?? []
-    expect(url).toBe("https://auth.example.test/passkeys")
+    expect(String(url)).toBe("https://auth.example.test/oauth/passkeys")
     expect(init?.headers).toEqual(
       expect.objectContaining({
-        Authorization: "Bearer server-session-token",
+        authorization: "Bearer server-session-token",
       }),
     )
     expect(init?.cache).toBe("no-store")
@@ -91,7 +99,7 @@ describe("passkey management server actions", () => {
 
   test("does not forward another account's identity", async () => {
     const request = mock(async (url: string | URL | Request) => {
-      expect(String(url)).toBe("https://auth.example.test/passkeys")
+      expect(String(url)).toBe("https://auth.example.test/oauth/passkeys")
       return Response.json(listBody)
     })
     globalThis.fetch = request
@@ -123,7 +131,7 @@ describe("passkey management server actions", () => {
     const request = mock(
       async (_url: string | URL | Request, init?: RequestInit) => {
         expect(init?.method).toBe("PATCH")
-        expect(JSON.parse(String(init?.body))).toEqual({
+        expect(JSON.parse(await new Response(init?.body).text())).toEqual({
           id: "pkc-1",
           name: "Laptop key",
         })
@@ -144,10 +152,12 @@ describe("passkey management server actions", () => {
     const request = mock(
       async (_url: string | URL | Request, init?: RequestInit) => {
         expect(init?.method).toBe("POST")
-        expect(JSON.parse(String(init?.body))).toEqual({ name: "Spare key" })
+        expect(JSON.parse(await new Response(init?.body).text())).toEqual({
+          name: "Spare key",
+        })
         return Response.json({
           challengeId: "challenge-1",
-          options: { challenge: "c" },
+          options: enrollmentOptions,
         })
       },
     )
@@ -155,7 +165,17 @@ describe("passkey management server actions", () => {
     expect(await startPasskeyEnrollment({ name: "Spare key" })).toEqual({
       kind: "options",
       challengeId: "challenge-1",
-      options: { challenge: "c" },
+      options: enrollmentOptions,
+    })
+  })
+
+  test("rejects malformed enrollment options at the server boundary", async () => {
+    globalThis.fetch = mock(async () =>
+      Response.json({ challengeId: "challenge", options: { challenge: "c" } }),
+    )
+    expect(await startPasskeyEnrollment({ name: "Spare" })).toEqual({
+      kind: "error",
+      message: "Unable to start Passkey registration.",
     })
   })
 
@@ -182,6 +202,36 @@ describe("passkey management server actions", () => {
       kind: "already_registered",
       message:
         "This Passkey is already registered. Try a different authenticator.",
+    })
+  })
+
+  test("removes through DELETE and returns the updated list", async () => {
+    const request = mock(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        expect(init?.method).toBe("DELETE")
+        expect(JSON.parse(await new Response(init?.body).text())).toEqual({
+          id: "pkc-1",
+        })
+        return Response.json({
+          ...listBody,
+          credentials: [named],
+        })
+      },
+    )
+    globalThis.fetch = request
+    const result = await removePasskey({ id: "pkc-1" })
+    expect(result.kind).toBe("success")
+    if (result.kind !== "success") return
+    expect(result.credentials).toEqual([named])
+  })
+
+  test("explains last-credential rejection without exposing backend errors", async () => {
+    globalThis.fetch = mock(async () =>
+      Response.json({ error: "last_credential" }, { status: 409 }),
+    )
+    expect(await removePasskey({ id: "pkc-1" })).toEqual({
+      kind: "error",
+      message: "Add a replacement Passkey before removing this one.",
     })
   })
 })
@@ -301,11 +351,13 @@ describe("passkey management page", () => {
     const request = mock(
       async (_url: string | URL | Request, init?: RequestInit) => {
         if (init?.method === "POST") {
-          const body = JSON.parse(String(init.body)) as { name?: string }
+          const body = JSON.parse(await new Response(init.body).text()) as {
+            name?: string
+          }
           if (body.name === "Hardware key") {
             return Response.json({
               challengeId: "challenge-1",
-              options: { challenge: "c" },
+              options: enrollmentOptions,
             })
           }
           return Response.json({
@@ -369,7 +421,7 @@ describe("passkey management page", () => {
         if (init?.method === "POST") {
           return Response.json({
             challengeId: "challenge-1",
-            options: { challenge: "c" },
+            options: enrollmentOptions,
           })
         }
         return Response.json(listBody)
@@ -425,6 +477,79 @@ describe("passkey management page", () => {
       "This Passkey is already registered. Try a different authenticator.",
     )
     expect(container.querySelectorAll("[data-passkey-id]")).toHaveLength(2)
+  })
+
+  test("confirms removal, explains remaining sessions, and updates the list", async () => {
+    const request = mock(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        expect(init?.method).toBe("DELETE")
+        return Response.json({
+          ...listBody,
+          credentials: [named],
+        })
+      },
+    )
+    globalThis.fetch = request
+
+    await act(async () => {
+      root.render(
+        <PasskeysClient
+          organisationName="Example Organisation"
+          account={listBody.account}
+          initialCredentials={[unnamed, named]}
+        />,
+      )
+    })
+
+    const remove = container.querySelector(
+      'button[aria-label="Remove Unnamed passkey"]',
+    ) as HTMLButtonElement
+    expect(remove).not.toBeNull()
+    await act(async () => {
+      remove.click()
+    })
+    expect(container.textContent).toContain(
+      "This Passkey will no longer be able to sign in. Existing sessions remain signed in.",
+    )
+    const confirm = container.querySelector(
+      '[data-testid="passkey-confirm-remove"]',
+    ) as HTMLButtonElement
+    expect(confirm).not.toBeNull()
+    await act(async () => {
+      confirm.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain("Passkey removed.")
+    expect(container.textContent).not.toContain("Unnamed passkey")
+    expect(container.textContent).toContain("Spare key")
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  test("rejects removing the final Passkey without calling the issuer", async () => {
+    const request = mock()
+    globalThis.fetch = request
+
+    await act(async () => {
+      root.render(
+        <PasskeysClient
+          organisationName="Example Organisation"
+          account={listBody.account}
+          initialCredentials={[named]}
+        />,
+      )
+    })
+
+    const remove = container.querySelector(
+      'button[aria-label="Remove Spare key"]',
+    ) as HTMLButtonElement
+    await act(async () => {
+      remove.click()
+    })
+    expect(container.textContent).toContain(
+      "Add a replacement Passkey before removing this one.",
+    )
+    expect(container.textContent).not.toContain("Existing sessions remain")
+    expect(request).not.toHaveBeenCalled()
   })
 
   test("profile Passkeys follows listing authorization only", () => {

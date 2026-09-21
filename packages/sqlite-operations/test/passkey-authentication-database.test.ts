@@ -395,6 +395,144 @@ describe("SQLite passkey authentication database", () => {
       }),
     ))
 
+  it("removes one of two credentials atomically and rejects the last", () =>
+    runTest(
+      Effect.gen(function* () {
+        const db = yield* TypedSqliteDrizzle
+        const authDb = yield* AuthenticationDatabase
+        const orgUnitId = yield* createRootOrgUnit()
+        const owner = yield* createProviderUser(orgUnitId)
+        const other = yield* createProviderUser(orgUnitId, {
+          email: "other-remove@example.com",
+          sub: "other-remove-handle",
+        })
+
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "credential-keep",
+          publicKey: "public-key-keep",
+          counter: 0,
+        })
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "credential-drop",
+          publicKey: "public-key-drop",
+          counter: 0,
+          name: "Spare key",
+        })
+        yield* authDb.createPasskeyCredential({
+          userId: other.id,
+          credentialId: "credential-other-remove",
+          publicKey: "public-key-other",
+          counter: 0,
+        })
+
+        const listed = yield* authDb.listPasskeyCredentialsForUser(owner.id)
+        const spare = listed.find((item) => item.name === "Spare key")
+        expect(spare).toBeDefined()
+        expect(
+          yield* authDb.removePasskeyCredential({
+            userId: owner.id,
+            id: spare?.id ?? "",
+          }),
+        ).toBe("removed")
+        expect(
+          yield* authDb.listPasskeyCredentialsForUser(owner.id),
+        ).toHaveLength(1)
+        expect(
+          Option.isNone(
+            yield* authDb.findPasskeyCredentialById("credential-drop"),
+          ),
+        ).toBe(true)
+        expect(
+          Option.isSome(
+            yield* authDb.findPasskeyCredentialById("credential-keep"),
+          ),
+        ).toBe(true)
+
+        const remaining = (yield* authDb.listPasskeyCredentialsForUser(
+          owner.id,
+        ))[0]
+        expect(
+          yield* authDb.removePasskeyCredential({
+            userId: owner.id,
+            id: remaining?.id ?? "",
+          }),
+        ).toBe("last_credential")
+        expect(
+          Option.isSome(
+            yield* authDb.findPasskeyCredentialById("credential-keep"),
+          ),
+        ).toBe(true)
+
+        const otherCredential = (yield* authDb.listPasskeyCredentialsForUser(
+          other.id,
+        ))[0]
+        expect(
+          yield* authDb.removePasskeyCredential({
+            userId: owner.id,
+            id: otherCredential?.id ?? "",
+          }),
+        ).toBe("not_found")
+        expect(
+          Option.isSome(
+            yield* authDb.findPasskeyCredentialById("credential-other-remove"),
+          ),
+        ).toBe(true)
+
+        const stored = yield* db
+          .select()
+          .from(schema.passkeyCredential)
+          .where(eq(schema.passkeyCredential.userId, owner.id))
+        expect(stored.filter((row) => row._deleted)).toHaveLength(1)
+      }),
+    ))
+
+  it("leaves at least one credential when two removals race", () =>
+    runTest(
+      Effect.gen(function* () {
+        const authDb = yield* AuthenticationDatabase
+        const orgUnitId = yield* createRootOrgUnit()
+        const owner = yield* createProviderUser(orgUnitId, {
+          email: "race-owner@example.com",
+          sub: "race-owner-handle",
+        })
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "race-one",
+          publicKey: "public-key-race-one",
+          counter: 0,
+        })
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "race-two",
+          publicKey: "public-key-race-two",
+          counter: 0,
+        })
+        const listed = yield* authDb.listPasskeyCredentialsForUser(owner.id)
+        expect(listed).toHaveLength(2)
+        const outcomes = yield* Effect.all(
+          [
+            authDb.removePasskeyCredential({
+              userId: owner.id,
+              id: listed[0]?.id ?? "",
+            }),
+            authDb.removePasskeyCredential({
+              userId: owner.id,
+              id: listed[1]?.id ?? "",
+            }),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect(new Set(outcomes)).toEqual(
+          new Set(["removed", "last_credential"]),
+        )
+        expect(
+          yield* authDb.listPasskeyCredentialsForUser(owner.id),
+        ).toHaveLength(1)
+      }),
+    ))
+
   it("rejects registration options for an email owned by an OAuth Provider User", () =>
     runTest(
       Effect.gen(function* () {

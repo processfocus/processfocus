@@ -1,13 +1,11 @@
 "use client"
 
-import {
-  type PublicKeyCredentialCreationOptionsJSON,
-  startRegistration,
-} from "@simplewebauthn/browser"
+import { startRegistration } from "@simplewebauthn/browser"
 import { useState, useTransition } from "react"
 import { Button } from "@pf/shadcn-components"
 import {
   listPasskeys,
+  removePasskey,
   renamePasskey,
   startPasskeyEnrollment,
   verifyPasskeyEnrollment,
@@ -19,6 +17,10 @@ const unnamedLabel = "Unnamed passkey"
 const alreadyRegisteredMessage =
   "This Passkey is already registered. Try a different authenticator."
 const cancelledMessage = "Registration was cancelled. You can try again."
+const lastCredentialMessage =
+  "Add a replacement Passkey before removing this one."
+const confirmationCopy =
+  "This Passkey will no longer be able to sign in. Existing sessions remain signed in."
 
 function displayName(name: string | null): string {
   const trimmed = name?.trim() ?? ""
@@ -75,6 +77,7 @@ export function PasskeysClient({
 }) {
   const [credentials, setCredentials] = useState(initialCredentials)
   const [message, setMessage] = useState("")
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
 
   const refresh = () => {
@@ -85,6 +88,7 @@ export function PasskeysClient({
         return
       }
       setCredentials(result.credentials)
+      setConfirmingId(null)
       setMessage("")
     })
   }
@@ -117,8 +121,7 @@ export function PasskeysClient({
               }
               try {
                 const attestation = await startRegistration({
-                  optionsJSON:
-                    started.options as PublicKeyCredentialCreationOptionsJSON,
+                  optionsJSON: started.options,
                 })
                 const result = await verifyPasskeyEnrollment({
                   challengeId: started.challengeId,
@@ -239,6 +242,76 @@ export function PasskeysClient({
                 Save name
               </Button>
             </form>
+            {confirmingId === credential.id ? (
+              <form
+                className="space-y-3 border-t pt-3"
+                aria-label={`Remove ${displayName(credential.name)}`}
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (credentials.length < 2) {
+                    setConfirmingId(null)
+                    setMessage(lastCredentialMessage)
+                    return
+                  }
+                  startTransition(async () => {
+                    const result = await removePasskey({ id: credential.id })
+                    if (result.kind !== "success") {
+                      setMessage(result.message)
+                      if (result.message === lastCredentialMessage) {
+                        setConfirmingId(null)
+                      }
+                      return
+                    }
+                    setCredentials(result.credentials)
+                    setConfirmingId(null)
+                    setMessage("Passkey removed.")
+                  })
+                }}
+              >
+                <p className="text-sm text-muted-foreground">
+                  {confirmationCopy}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="submit"
+                    variant="destructive"
+                    disabled={pending}
+                    data-testid="passkey-confirm-remove"
+                  >
+                    Confirm removal
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() => {
+                      setConfirmingId(null)
+                      setMessage("")
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                data-testid="passkey-remove"
+                aria-label={`Remove ${displayName(credential.name)}`}
+                onClick={() => {
+                  if (credentials.length < 2) {
+                    setMessage(lastCredentialMessage)
+                    return
+                  }
+                  setMessage("")
+                  setConfirmingId(credential.id)
+                }}
+              >
+                Remove
+              </Button>
+            )}
           </article>
         ))}
       </section>

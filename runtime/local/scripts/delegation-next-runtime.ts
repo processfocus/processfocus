@@ -120,7 +120,10 @@ writeFileSync(
 const frontendPort = Schema.decodeUnknownSync(
   Schema.NumberFromString.pipe(Schema.int(), Schema.between(1024, 65535)),
 )(process.env["DELEGATION_PROBE_PORT"] ?? "3398")
-const org = new Organisation({ name: "Isolated Delegation Verification" })
+const passkeyProbe = process.env["PASSKEY_MANAGEMENT_PROBE"] === "true"
+const org = new Organisation({
+  name: passkeyProbe ? "TBS New Zealand" : "Isolated Delegation Verification",
+})
 const tester = new Role(org, "Tester", { name: "Reviewer" })
 new Role(org, "Administrator", { name: "Administrator" })
 const processModel = new Process(org, "DelegatedReview", {
@@ -266,7 +269,7 @@ const frontendJwt = await runtime.runPromise(
       providerName: "passkey",
       providerConfig: {
         delegatedAccess: true,
-        rpName: "Probe",
+        rpName: passkeyProbe ? "TBS New Zealand" : "Probe",
         rpID: "localhost",
         origin: `http://localhost:${frontendPort}`,
       },
@@ -706,6 +709,28 @@ const worker = (async () => {
               createdBy: schema.processExecution.createdBy,
             })
             .from(schema.processExecution)
+          if (passkeyProbe) {
+            writeFileSync(
+              join(runtimeRoot, "passkey-audit.json"),
+              JSON.stringify({
+                users: yield* db.select().from(schema.user),
+                providerUsers: yield* db.select().from(schema.providerUser),
+                roles: yield* db.select().from(schema.providerUserRole),
+                invitations: yield* db.select().from(schema.invitation),
+                credentials: yield* db
+                  .select({
+                    id: schema.passkeyCredential.id,
+                    userId: schema.passkeyCredential.userId,
+                    credentialId: schema.passkeyCredential.passkeyCredentialId,
+                    name: schema.passkeyCredential.passkeyName,
+                    lastUsedAt: schema.passkeyCredential.passkeyLastUsedAt,
+                    deleted: schema.passkeyCredential._deleted,
+                  })
+                  .from(schema.passkeyCredential),
+              }),
+              { mode: 0o600 },
+            )
+          }
           writeFileSync(
             auditPath,
             JSON.stringify(

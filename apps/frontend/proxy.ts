@@ -102,6 +102,7 @@ export const proxy = async (request: NextRequest) => {
             }
           } else if (refreshToken) {
             // AT cookie expired but RT still valid — refresh and redirect
+            const authClient = getAuthClient()
             const refreshed = await authClient.refresh(refreshToken)
             if (!refreshed.err && refreshed.tokens) {
               const checked = await authClient.verify(
@@ -160,22 +161,20 @@ export const proxy = async (request: NextRequest) => {
   const accessToken = request.cookies.get(AT)?.value
   const refreshToken = request.cookies.get(RT)?.value
 
-  if (!accessToken && !refreshToken) {
-    console.log("[proxy] No tokens, redirecting to /login", { pathname })
-    return createLoginRedirect(request)
-  }
-
-  const authClient = getAuthClient()
-
   // Case 1: No access token but have refresh token
   // This happens when the access token cookie expired (Max-Age reached) but the
   // refresh token is still valid. The browser automatically removes expired cookies,
   // so we won't receive the access token even though the refresh token is still present.
   // We attempt to get new tokens using the refresh token.
-  if (!accessToken && refreshToken) {
+  if (!accessToken) {
+    if (!refreshToken) {
+      console.log("[proxy] No tokens, redirecting to /login", { pathname })
+      return createLoginRedirect(request)
+    }
     console.log("[proxy] Access token expired, attempting refresh", {
       pathname,
     })
+    const authClient = getAuthClient()
     const refreshed = await authClient.refresh(refreshToken)
 
     if (refreshed.err || !refreshed.tokens) {
@@ -226,6 +225,7 @@ export const proxy = async (request: NextRequest) => {
   }
 
   // Case 2: Have access token - verify it (will auto-refresh if JWT expired)
+  const authClient = getAuthClient()
   const verified = await authClient.verify(
     subjects,
     accessToken,
