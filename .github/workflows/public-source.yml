@@ -5,6 +5,7 @@ on:
   push:
     branches: [trunk]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -23,7 +24,7 @@ jobs:
     # This dedicated workflow is exported; the private monorepo has its own CI.
     if: github.repository != 'processfocus/monorepo'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,6 +62,21 @@ jobs:
           bun run lint
           bun run lint:project-boundaries
           bun test scripts/check-project-boundaries.test.ts
+          bun scripts/check-public-source.ts
+          bun test scripts/public-release.test.ts
+          bunx tsgo --ignoreConfig --noEmit --strict --skipLibCheck --moduleResolution bundler --module preserve --target es2024 --types bun scripts/public-release.ts scripts/public-release.test.ts scripts/check-public-source.ts tools/public-release/policy.ts
 
-      - name: Typecheck and test public projects
-        run: bun scripts/nx-quiet.ts run-many -t typecheck,test --parallel=2
+      - name: Verify public projects from the fresh checkout
+        run: bun scripts/nx-quiet.ts run-many -t lint,typecheck,test,build,knip --parallel=2
+
+      - name: Plan the fixed prerelease and inspect packed consumers
+        run: bun scripts/public-release.ts dist/public-release
+
+      - name: Retain release review evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: public-release-${{ github.sha }}
+          path: dist/public-release/
+          if-no-files-found: error
+          retention-days: 30

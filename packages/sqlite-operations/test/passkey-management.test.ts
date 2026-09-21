@@ -1,5 +1,5 @@
-import { eq } from "drizzle-orm"
-import { DateTime, Effect, Either, Layer } from "effect"
+import { and, eq } from "drizzle-orm"
+import { DateTime, Effect, Either, Layer, Option, Schema } from "effect"
 import { SignJWT } from "jose"
 import {
   AuthenticationDatabase,
@@ -134,7 +134,7 @@ const setup = (
       ownerUserId?: string,
     ) =>
       server.request(
-        `https://auth.example.com/passkeys${ownerUserId === undefined ? "" : `?ownerUserId=${encodeURIComponent(ownerUserId)}`}`,
+        `https://auth.example.com/oauth/passkeys${ownerUserId === undefined ? "" : `?ownerUserId=${encodeURIComponent(ownerUserId)}`}`,
         {
           method,
           headers: {
@@ -158,6 +158,158 @@ const setup = (
   })
 
 describe("Passkey management HTTP + SQLite", () => {
+  it("rejects every management operation for hostile principals and cross-owner Administrators", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { request, sign, properties, authDb, db, owner } = yield* setup()
+        const before = yield* db.select().from(schema.passkeyCredential)
+        const id = before[0]!.id
+        const started = yield* Effect.promise(() =>
+          request("POST", undefined, { name: "Owner spare" }),
+        )
+        const options = yield* Effect.promise(() => started.json()).pipe(
+          Effect.flatMap(
+            Schema.decodeUnknown(Schema.Struct({ challengeId: Schema.String })),
+          ),
+        )
+        const completion = {
+          challengeId: options.challengeId,
+          response: {
+            id: "forged",
+            rawId: "forged",
+            type: "public-key",
+            clientExtensionResults: {},
+            response: {
+              clientDataJSON: "Zm9yZ2Vk",
+              attestationObject: "Zm9yZ2Vk",
+            },
+          },
+        }
+        const operations = [
+          { method: "GET", body: undefined },
+          { method: "PATCH", body: { id, name: "Changed" } },
+          { method: "POST", body: { name: "Spare" } },
+          { method: "POST", body: completion },
+          { method: "DELETE", body: { id } },
+        ]
+        const { humanSession: _human, ...untrusted } = properties
+        const machine = yield* Effect.promise(() =>
+          sign(
+            { userId: owner.id, clientId: "machine", roles: [] },
+            { type: "user" },
+          ),
+        )
+        const impersonation = yield* Effect.promise(() => sign(untrusted))
+        const delegated = yield* Effect.promise(() =>
+          sign({
+            ...untrusted,
+            delegation: {
+              id: "delegate",
+              generationId: "generation",
+              name: "agent",
+              expiresAt: Date.UTC(2030, 0, 1),
+            },
+          }),
+        )
+        for (const principal of [
+          { token: "", status: 401 },
+          { token: machine, status: 401 },
+          { token: impersonation, status: 403 },
+          { token: delegated, status: 403 },
+        ]) {
+          for (const operation of operations) {
+            const response = yield* Effect.promise(() =>
+              request(operation.method, principal.token, operation.body),
+            )
+            expect(response.status).toBe(principal.status)
+          }
+        }
+        const other = yield* authDb.createProviderUser({
+          email: "other@example.com",
+          name: "Other",
+          firstName: "Other",
+          lastName: "",
+          picture: "",
+          locale: "en",
+          provider: "passkey",
+          sub: "other",
+          orgUnitId: properties.orgUnitId,
+        })
+        yield* authDb.createPasskeyCredential({
+          userId: other.id,
+          credentialId: "other-key",
+          publicKey: "other-key",
+          counter: 0,
+        })
+        for (const roles of [["/Tester"], ["/Administrator"]]) {
+          const fresh = yield* Effect.promise(async () =>
+            (await request("POST", undefined, { name: "Owner spare" })).json(),
+          ).pipe(
+            Effect.flatMap(
+              Schema.decodeUnknown(
+                Schema.Struct({ challengeId: Schema.String }),
+              ),
+            ),
+          )
+          const token = yield* Effect.promise(() =>
+            sign({
+              ...properties,
+              userId: other.id,
+              email: other.email,
+              roles,
+            }),
+          )
+          // All operations reject attempts to supply another account's scope.
+          for (const operation of operations) {
+            expect(
+              (yield* Effect.promise(() =>
+                request(operation.method, token, operation.body, owner.id),
+              )).status,
+            ).toBe(400)
+          }
+          expect(
+            (yield* Effect.promise(() =>
+              request("PATCH", token, { id, name: "Stolen" }),
+            )).status,
+          ).toBe(403)
+          expect(
+            (yield* Effect.promise(() => request("DELETE", token, { id })))
+              .status,
+          ).toBe(403)
+          expect(
+            (yield* Effect.promise(() =>
+              request("POST", token, {
+                ...completion,
+                challengeId: fresh.challengeId,
+              }),
+            )).status,
+          ).toBe(400)
+          // List/start have no target account: without supplied scope they only expose the caller.
+          const own = listed(
+            yield* Effect.promise(async () =>
+              (await request("GET", token)).json(),
+            ),
+          )
+          expect(own.account.userId).toBe(other.id)
+          expect(
+            own.credentials.map((credential: { id: string }) => credential.id),
+          ).not.toContain(id)
+          expect(
+            (yield* Effect.promise(() =>
+              request("POST", token, { name: "Spare", userId: owner.id }),
+            )).status,
+          ).toBe(400)
+        }
+        expect(
+          yield* db
+            .select()
+            .from(schema.passkeyCredential)
+            .where(eq(schema.passkeyCredential.userId, owner.id)),
+        ).toEqual(before)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
   it("lists unnamed credentials and persists a rename for a human session", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -356,6 +508,10 @@ describe("Passkey management HTTP + SQLite", () => {
         const { request, sign, properties, owner, authDb, db } = yield* setup()
         const unauthenticated = yield* Effect.promise(() => request("GET", ""))
         expect(unauthenticated.status).toBe(401)
+        expect(
+          (yield* Effect.promise(() => request("DELETE", "", { id: "pkc-1" })))
+            .status,
+        ).toBe(401)
 
         const machine = yield* Effect.promise(() =>
           sign(
@@ -365,6 +521,11 @@ describe("Passkey management HTTP + SQLite", () => {
         )
         expect(
           (yield* Effect.promise(() => request("GET", machine))).status,
+        ).toBe(401)
+        expect(
+          (yield* Effect.promise(() =>
+            request("DELETE", machine, { id: "pkc-1" }),
+          )).status,
         ).toBe(401)
 
         const { humanSession: _ignored, ...withoutMarker } = properties
@@ -382,6 +543,11 @@ describe("Passkey management HTTP + SQLite", () => {
         expect(
           (yield* Effect.promise(() => request("GET", delegated))).status,
         ).toBe(403)
+        expect(
+          (yield* Effect.promise(() =>
+            request("DELETE", delegated, { id: "pkc-1" }),
+          )).status,
+        ).toBe(403)
 
         const impersonated = yield* Effect.promise(() =>
           sign({
@@ -395,11 +561,21 @@ describe("Passkey management HTTP + SQLite", () => {
         expect(
           (yield* Effect.promise(() => request("GET", impersonated))).status,
         ).toBe(403)
+        expect(
+          (yield* Effect.promise(() =>
+            request("DELETE", impersonated, { id: "pkc-1" }),
+          )).status,
+        ).toBe(403)
 
         const suppliedOwner = yield* Effect.promise(() =>
           request("GET", undefined, undefined, "someone-else"),
         )
         expect(suppliedOwner.status).toBe(400)
+        expect(
+          (yield* Effect.promise(() =>
+            request("DELETE", undefined, { id: "pkc-1" }, "someone-else"),
+          )).status,
+        ).toBe(400)
 
         const other = yield* authDb.createProviderUser({
           email: "other@example.com",
@@ -434,6 +610,231 @@ describe("Passkey management HTTP + SQLite", () => {
           .from(schema.passkeyCredential)
           .where(eq(schema.passkeyCredential.userId, other.id))
         expect(unchanged[0]?.passkeyName).toBeNull()
+
+        const crossRemove = yield* Effect.promise(() =>
+          request("DELETE", undefined, { id: otherRow[0]?.id }),
+        )
+        expect(crossRemove.status).toBe(403)
+        expect(
+          (yield* db
+            .select()
+            .from(schema.passkeyCredential)
+            .where(eq(schema.passkeyCredential.userId, other.id)))[0]?._deleted,
+        ).toBe(false)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  it("removes one of two credentials, keeps the other usable, and rejects the last", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { request, authDb, owner, db, invitationId } = yield* setup()
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "credential-two",
+          publicKey: "public-key-two",
+          counter: 0,
+          name: "Spare key",
+        })
+        const listedResponse = listed(
+          yield* Effect.promise(() => request("GET").then((r) => r.json())),
+        )
+        const spare = listedResponse.credentials.find(
+          (item) => item.name === "Spare key",
+        )
+        expect(spare).toBeDefined()
+        const removed = yield* Effect.promise(() =>
+          request("DELETE", undefined, { id: spare?.id }),
+        )
+        expect(removed.status).toBe(200)
+        const after = listed(yield* Effect.promise(() => removed.json()))
+        expect(after.credentials).toHaveLength(1)
+        expect(after.credentials[0]?.name).toBeNull()
+
+        expect(
+          Option.isNone(
+            yield* authDb.findPasskeyCredentialById("credential-two"),
+          ),
+        ).toBe(true)
+        const remaining = Option.getOrThrow(
+          yield* authDb.findPasskeyCredentialById("credential-one"),
+        )
+        const signedIn = yield* authenticateProviderUserByPasskey({
+          type: "authentication",
+          email: owner.email,
+          userHandle: getPasskeyUserHandle(remaining),
+          credentialId: "credential-one",
+          previousCounter: 0,
+          newCounter: 0,
+        })
+        expect(signedIn.id).toBe(owner.id)
+        const failed = yield* authenticateProviderUserByPasskey({
+          type: "authentication",
+          email: owner.email,
+          userHandle: getPasskeyUserHandle(remaining),
+          credentialId: "credential-two",
+          previousCounter: 0,
+          newCounter: 0,
+        }).pipe(Effect.either)
+        expect(failed._tag).toBe("Left")
+
+        const last = yield* Effect.promise(() =>
+          request("DELETE", undefined, { id: after.credentials[0]?.id }),
+        )
+        expect(last.status).toBe(409)
+        expect(yield* Effect.promise(() => last.json())).toEqual({
+          error: "last_credential",
+        })
+        expect(
+          Option.isSome(
+            yield* authDb.findPasskeyCredentialById("credential-one"),
+          ),
+        ).toBe(true)
+
+        const user = yield* db
+          .select()
+          .from(schema.user)
+          .where(eq(schema.user.id, owner.id))
+        expect(user[0]?.provider).toBe("passkey")
+        const roles = yield* db
+          .select()
+          .from(schema.providerUserRole)
+          .innerJoin(
+            schema.providerUser,
+            eq(schema.providerUserRole.providerUserId, schema.providerUser.id),
+          )
+          .where(eq(schema.providerUser.userId, owner.id))
+        expect(roles).toHaveLength(1)
+        const invitation = yield* db
+          .select()
+          .from(schema.invitation)
+          .where(eq(schema.invitation.id, invitationId))
+        expect(invitation[0]?.invitationStatus).toBe(
+          InvitationLifecycleStatus.Accepted,
+        )
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  it("rejects removing the last credential on an OAuth-backed account", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { request, authDb, owner } = yield* setup({ provider: "google" })
+        const listedResponse = listed(
+          yield* Effect.promise(() => request("GET").then((r) => r.json())),
+        )
+        const last = yield* Effect.promise(() =>
+          request("DELETE", undefined, {
+            id: listedResponse.credentials[0]?.id,
+          }),
+        )
+        expect(last.status).toBe(409)
+        expect(
+          Option.isSome(
+            yield* authDb.findPasskeyCredentialById("credential-one"),
+          ),
+        ).toBe(true)
+        const remaining = Option.getOrThrow(
+          yield* authDb.findPasskeyCredentialById("credential-one"),
+        )
+        const signedIn = yield* authenticateProviderUserByPasskey({
+          type: "authentication",
+          email: owner.email,
+          userHandle: getPasskeyUserHandle(remaining),
+          credentialId: "credential-one",
+          previousCounter: 0,
+          newCounter: 0,
+        })
+        expect(signedIn.id).toBe(owner.id)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  it("leaves at least one credential when two removals race", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { request, authDb, owner, db } = yield* setup()
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "credential-two",
+          publicKey: "public-key-two",
+          counter: 0,
+          name: "Spare key",
+        })
+        const listedResponse = listed(
+          yield* Effect.promise(() => request("GET").then((r) => r.json())),
+        )
+        expect(listedResponse.credentials).toHaveLength(2)
+        const [first, second] = listedResponse.credentials
+        const [a, b] = yield* Effect.all(
+          [
+            Effect.promise(() =>
+              request("DELETE", undefined, { id: first?.id }),
+            ),
+            Effect.promise(() =>
+              request("DELETE", undefined, { id: second?.id }),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        )
+        const statuses = [a.status, b.status].sort(
+          (left, right) => left - right,
+        )
+        expect(statuses).toEqual([200, 409])
+        const remaining = yield* authDb.listPasskeyCredentialsForUser(owner.id)
+        expect(remaining).toHaveLength(1)
+        const stored = yield* db
+          .select()
+          .from(schema.passkeyCredential)
+          .where(
+            and(
+              eq(schema.passkeyCredential.userId, owner.id),
+              eq(schema.passkeyCredential._deleted, false),
+            ),
+          )
+        expect(stored).toHaveLength(1)
+        expect(
+          Option.isSome(
+            yield* authDb.findPasskeyCredentialById(
+              stored[0]?.passkeyCredentialId ?? "",
+            ),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.provide(layer)),
+    )
+  })
+
+  it("does not consult authentication age when removing", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { request, sign, properties, owner, authDb } = yield* setup()
+        yield* authDb.createPasskeyCredential({
+          userId: owner.id,
+          credentialId: "credential-two",
+          publicKey: "public-key-two",
+          counter: 0,
+          name: "Spare key",
+        })
+        const listedResponse = listed(
+          yield* Effect.promise(() => request("GET").then((r) => r.json())),
+        )
+        const spare = listedResponse.credentials.find(
+          (item) => item.name === "Spare key",
+        )
+        const stale = yield* Effect.promise(() =>
+          sign({
+            ...properties,
+            humanAuthentication: {
+              providerUserId: owner.id,
+              authenticatedAt: Date.parse("2020-01-01T00:00:00.000Z"),
+              method: "passkey",
+            },
+          }),
+        )
+        const removed = yield* Effect.promise(() =>
+          request("DELETE", stale, { id: spare?.id }),
+        )
+        expect(removed.status).toBe(200)
       }).pipe(Effect.provide(layer)),
     )
   })

@@ -120,6 +120,15 @@ export interface PasskeyManagementCredential {
 }
 
 /**
+ * Outcome of an atomic last-credential-preserving Passkey removal.
+ * `last_credential` means the row is still the account's only active Passkey.
+ */
+export type RemovePasskeyCredentialResult =
+  | "removed"
+  | "not_found"
+  | "last_credential"
+
+/**
  * Result of exchanging a live Registration Link for a Registration Session.
  * Raw session bearer is returned once; only its hash is persisted.
  */
@@ -205,6 +214,10 @@ export class AuthenticationDatabase extends Context.Tag(
       readonly id: string
       readonly name: string
     }) => Effect.Effect<boolean, DatabaseWriteError>
+    readonly removePasskeyCredential: (input: {
+      readonly userId: string
+      readonly id: string
+    }) => Effect.Effect<RemovePasskeyCredentialResult, DatabaseWriteError>
     readonly advancePasskeyCredentialCounter: (
       credentialId: string,
       expectedCounter: number,

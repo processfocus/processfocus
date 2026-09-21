@@ -689,7 +689,10 @@ describe("project boundary policy", () => {
         receipt.files
           .map((file) => file.path)
           .filter((path) => path.startsWith(".github/workflows/")),
-      ).toEqual([".github/workflows/public-source.yml"])
+      ).toEqual([
+        ".github/workflows/public-release.yml",
+        ".github/workflows/public-source.yml",
+      ])
       expect(PRIVATE_SOURCE_PROJECT_ROOTS).toContain("examples/school")
       expect(PRIVATE_SOURCE_PROJECT_ROOTS).toContain("examples/tbsnz")
       expect(receipt.files.map((file) => file.path)).not.toContain(
@@ -702,6 +705,21 @@ describe("project boundary policy", () => {
       expect(manifest.workspaces).toContain("examples/demo")
       expect(manifest.workspaces).not.toContain("examples/school")
       expect(manifest.scripts.prepare).toBeUndefined()
+      const sqliteOperations = await Bun.file(
+        join(destination, "packages/sqlite-operations/package.json"),
+      ).json()
+      expect(
+        sqliteOperations.devDependencies["@pf/layer-sqlite-bun"],
+      ).toBeUndefined()
+      const sqliteReferences = await Bun.file(
+        join(destination, "packages/sqlite-operations/tsconfig.lib.json"),
+      ).json()
+      expect(sqliteReferences.references).not.toContainEqual({
+        path: "../layer-sqlite-bun/tsconfig.lib.json",
+      })
+      expect(sqliteReferences.references).toContainEqual({
+        path: "../service-drizzle-sqlite/tsconfig.lib.json",
+      })
       const lock = await Bun.file(join(destination, "bun.lock")).json()
       expect(Object.keys(lock.workspaces).sort()).toEqual(
         ["", ...manifest.workspaces].sort(),

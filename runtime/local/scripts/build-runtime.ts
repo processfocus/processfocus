@@ -12,6 +12,7 @@ const projectRoot = resolve(import.meta.dir, "..")
 const workspaceRoot = resolve(projectRoot, "../..")
 const dist = resolve(projectRoot, "out-tsc/runtime")
 const external = [
+  "@tailwindcss/oxide",
   "@effect/opentelemetry",
   "@cedar-policy/cedar-wasm",
   "@opentelemetry/exporter-metrics-otlp-http",

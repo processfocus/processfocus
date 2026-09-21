@@ -230,7 +230,7 @@
       },
       "outputs": ["{projectRoot}/dist"],
       "cache": false,
-      "dependsOn": ["build", "dashboard-build"]
+      "dependsOn": ["build", "@pf/frontend:graphql-codegen"]
     }
   }
 }

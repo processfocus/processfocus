@@ -71,8 +71,16 @@ const collectStream = async (
   return full
 }
 
-const nxArgs = ["bun", "nx", "--outputStyle=stream", ...args]
-if (!inheritIo && !args.includes("--batch")) nxArgs.push("--batch")
+// Release version/changelog commands reject task-runner output/batch options.
+const isRelease = args[0] === "release"
+const nxArgs = [
+  "bun",
+  "nx",
+  ...(isRelease ? [] : ["--outputStyle=stream"]),
+  ...args,
+]
+if (!isRelease && !inheritIo && !args.includes("--batch"))
+  nxArgs.push("--batch")
 
 const proc = Bun.spawn(nxArgs, {
   env: {

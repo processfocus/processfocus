@@ -25,6 +25,7 @@ import {
   type ProviderUserRecord,
   REGISTRATION_SESSION_TTL_MINUTES,
   type RegistrationSessionExchangeResult,
+  type RemovePasskeyCredentialResult,
   mapQueryError,
   mapWriteError,
 } from "@pf/auth-api"
@@ -499,6 +500,58 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
           .returning({ id: schema.passkeyCredential.id })
           .pipe(Effect.map((rows) => rows.length === 1))
           .pipe(mapWriteError("Failed to rename passkey credential")),
+
+      removePasskeyCredential: (input: {
+        readonly userId: string
+        readonly id: string
+      }) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now
+          const removed = yield* db
+            .update(schema.passkeyCredential)
+            .set({
+              _deleted: true,
+              updatedAt: now,
+              updatedBy: "SYSTEM",
+            })
+            .where(
+              and(
+                eq(schema.passkeyCredential.id, input.id),
+                eq(schema.passkeyCredential.userId, input.userId),
+                eq(schema.passkeyCredential._deleted, false),
+                // Lock every active credential for this account, then delete
+                // only when another active credential remains. FOR UPDATE is
+                // valid in this derived FROM-style subquery and serializes
+                // concurrent last-two removals.
+                sql`(
+                  select count(*) from (
+                    select id from pf_passkey_credential as remaining
+                    where remaining.user_id = ${input.userId}
+                      and remaining._deleted = false
+                    for update
+                  ) locked
+                ) > 1`,
+              ),
+            )
+            .returning({ id: schema.passkeyCredential.id })
+            .pipe(mapWriteError("Failed to remove passkey credential"))
+          if (removed.length === 1) return "removed" as const
+          const remaining = yield* db
+            .select({ id: schema.passkeyCredential.id })
+            .from(schema.passkeyCredential)
+            .where(
+              and(
+                eq(schema.passkeyCredential.id, input.id),
+                eq(schema.passkeyCredential.userId, input.userId),
+                eq(schema.passkeyCredential._deleted, false),
+              ),
+            )
+            .limit(1)
+            .pipe(mapWriteError("Failed to remove passkey credential"))
+          const result: RemovePasskeyCredentialResult =
+            remaining.length === 1 ? "last_credential" : "not_found"
+          return result
+        }),
 
       advancePasskeyCredentialCounter: (
         credentialId: string,

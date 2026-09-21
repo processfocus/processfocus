@@ -5,25 +5,76 @@ authentication server, GraphQL API, job worker, and organisation import watcher.
 
 ## Run from an external organisation repository
 
-Install the fixed release group and start it without Nx or a Process Focus
-source checkout:
+Use Bun 1.4.2 and Node.js 26 (verified on Linux with Node 26.3.1).
+Install the fixed release group in your organisation project:
 
 ```bash
 bun add @processfocus/cli@0.1.0-next.0 \
   @processfocus/runtime-local@0.1.0-next.0 \
   processfocus@0.1.0-next.0
-bunx pf-runtime-local --org .
 ```
 
-The launcher imports the organisation, starts every service, refreshes the
-Dashboard JWT for the selected auth port, and prints the Dashboard URL. The
-default ports are Dashboard `3000`, GraphQL `4000`, and auth `4020`; use
-`--dashboard-port`, `--graphql-port`, and `--auth-port` to override them.
+Define standard project scripts:
 
-`PF_RUNTIME_ROOT` selects the directory for local runtime state and port files.
-It defaults to the current directory. Set `INTERNAL_API_SECRET` to a stable
-secret when signed file routes must survive restarts; otherwise the launcher
-creates a process-local value.
+```json
+{
+  "scripts": {
+    "build": "pf-runtime-local --build --org .",
+    "start": "pf-runtime-local --org ."
+  }
+}
+```
+
+Run `bun install`, `bun run build`, then `bun run start`. No Nx, Git checkout,
+shell preparation script, or manually started support server is required.
+`--build` imports/builds the organisation, starts auth and GraphQL with readiness
+checks, refreshes the Dashboard JWT, validates and stages browser plugins,
+manifests, docs and branding, materializes Tailwind source candidates inside the
+ignored build tree, and runs Next.js. It stops its support processes
+on success, failure, or interruption. Organisation credentials required to
+initialize those services must be available during the build, just as at start.
+
+The package contains compiled backend JavaScript and a self-contained generic
+Dashboard **source** payload, including the internal source modules needed by
+Next.js and declared npm dependencies. No new public Dashboard package or
+frontend customization API is introduced. Installed package contents are never
+used as a writable build directory.
+
+Dashboard preparation, Next.js output, generated keys, and caches live under
+`.processfocus/dashboard/` in the project. `.processfocus/.gitignore` ignores
+all of that local state. Keep this directory private; do not publish it to npm.
+The existing organisation importer also writes `dist/`, `db/`, and `files/`;
+ignore those organisation/runtime outputs in your project's `.gitignore`.
+
+Start imports the organisation, runs the worker and import watcher, refreshes
+its JWT, and serves the project's production Dashboard build. Normal restarts
+reuse `.next` and its keys. Missing/failed builds, a changed runtime source
+payload, changed package manifest/lockfile, organisation path, or endpoint ports
+require `bun run build` again. Startup also checks fingerprints of organisation
+browser-plugin artifacts, manifests, docs, branding, and the login provider list
+and passkey registration mode; changes require rebuilding. Import watch
+updates database/model state, but does not recompile the Dashboard. Schema
+changes retain the existing restart requirement.
+
+Default ports are Dashboard `3000`, GraphQL `4000`, and auth `4020`. Override
+with `--dashboard-port`, `--graphql-port`, and `--auth-port` in **both** scripts.
+Explicit backend ports are strict; omitted backend ports retain automatic
+fallback and port files. If fallback changes the ports, rebuild with the new
+ports before starting. `--no-dashboard` starts backend services alone.
+
+`PF_RUNTIME_ROOT` selects the directory for local state (default: current
+working directory). The backend defaults to development mode; `NODE_ENV=production`
+retains production authentication restrictions. Next.js always builds and runs
+in production mode. For local testing only, the existing `PF_BYPASS_AUTH=email`
+uses the dummy identity provider in development; production rejects it.
+Set `INTERNAL_API_SECRET` to a stable secret when signed file routes must survive
+restarts; otherwise the launcher creates a process-local value.
+
+Each fresh build generates its own Next.js Server Actions and preview keys.
+Deploying multiple instances requires the same private build artifact (or a
+coordinated `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` and build/deployment identity).
+Do not independently rebuild replicas and assume their keys match. This local
+workflow does not change the private hosted OpenNext distribution.
 
 ## Monorepo development
 
@@ -33,7 +84,7 @@ servers or compiling the Dashboard. Its cache includes source dependencies and
 transitive generated prerequisite outputs. It does not produce an installable
 local runtime.
 
-For the complete local distribution, including a fresh generic Dashboard build:
+To assemble the compiled backend and generic Dashboard source distribution:
 
 ```bash
 bun scripts/nx-quiet.ts run @processfocus/runtime-local:distribution-build
@@ -45,12 +96,21 @@ To assemble and inspect the publishable tarball:
 bun scripts/nx-quiet.ts run @processfocus/runtime-local:pack-check
 ```
 
-`pack-check` and `nx-release-publish` require `distribution-build`. CI's private
+`pack-check` and `nx-release-publish` require `distribution-build`, which stages
+source and static GraphQL codegen without compiling Next.js. Tarball checks reject
+compiled Dashboard output and generated Next.js secrets. CI's private
 consumer verification also reaches it through `pack-check`. The separate CI
 Dashboard job continues to build generic and hosted Next/OpenNext distributions
 with `bash scripts/ci-frontend-build.sh`; use that command for explicit verification
 of both distributions. The commit hook still runs affected static checks and
 tests with their real prerequisites, without dependency-skipping flags.
+
+After packing the SDK, runtime, CLI, hosting contract, PostHog plugin, and local
+runtime, run `bun scripts/verify-local-dashboard.ts` from the source repository.
+It installs tarballs into a retained temporary organisation project without Nx,
+builds twice, checks plugin composition, starts/restarts, compares key
+fingerprints, and verifies dependency-update/rebuild and package immutability.
+Its retained fixture supports browser passkey and process/Todo acceptance.
 
 Task-graph regression coverage and measurements are recorded in
 [static validation investigation](../../docs/investigations/3113-static-validation.md).

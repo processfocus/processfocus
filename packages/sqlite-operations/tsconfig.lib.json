@@ -40,9 +40,6 @@
       "path": "../openauth/tsconfig.lib.json"
     },
     {
-      "path": "../layer-sqlite-bun/tsconfig.lib.json"
-    },
-    {
       "path": "../graphql-schema/tsconfig.lib.json"
     },
     {

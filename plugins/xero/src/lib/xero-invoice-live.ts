@@ -972,6 +972,14 @@ const CreatedDraftWire = Schema.Struct({
       LineAmount: Schema.Number,
       TaxAmount: Schema.Number,
       TaxType: Schema.String,
+      Tracking: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            Name: Schema.String,
+            Option: Schema.String,
+          }),
+        ),
+      ),
     }),
   ),
 })
@@ -1168,6 +1176,12 @@ export const XeroDraftInvoiceLive = Layer.effect(
                       LineAmount: line.lineAmountCents / 100,
                       TaxAmount: line.taxCents / 100,
                       TaxType: line.taxType,
+                      ...(line.tracking && {
+                        Tracking: line.tracking.map((tracking) => ({
+                          Name: tracking.category,
+                          Option: tracking.option,
+                        })),
+                      }),
                     })),
                   },
                 ],
@@ -1201,7 +1215,17 @@ export const XeroDraftInvoiceLive = Layer.effect(
                 line.UnitAmount !== expected.unitAmountCents / 100 ||
                 line.LineAmount !== expected.lineAmountCents / 100 ||
                 line.TaxAmount !== expected.taxCents / 100 ||
-                line.TaxType !== expected.taxType
+                line.TaxType !== expected.taxType ||
+                (line.Tracking ?? []).length !==
+                  (expected.tracking ?? []).length ||
+                (expected.tracking ?? []).some(
+                  (tracking) =>
+                    !line.Tracking?.some(
+                      (actual) =>
+                        actual.Name === tracking.category &&
+                        actual.Option === tracking.option,
+                    ),
+                )
               )
             })
           )

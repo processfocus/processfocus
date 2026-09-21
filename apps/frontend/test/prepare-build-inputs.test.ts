@@ -116,21 +116,54 @@ const writeBrowserPluginArtifact = (
 ): { readonly bundleName: string; readonly sha256: string } =>
   writeBrowserPluginArtifactTo(join(orgDir, "dist"), overrides)
 
-const runPrepare = (
+const runPrepare = async (
   workspaceRoot: string,
   pfOrg: string | undefined,
-): ReturnType<typeof Bun.spawnSync> => {
+  { timeoutMs = 20_000 }: { readonly timeoutMs?: number } = {},
+): Promise<{
+  readonly exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+}> => {
   const env = { ...process.env, NX_WORKSPACE_ROOT: workspaceRoot }
   if (pfOrg === undefined) delete env["PF_ORG"]
   else env["PF_ORG"] = pfOrg
 
-  return Bun.spawnSync({
+  const child = Bun.spawn({
     cmd: ["bash", SCRIPT_PATH],
     cwd: REPO_ROOT,
     env,
     stdout: "pipe",
     stderr: "pipe",
+    detached: true,
   })
+  let timedOut = false
+  const killGroup = () => {
+    try {
+      process.kill(-child.pid, "SIGKILL")
+    } catch (error) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "ESRCH")
+      )
+        throw error
+    }
+  }
+  const deadline = setTimeout(() => {
+    timedOut = true
+    killGroup()
+  }, timeoutMs)
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    if (timedOut) throw new Error(`Frontend preparation timed out: ${stderr}`)
+    return { exitCode, stdout, stderr }
+  } finally {
+    clearTimeout(deadline)
+    killGroup()
+  }
 }
 
 afterEach(() => {
@@ -139,9 +172,25 @@ afterEach(() => {
 })
 
 describe("frontend prepare build inputs", () => {
+  test("bounds a stalled generator and cleans up its Bash process group", async () => {
+    const workspaceRoot = makeWorkspace()
+    const org = join(workspaceRoot, "orgs/stalled")
+    mkdirSync(join(org, "dist"), { recursive: true })
+    writeFileSync(join(org, "dist/frontend-manifest.json"), manifest())
+    const generator = join(
+      workspaceRoot,
+      "apps/frontend/scripts/generate-organisation-plugin-composition.ts",
+    )
+    rmSync(generator)
+    writeFileSync(generator, "await Bun.sleep(60_000)\n")
+    await expect(
+      runPrepare(workspaceRoot, org, { timeoutMs: 200 }),
+    ).rejects.toThrow("timed out")
+  })
+
   test.each(["orgs/project-b", "orgs/project-a/prod"])(
     "does not reuse plugin inputs when switching to %s",
-    (otherOrg) => {
+    async (otherOrg) => {
       const workspaceRoot = makeWorkspace()
       const firstOrg = join(workspaceRoot, "orgs/project-a/dev")
       const secondOrg = join(workspaceRoot, otherOrg)
@@ -155,7 +204,7 @@ describe("frontend prepare build inputs", () => {
       })
       writeFileSync(join(firstOrg, "dist/frontend-manifest.json"), selected)
       const { bundleName } = writeBrowserPluginArtifact(firstOrg)
-      expect(runPrepare(workspaceRoot, firstOrg).exitCode).toBe(0)
+      expect((await runPrepare(workspaceRoot, firstOrg)).exitCode).toBe(0)
       const staged = join(
         workspaceRoot,
         "apps/frontend/lib/generated/browser-plugins",
@@ -164,7 +213,7 @@ describe("frontend prepare build inputs", () => {
       expect(existsSync(staged)).toBe(true)
 
       writeFileSync(join(secondOrg, "dist/frontend-manifest.json"), selected)
-      const missing = runPrepare(workspaceRoot, secondOrg)
+      const missing = await runPrepare(workspaceRoot, secondOrg)
       expect(missing.exitCode).toBe(1)
       expect(existsSync(staged)).toBe(false)
       expect(
@@ -177,7 +226,7 @@ describe("frontend prepare build inputs", () => {
       ).toBe(false)
 
       writeFileSync(join(secondOrg, "dist/frontend-manifest.json"), manifest())
-      expect(runPrepare(workspaceRoot, secondOrg).exitCode).toBe(0)
+      expect((await runPrepare(workspaceRoot, secondOrg)).exitCode).toBe(0)
       expect(
         readFileSync(
           join(
@@ -192,7 +241,7 @@ describe("frontend prepare build inputs", () => {
 
   test.each(["frontend-manifest.json", "browser-plugins.json"])(
     "rejects another project's %s through a symlink",
-    (filename) => {
+    async (filename) => {
       const workspaceRoot = makeWorkspace()
       const org = join(workspaceRoot, "orgs/project-a")
       const other = join(workspaceRoot, "orgs/project-b")
@@ -211,7 +260,7 @@ describe("frontend prepare build inputs", () => {
       }
       rmSync(join(org, "dist", filename))
       symlinkSync(join(other, "dist", filename), join(org, "dist", filename))
-      const result = runPrepare(workspaceRoot, org)
+      const result = await runPrepare(workspaceRoot, org)
       expect(result.exitCode).toBe(1)
       expect(result.stderr.toString()).toContain(
         "manifest escapes the selected organisation artifact root",
@@ -226,14 +275,14 @@ describe("frontend prepare build inputs", () => {
     writeFileSync(join(orgDir, "dist/frontend-manifest.json"), manifest())
     writeFileSync(join(orgDir, "dist/_pf/app-icons/favicon.png"), "current")
 
-    const first = runPrepare(workspaceRoot, "orgs/test-org")
+    const first = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(first.exitCode).toBe(0)
     const outputPath = join(
       workspaceRoot,
       "apps/frontend/lib/generated/organisation-plugin-loaders.tsx",
     )
     const firstOutput = readFileSync(outputPath, "utf8")
-    const second = runPrepare(workspaceRoot, "orgs/test-org")
+    const second = await runPrepare(workspaceRoot, "orgs/test-org")
 
     expect(second.exitCode).toBe(0)
     expect(readFileSync(outputPath, "utf8")).toBe(firstOutput)
@@ -255,7 +304,7 @@ describe("frontend prepare build inputs", () => {
     ).toBe("current")
   })
 
-  test("stages validated organisation browser bundles and emits literal imports", () => {
+  test("stages validated organisation browser bundles and emits literal imports", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     mkdirSync(join(orgDir, "dist"), { recursive: true })
@@ -274,7 +323,7 @@ describe("frontend prepare build inputs", () => {
     )
     const { bundleName } = writeBrowserPluginArtifact(orgDir)
 
-    const result = runPrepare(workspaceRoot, "orgs/test-org")
+    const result = await runPrepare(workspaceRoot, "orgs/test-org")
     const loaders = readFileSync(
       join(
         workspaceRoot,
@@ -316,7 +365,7 @@ describe("frontend prepare build inputs", () => {
     })
   })
 
-  test("requires an artifact contract entry for PostHog selections", () => {
+  test("requires an artifact contract entry for PostHog selections", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     mkdirSync(join(orgDir, "dist"), { recursive: true })
@@ -333,7 +382,7 @@ describe("frontend prepare build inputs", () => {
       }),
     )
 
-    const missingManifest = runPrepare(workspaceRoot, "orgs/test-org")
+    const missingManifest = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(missingManifest.exitCode).toBe(1)
     expect(missingManifest.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" requires an organisation artifact entry',
@@ -347,7 +396,7 @@ describe("frontend prepare build inputs", () => {
         plugins: [],
       })}\n`,
     )
-    const missingEntry = runPrepare(workspaceRoot, "orgs/test-org")
+    const missingEntry = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(missingEntry.exitCode).toBe(1)
     expect(missingEntry.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" requires an organisation artifact entry',
@@ -363,35 +412,38 @@ describe("frontend prepare build inputs", () => {
       module: "@pf/cloud-org/register-environment-usage-costs-client",
       type: "cloud-org.environment-usage-costs",
     },
-  ])("requires an artifact contract entry for $type", ({ module, type }) => {
-    const workspaceRoot = makeWorkspace()
-    const orgDir = join(workspaceRoot, "orgs/test-org")
-    mkdirSync(join(orgDir, "dist"), { recursive: true })
-    writeFileSync(
-      join(orgDir, "dist/frontend-manifest.json"),
-      manifest({
-        analytics: [],
-        formComponents: [{ module, type }],
-      }),
-    )
-    writeFileSync(
-      join(orgDir, "dist/browser-plugins.json"),
-      `${JSON.stringify({
-        format: "processfocus/browser-plugins",
-        version: 1,
-        plugins: [],
-      })}\n`,
-    )
+  ])(
+    "requires an artifact contract entry for $type",
+    async ({ module, type }) => {
+      const workspaceRoot = makeWorkspace()
+      const orgDir = join(workspaceRoot, "orgs/test-org")
+      mkdirSync(join(orgDir, "dist"), { recursive: true })
+      writeFileSync(
+        join(orgDir, "dist/frontend-manifest.json"),
+        manifest({
+          analytics: [],
+          formComponents: [{ module, type }],
+        }),
+      )
+      writeFileSync(
+        join(orgDir, "dist/browser-plugins.json"),
+        `${JSON.stringify({
+          format: "processfocus/browser-plugins",
+          version: 1,
+          plugins: [],
+        })}\n`,
+      )
 
-    const result = runPrepare(workspaceRoot, "orgs/test-org")
+      const result = await runPrepare(workspaceRoot, "orgs/test-org")
 
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr.toString()).toContain(
-      `browser plugin "${type}" requires an organisation artifact entry`,
-    )
-  })
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain(
+        `browser plugin "${type}" requires an organisation artifact entry`,
+      )
+    },
+  )
 
-  test("stages distinct artifact paths without basename collisions", () => {
+  test("stages distinct artifact paths without basename collisions", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     const artifactRoot = join(orgDir, "dist")
@@ -441,7 +493,7 @@ describe("frontend prepare build inputs", () => {
       })}\n`,
     )
 
-    const result = runPrepare(workspaceRoot, "orgs/test-org")
+    const result = await runPrepare(workspaceRoot, "orgs/test-org")
     const stagedDirectory = join(
       workspaceRoot,
       "apps/frontend/lib/generated/browser-plugins",
@@ -465,7 +517,7 @@ describe("frontend prepare build inputs", () => {
     expect(loaders).toContain(`./browser-plugins/${secondSha256}.js`)
   })
 
-  test("rejects invalid organisation browser artifact files with plugin-specific errors", () => {
+  test("rejects invalid organisation browser artifact files with plugin-specific errors", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     mkdirSync(join(orgDir, "dist"), { recursive: true })
@@ -483,28 +535,28 @@ describe("frontend prepare build inputs", () => {
     )
 
     writeBrowserPluginArtifact(orgDir, { path: "browser-plugins/missing.js" })
-    const missing = runPrepare(workspaceRoot, "orgs/test-org")
+    const missing = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(missing.exitCode).toBe(1)
     expect(missing.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" file is missing',
     )
 
     writeBrowserPluginArtifact(orgDir, { sha256: "b".repeat(64) })
-    const integrity = runPrepare(workspaceRoot, "orgs/test-org")
+    const integrity = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(integrity.exitCode).toBe(1)
     expect(integrity.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" integrity mismatch',
     )
 
     writeBrowserPluginArtifact(orgDir, { hostInterfaceVersion: 2 })
-    const incompatible = runPrepare(workspaceRoot, "orgs/test-org")
+    const incompatible = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(incompatible.exitCode).toBe(1)
     expect(incompatible.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" requires host interface version 2, but the Dashboard provides 1',
     )
 
     writeBrowserPluginArtifact(orgDir, { path: "../posthog.js" })
-    const escaping = runPrepare(workspaceRoot, "orgs/test-org")
+    const escaping = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(escaping.exitCode).toBe(1)
     expect(escaping.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" path must stay within the artifact root',
@@ -521,7 +573,7 @@ describe("frontend prepare build inputs", () => {
       externalBundlePath,
       join(orgDir, "dist/browser-plugins", bundleName),
     )
-    const symbolicLinkEscape = runPrepare(workspaceRoot, "orgs/test-org")
+    const symbolicLinkEscape = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(symbolicLinkEscape.exitCode).toBe(1)
     expect(symbolicLinkEscape.stderr.toString()).toContain(
       'browser plugin "analytics.posthog" path escapes the artifact root through a symbolic link',
@@ -537,14 +589,14 @@ describe("frontend prepare build inputs", () => {
       artifactManifestPath,
       `${JSON.stringify(duplicateManifest)}\n`,
     )
-    const duplicate = runPrepare(workspaceRoot, "orgs/test-org")
+    const duplicate = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(duplicate.exitCode).toBe(1)
     expect(duplicate.stderr.toString()).toContain(
       'duplicate identity "analytics.posthog"',
     )
   })
 
-  test("rejects missing or modified browser preparation artifacts", () => {
+  test("rejects missing or modified browser preparation artifacts", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     const artifactRoot = join(orgDir, "dist")
@@ -572,7 +624,7 @@ describe("frontend prepare build inputs", () => {
       addGoogleDriveBrowserPluginArtifactTo(artifactRoot)
     const stylesheetPath = join(artifactRoot, "browser-plugins", stylesheetName)
     rmSync(stylesheetPath)
-    const missing = runPrepare(workspaceRoot, "orgs/test-org")
+    const missing = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(missing.exitCode).toBe(1)
     expect(missing.stderr.toString()).toContain(
       'browser plugin "google-drive" preparation file is missing',
@@ -584,14 +636,14 @@ describe("frontend prepare build inputs", () => {
       join(artifactRoot, "browser-plugins", regenerated.stylesheetName),
       "modified",
     )
-    const modified = runPrepare(workspaceRoot, "orgs/test-org")
+    const modified = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(modified.exitCode).toBe(1)
     expect(modified.stderr.toString()).toContain(
       'browser plugin "google-drive" preparation integrity mismatch',
     )
   })
 
-  test("preserves rule-bearing and rule-free embed definitions", () => {
+  test("preserves rule-bearing and rule-free embed definitions", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     const sourcePath = join(orgDir, "dist/frontend-manifest.json")
@@ -641,7 +693,7 @@ describe("frontend prepare build inputs", () => {
     mkdirSync(join(orgDir, "dist"), { recursive: true })
     writeFileSync(sourcePath, `${JSON.stringify(sourceManifest)}\n`)
 
-    const result = runPrepare(workspaceRoot, "orgs/test-org")
+    const result = await runPrepare(workspaceRoot, "orgs/test-org")
     const staged: unknown = JSON.parse(
       readFileSync(
         join(
@@ -661,7 +713,7 @@ describe("frontend prepare build inputs", () => {
     ).toEqual([[structuredRule], []])
   })
 
-  test("rejects an unknown plugin instead of silently omitting it", () => {
+  test("rejects an unknown plugin instead of silently omitting it", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     mkdirSync(join(orgDir, "dist"), { recursive: true })
@@ -672,14 +724,14 @@ describe("frontend prepare build inputs", () => {
         formComponents: [{ module: "@private/new-plugin", type: "new-plugin" }],
       }),
     )
-    const result = runPrepare(workspaceRoot, "orgs/test-org")
+    const result = await runPrepare(workspaceRoot, "orgs/test-org")
     expect(result.exitCode).toBe(1)
     expect(result.stderr.toString()).toContain(
       'browser plugin "new-plugin" requires an organisation artifact entry',
     )
   })
 
-  test("cleans generated composition when PF_ORG is unset", () => {
+  test("cleans generated composition when PF_ORG is unset", async () => {
     const workspaceRoot = makeWorkspace()
     const generated = join(workspaceRoot, "apps/frontend/lib/generated")
     for (const file of [
@@ -691,7 +743,7 @@ describe("frontend prepare build inputs", () => {
       writeFileSync(join(generated, file), "stale")
     }
 
-    const result = runPrepare(workspaceRoot, undefined)
+    const result = await runPrepare(workspaceRoot, undefined)
 
     expect(result.exitCode).toBe(0)
     expect(existsSync(join(generated, "frontend-manifest.json"))).toBe(false)
@@ -700,11 +752,11 @@ describe("frontend prepare build inputs", () => {
     ).toBe(false)
   })
 
-  test("fails with a rebuild hint when the dist manifest is missing", () => {
+  test("fails with a rebuild hint when the dist manifest is missing", async () => {
     const workspaceRoot = makeWorkspace()
     mkdirSync(join(workspaceRoot, "orgs/test-org"), { recursive: true })
 
-    const result = runPrepare(workspaceRoot, "orgs/test-org")
+    const result = await runPrepare(workspaceRoot, "orgs/test-org")
 
     expect(result.exitCode).toBe(1)
     expect(result.stdout.toString()).toContain(

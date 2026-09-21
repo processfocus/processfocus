@@ -5,6 +5,8 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @source "../components/**/*.{ts,tsx}";
+/* Include UI helpers when building from the ignored consumer source tree. */
+@source "../lib/**/*.{ts,tsx}";
 @source "../app/(protected)/**/*.{ts,tsx}";
 @source "../app/app-shell.tsx";
 @source "../../../packages/shadcn-components/src/**/*.{ts,tsx}";

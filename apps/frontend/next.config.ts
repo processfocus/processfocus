@@ -20,7 +20,9 @@ const reactCompilerPanicThreshold =
 const configuredBuildId = process.env["PF_NEXT_BUILD_ID"]?.trim() || undefined
 
 const workspaceRoot =
-  process.env["NX_WORKSPACE_ROOT"] ?? join(process.cwd(), "../..")
+  process.env["PF_DASHBOARD_SOURCE_ROOT"] ??
+  process.env["NX_WORKSPACE_ROOT"] ??
+  join(process.cwd(), "../..")
 const localOrganisationPluginModule = join(
   workspaceRoot,
   "apps/frontend/lib/organisation-plugin-loaders.ts",
@@ -84,6 +86,9 @@ const nextConfig: NextConfig = {
     turbopackFileSystemCacheForDev: true,
   },
   turbopack: {
+    ...(process.env["PF_DASHBOARD_PROJECT_BUILD"] === "1"
+      ? { root: process.env["PF_RUNTIME_ROOT"] }
+      : {}),
     resolveAlias: {
       // Cedar's CommonJS nodejs entry reads the wasm file from __dirname.
       // In Turbopack cold compiles that gets externalized under a hashed
@@ -130,7 +135,9 @@ const nextConfig: NextConfig = {
 
     return config
   },
-  output: "standalone",
+  ...(process.env["PF_DASHBOARD_PROJECT_BUILD"] === "1"
+    ? {}
+    : { output: "standalone" as const }),
   headers: async () => [
     {
       source: "/:path*",
@@ -195,7 +202,11 @@ const nextConfig: NextConfig = {
   // this should be the path to the root of your repo, in this case
   // it's just two levels down. needed for open-next to detect that
   // it's a monorepo
-  outputFileTracingRoot: join(import.meta.dirname ?? ".", "../../"),
+  outputFileTracingRoot:
+    process.env["PF_DASHBOARD_PROJECT_BUILD"] === "1"
+      ? (process.env["PF_RUNTIME_ROOT"] ??
+        join(import.meta.dirname ?? ".", "../../"))
+      : join(import.meta.dirname ?? ".", "../../"),
   outputFileTracingExcludes: {
     "*": [
       "./**/*.js.map",

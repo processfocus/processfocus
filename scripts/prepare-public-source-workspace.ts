@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import ts from "typescript"
 import { PUBLIC_SOURCE_PROJECT_ROOTS } from "../tools/project-boundaries/policy"
+import { releaseConfiguration } from "../tools/public-release/policy"
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -104,6 +105,7 @@ export const preparePublicSourceWorkspace = (
   ).map((root) => ({ path: `./${root}` }))
   json("tsconfig.json", rootTsconfig)
   const nx = read("nx.json")
+  nx["release"] = releaseConfiguration
   if (Array.isArray(nx["plugins"]))
     nx["plugins"] = nx["plugins"].filter(
       (plugin) =>
@@ -144,6 +146,22 @@ export const preparePublicSourceWorkspace = (
     delete websitePackage["dependencies"]["constructs"]
   }
   json("apps/www/package.json", websitePackage)
+  // Only the excluded private delegation-management test uses this adapter.
+  const sqliteOperations = read("packages/sqlite-operations/package.json")
+  if (object(sqliteOperations["devDependencies"]))
+    delete sqliteOperations["devDependencies"]["@pf/layer-sqlite-bun"]
+  json("packages/sqlite-operations/package.json", sqliteOperations)
+  const sqliteTsconfigPath = "packages/sqlite-operations/tsconfig.lib.json"
+  const sqliteTsconfig = read(sqliteTsconfigPath)
+  if (Array.isArray(sqliteTsconfig["references"]))
+    sqliteTsconfig["references"] = sqliteTsconfig["references"].filter(
+      (reference) =>
+        !(
+          object(reference) &&
+          reference["path"] === "../layer-sqlite-bun/tsconfig.lib.json"
+        ),
+    )
+  json(sqliteTsconfigPath, sqliteTsconfig)
   const runtime = read("runtime/local/project.json")
   if (
     object(runtime["targets"]) &&

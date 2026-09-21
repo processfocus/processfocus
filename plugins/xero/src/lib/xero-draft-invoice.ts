@@ -10,6 +10,19 @@ import {
 
 const cents = Schema.Number.pipe(Schema.filter(Number.isSafeInteger))
 const nonBlank = Schema.Trim.pipe(Schema.minLength(1))
+const Tracking = Schema.Array(
+  Schema.Struct({
+    category: nonBlank,
+    option: nonBlank,
+  }),
+).pipe(
+  Schema.minItems(1),
+  Schema.filter(
+    (tracking) =>
+      new Set(tracking.map((entry) => entry.category.toLowerCase())).size ===
+      tracking.length,
+  ),
+)
 
 export const DraftSalesInvoice = Schema.Struct({
   contactId: XeroContactId,
@@ -31,6 +44,9 @@ export const DraftSalesInvoice = Schema.Struct({
       lineAmountCents: cents,
       taxCents: cents,
       taxType: nonBlank,
+      // Xero resolves these category and option names to its tenant-owned IDs.
+      // Keeping names in the authoring contract avoids leaking a tenant's IDs.
+      tracking: Schema.optional(Tracking),
     }),
   ).pipe(Schema.minItems(1)),
   totalCents: cents.pipe(Schema.nonNegative()),

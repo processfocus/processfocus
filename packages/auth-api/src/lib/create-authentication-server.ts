@@ -1335,7 +1335,7 @@ export const createAuthenticationServer = (
         )
           return yield* delegationExchange
         if (pathname === "/delegations") return yield* delegationApp
-        if (pathname === "/passkeys") return yield* passkeyManagementApp
+        if (pathname === "/oauth/passkeys") return yield* passkeyManagementApp
         return yield* oauthApp
       })
       const runtime = yield* Effect.runtime<never>()

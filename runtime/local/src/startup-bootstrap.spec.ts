@@ -62,7 +62,7 @@ describe("local runtime startup bootstrap", () => {
     }
   })
 
-  it("builds a fresh generic Dashboard before packaging the runtime", () => {
+  it("packages Dashboard source without compiling Next.js", () => {
     const build = projectJson.targets["build"]
     const distributionBuild = projectJson.targets["distribution-build"]
     const dashboardBuild = projectJson.targets["dashboard-build"]
@@ -70,7 +70,10 @@ describe("local runtime startup bootstrap", () => {
     expect(build?.cache).toBe(true)
     expect(build?.dependsOn).not.toContain("dashboard-build")
     expect(distributionBuild?.dependsOn).toContain("build")
-    expect(distributionBuild?.dependsOn).toContain("dashboard-build")
+    expect(distributionBuild?.dependsOn).not.toContain("dashboard-build")
+    expect(distributionBuild?.dependsOn).toContain(
+      "@pf/frontend:graphql-codegen",
+    )
     expect(projectJson.targets["pack-check"]?.dependsOn).toContain(
       "distribution-build",
     )

@@ -35,9 +35,13 @@ class PasskeyManagementRequestError extends Data.TaggedError(
 }> {}
 
 const PasskeyName = Schema.Trim.pipe(Schema.minLength(1), Schema.maxLength(128))
+const PasskeyId = Schema.String.pipe(Schema.minLength(1))
 const RenamePasskey = Schema.Struct({
-  id: Schema.String.pipe(Schema.minLength(1)),
+  id: PasskeyId,
   name: PasskeyName,
+})
+const RemovePasskey = Schema.Struct({
+  id: PasskeyId,
 })
 const StartPasskeyEnrollment = Schema.Struct({
   name: PasskeyName,
@@ -138,7 +142,8 @@ export const makePasskeyManagementHandler: Effect.Effect<
     if (
       request.method !== "GET" &&
       request.method !== "PATCH" &&
-      request.method !== "POST"
+      request.method !== "POST" &&
+      request.method !== "DELETE"
     ) {
       return json({ error: "method_not_allowed" }, 405)
     }
@@ -233,6 +238,35 @@ export const makePasskeyManagementHandler: Effect.Effect<
     )
 
     if (request.method === "GET") return json(payload)
+
+    if (request.method === "DELETE") {
+      const body = yield* request.json.pipe(
+        Effect.flatMap(
+          Schema.decodeUnknown(RemovePasskey, { onExcessProperty: "error" }),
+        ),
+        Effect.mapError(() => invalidRequest()),
+      )
+      const removed = yield* authDb.removePasskeyCredential({
+        userId: session.userId,
+        id: body.id,
+      })
+      if (removed === "last_credential") {
+        return json({ error: "last_credential" }, 409)
+      }
+      if (removed === "not_found") {
+        return json({ error: "management_denied" }, 403)
+      }
+      const updated = yield* authDb.listPasskeyCredentialsForUser(
+        session.userId,
+      )
+      return json(
+        listed(
+          organisationName,
+          { userId: account.value.id, email: account.value.email },
+          updated,
+        ),
+      )
+    }
 
     if (request.method === "PATCH") {
       const body = yield* request.json.pipe(

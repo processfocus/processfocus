@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { PRIVATE_SOURCE_PROJECT_ROOTS } from "../tools/project-boundaries/policy"
+import { assertDashboardPackageFile } from "./dashboard-package-policy"
 
 const packageName = process.argv[2]
 if (!packageName) throw new Error("Package name is required")
@@ -255,6 +256,15 @@ if (unexpected.length > 0) {
   throw new Error(`Unexpected packed files: ${unexpected.join(", ")}`)
 }
 
+for (const file of files) {
+  assertDashboardPackageFile(
+    file,
+    /\.(?:json|[cm]?[jt]sx?)$/.test(file)
+      ? await readFile(join(packageDirectory, file), "utf8")
+      : undefined,
+  )
+}
+
 const forbidden = [
   resolve("."),
   '"sourcesContent":',
@@ -266,7 +276,7 @@ const forbidden = [
 const unpublishedImport = /(?:from|import)\s*\(?\s*["']@pf\//
 const workspaceDependency = /"[^"]+"\s*:\s*"workspace:/
 for (const file of files.filter((path) =>
-  /\.(?:json|map|m?js|d\.[cm]?ts|md)$/.test(path),
+  /\.(?:json|map|[cm]?[jt]sx?|md|css)$/.test(path),
 )) {
   const content = await readFile(join(packageDirectory, file), "utf8")
   if (workspaceDependency.test(content)) {
