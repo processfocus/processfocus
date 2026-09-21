@@ -7,6 +7,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { parse } from "yaml"
 import {
   RELEASE_PACKAGES,
   RELEASE_VERSION,
@@ -119,7 +120,7 @@ test("credential guard catches credential formats without flagging its own patte
   ).toBe(false)
 })
 
-test("PRs cannot reach OIDC and the protected rehearsal cannot publish", () => {
+test("PRs cannot reach OIDC and publication requires an explicit protected opt-in", () => {
   const ci = readFileSync(".github/workflows/public-source.yml", "utf8")
   const release = readFileSync(".github/workflows/public-release.yml", "utf8")
   expect(ci).not.toMatch(
@@ -129,7 +130,52 @@ test("PRs cannot reach OIDC and the protected rehearsal cannot publish", () => {
   expect(release).toContain("github.ref == 'refs/heads/trunk'")
   expect(release).not.toContain("actions/checkout")
   expect(release).not.toContain("bun install")
+  expect(release).not.toMatch(/secrets\.|NODE_AUTH_TOKEN|NPM_TOKEN/)
+  expect(parse(release)).toMatchObject({
+    on: {
+      workflow_dispatch: {
+        inputs: {
+          mode: {
+            type: "choice",
+            default: "verify-oidc",
+            options: ["verify-oidc", "rehearse", "publish"],
+          },
+        },
+      },
+    },
+    jobs: {
+      "verify-trust": {
+        if: "github.repository == 'processfocus/processfocus' && github.ref == 'refs/heads/trunk' && inputs.mode == 'verify-oidc'",
+        environment: "npm-next",
+        permissions: { contents: "read", "id-token": "write" },
+        env: {
+          NPM_PACKAGES: expect.any(String),
+        },
+      },
+      prepare: {
+        if: "github.repository == 'processfocus/processfocus' && github.ref == 'refs/heads/trunk' && inputs.mode != 'verify-oidc'",
+      },
+      "reviewed-artifacts": {
+        needs: "prepare",
+        environment: "npm-next",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            name: "Reject already published versions before any publication",
+            if: "inputs.mode == 'publish'",
+          }),
+          expect.objectContaining({
+            name: "Publish reviewed tarballs through npm trusted publishing",
+            if: "inputs.mode == 'publish'",
+          }),
+        ]),
+      },
+    },
+  })
+  const packageList = release.match(/NPM_PACKAGES: >-\n((?: {8}.+\n)+)/)?.[1]
+  expect(packageList).toBeDefined()
+  expect(JSON.parse(packageList ?? "null")).toEqual(RELEASE_PACKAGES)
   expect(release.match(/npm publish[^\n]+/g)).toEqual([
     'npm publish "$package" --dry-run --ignore-scripts --access public --tag next',
+    'npm publish "$package" --ignore-scripts --access public --tag next --provenance',
   ])
 })
