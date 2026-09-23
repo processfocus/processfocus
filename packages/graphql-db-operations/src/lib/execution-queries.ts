@@ -16,6 +16,7 @@ export interface TodoStepRow {
   stepPath: string
   completed: boolean // from _deleted flag
   failureReason: string | null
+  notStartedReason?: string | null
   correctionRequiredAt: number | null
   correctionFailureReason: string | null
   /** Durable user id that completed the todo (to_do.completed_by_user). */
@@ -61,6 +62,7 @@ export interface ExecutionRow {
   deleted: boolean
   // Start step info (from process_state)
   startStepId: string
+  systemStartCompleted?: boolean
   startStepName: string
   startStepPath: string
   startedByRoleId: string | null // from process_state.started_by_role
@@ -82,6 +84,7 @@ export interface ExecutionRow {
   startedByPicture: string | null
   startedByOrgUnit: string | null
   abandonedReason: string | null
+  notStartedReason?: string | null
   // SLA info from process
   processSlaValue: number | null
   processSlaUnit: string | null

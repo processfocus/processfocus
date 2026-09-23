@@ -132,8 +132,10 @@ export const ExecutionStepSchema = ES.Struct({
     "Potential",
     "Failed",
     "Correction Required",
+    "Not started",
   ),
   failureReason: ES.optional(ES.String),
+  notStartedReason: ES.optional(ES.String),
   role: ES.optional(RoleSchema),
   submittedViaEmbeddedForm: ES.optional(ES.Boolean),
   externalSubmitterEmail: ES.optional(ES.String),
@@ -155,9 +157,16 @@ export const ExecutionSchema = ES.Struct({
   processPath: ES.String,
   canAbandonExecution: ES.optional(ES.Boolean),
   canRestartExecution: ES.optional(ES.Boolean),
-  status: ES.Literal("Running", "Completed", "Failed", "Abandoned"), // (derived from finished_at / failed todos / abandoned_at)
+  status: ES.Literal(
+    "Running",
+    "Completed",
+    "Failed",
+    "Abandoned",
+    "Not started",
+  ),
   failureReason: ES.optional(ES.String),
   abandonedReason: ES.optional(ES.String),
+  notStartedReason: ES.optional(ES.String),
   startedAt: ES.DateTimeUtc, // ISO date-time string
   finishedAt: ES.optional(ES.DateTimeUtc), // ISO date-time string
   durationMs: ES.optional(ES.Number),

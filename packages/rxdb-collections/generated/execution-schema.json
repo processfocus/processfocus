@@ -40,7 +40,8 @@
         "Running",
         "Completed",
         "Failed",
-        "Abandoned"
+        "Abandoned",
+        "Not started"
       ]
     },
     "failureReason": {
@@ -50,6 +51,12 @@
       ]
     },
     "abandonedReason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "notStartedReason": {
       "type": [
         "string",
         "null"
@@ -97,10 +104,17 @@
               "Waiting",
               "Potential",
               "Failed",
-              "Correction Required"
+              "Correction Required",
+              "Not started"
             ]
           },
           "failureReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notStartedReason": {
             "type": [
               "string",
               "null"

@@ -266,6 +266,14 @@ BEGIN
   UPDATE "pf_completed_job" SET updated_at = julianday('now') WHERE id = NEW.id;
 END;
 --> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS pf_not_started_job_updated_at_trigger
+AFTER UPDATE ON "pf_not_started_job"
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+  UPDATE "pf_not_started_job" SET updated_at = julianday('now') WHERE id = NEW.id;
+END;
+--> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_weekly_schedule_updated_at_trigger
 AFTER UPDATE ON "pf_weekly_schedule"
 FOR EACH ROW

@@ -8,6 +8,7 @@ const isExecutionListStatus = (status: string): status is ExecutionListStatus =>
   status === "Running" ||
   status === "Completed" ||
   status === "Failed" ||
+  status === "Not started" ||
   status === "Abandoned"
 
 export const parseExecutionListStatus = (status: string | null | undefined) =>
@@ -19,7 +20,7 @@ export const parseExecutionListStatus = (status: string | null | undefined) =>
           {
             field: "status",
             message:
-              'Status must be "Running", "Completed", "Failed", or "Abandoned".',
+              'Status must be "Running", "Completed", "Failed", "Not started", or "Abandoned".',
           },
         ],
       })

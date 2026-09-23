@@ -35,6 +35,7 @@ base business duration (I8). # Duration in business hours, stored as millisecond
 base sla target at (D). # When todo is due (calculated from step SLA)
 base sla warning at (D). # Warning threshold time for todo
 base failure reason (T).
+base not started reason (T). # Work was refused before its job attempt started.
 base correction required at (D). # Public Completion is waiting for provider-user correction.
 base correction failure reason (T). # Delivery failure details that triggered correction.
 base correction invitation attempt id (A41). # Public completion invitation attempt that triggered correction.
@@ -142,7 +143,7 @@ extend process state with is draft = nil process execution per process state.
 # A process which actually has started.
 # business_duration stores the elapsed business hours (in ms) when execution completes.
 base without waiting (B).
-type process execution "pex" = without waiting, process state, optional finished at, optional business duration, optional abandoned at, optional abandoned reason.
+type process execution "pex" = without waiting, process state, optional finished at, optional business duration, optional abandoned at, optional abandoned reason, optional not started reason.
 default process execution its without waiting = false.
 
 # Where we currently are stopped or working in the flow.
@@ -160,7 +161,7 @@ default process execution its without waiting = false.
 base item data (J).
 base for each barrier (B).
 base barrier scheduled flow id (A41). # References scheduled_flow.id for forEach barrier pattern (no FK to allow barrier deletion)
-type to do "todo" = process execution, flow, optional completed by_user, optional completed by_external participant, optional assigned to_provider user, optional business duration, optional sla target at, optional sla warning at, optional failure reason, optional correction required at, optional correction failure reason, optional correction invitation attempt id, optional item data, optional barrier scheduled flow id, optional completed by_role.
+type to do "todo" = process execution, flow, optional completed by_user, optional completed by_external participant, optional assigned to_provider user, optional business duration, optional sla target at, optional sla warning at, optional failure reason, optional correction required at, optional correction failure reason, optional correction invitation attempt id, optional item data, optional barrier scheduled flow id, optional completed by_role, optional not started reason.
 assert to do its single completer (true) = completed by_user == nil or completed by_external participant == nil.
 
 # Public completion invitation attempts track each externally sent public to-do link.
@@ -357,6 +358,10 @@ index job queue its ready idx = queue, locked until, job attempts, available at.
 base job id (A1024). # Opaque value for the job id retrieved from a queue
 type completed job "cj" = queue, job id.
 unique index completed job its job id ix = queue, job id.
+
+# Refused job occurrences remain distinct from successfully completed jobs.
+type not started job "nsj" = queue, job id, not started reason.
+unique index not started job its job id ix = queue, job id.
 
 # Business Calendar - weekly schedules, periods, exceptions, and holidays
 # Design principle: "Closed by default" - only store when open, no non_working_day table needed.

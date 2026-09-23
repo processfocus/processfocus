@@ -482,6 +482,9 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
               finishedAt: requestTime,
               // Keep abandonedAt empty: this is a failed run, not a user cancellation.
               abandonedReason: failureReason,
+              // An admitted attempt's failure supersedes a duplicate refusal.
+              // The refused delivery remains recorded in notStartedJob.
+              notStartedReason: null,
               updatedAt: requestTime,
               updatedBy: userDetails.by,
             })

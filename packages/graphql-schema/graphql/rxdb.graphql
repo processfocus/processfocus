@@ -121,6 +121,7 @@ type ExecutionSteps {
   path: String!
   status: String!
   failureReason: String
+  notStartedReason: String
   role: ExecutionStepsRole
   submittedViaEmbeddedForm: Boolean
   externalSubmitterEmail: String
@@ -136,6 +137,7 @@ input ExecutionStepsInput {
   path: String!
   status: String!
   failureReason: String
+  notStartedReason: String
   role: ExecutionStepsRoleInput
   submittedViaEmbeddedForm: Boolean
   externalSubmitterEmail: String
@@ -157,6 +159,7 @@ type Execution implements RxDbDocument {
   status: String!
   failureReason: String
   abandonedReason: String
+  notStartedReason: String
   startedAt: DateTimeISO!
   finishedAt: DateTimeISO
   durationMs: Float
@@ -186,6 +189,7 @@ input ExecutionInputPushRowT0AssumedMasterStateT0 {
   status: String!
   failureReason: String
   abandonedReason: String
+  notStartedReason: String
   startedAt: DateTimeISO!
   finishedAt: DateTimeISO
   durationMs: Float
@@ -210,6 +214,7 @@ input ExecutionInputPushRowT0NewDocumentStateT0 {
   status: String!
   failureReason: String
   abandonedReason: String
+  notStartedReason: String
   startedAt: DateTimeISO!
   finishedAt: DateTimeISO
   durationMs: Float
