@@ -63,6 +63,12 @@ const stepCompletions = Metric.counter("pf.business.step.completions", {
   incremental: true,
 })
 
+const externalActions = Metric.counter("pf.business.external.actions", {
+  description:
+    "Successfully persisted external submissions and public Todo completions; not distinct people",
+  incremental: true,
+})
+
 const tagCounter =
   (key: string, value: string) =>
   (counter: typeof processStarts): typeof processStarts =>
@@ -74,7 +80,9 @@ const tagCounter =
  */
 const recordSuccessfulOutcome = (
   counter: typeof processStarts,
-  trigger: ProcessStartTrigger,
+  outcomeLabel:
+    | readonly ["pf_trigger", ProcessStartTrigger]
+    | readonly ["pf_action", "submission" | "todo_completion"],
 ): Effect.Effect<void> =>
   Effect.serviceOption(BusinessMetricDimensions).pipe(
     Effect.flatMap(
@@ -90,7 +98,7 @@ const recordSuccessfulOutcome = (
               tagCounter("pf_account_scope", dimensions.accountScope),
               tagCounter("pf_project", dimensions.project),
               tagCounter("pf_environment", dimensions.environment),
-              tagCounter("pf_trigger", trigger),
+              tagCounter(outcomeLabel[0], outcomeLabel[1]),
             ),
           )
         },
@@ -100,12 +108,14 @@ const recordSuccessfulOutcome = (
 
 export const recordSuccessfulProcessStart = (
   trigger: ProcessStartTrigger,
-): Effect.Effect<void> => recordSuccessfulOutcome(processStarts, trigger)
+): Effect.Effect<void> =>
+  recordSuccessfulOutcome(processStarts, ["pf_trigger", trigger])
 
 /** Emit only after the completion transaction commits, before queue dispatch. */
 export const recordSuccessfulStepCompletion = (
   trigger: ProcessStartTrigger,
-): Effect.Effect<void> => recordSuccessfulOutcome(stepCompletions, trigger)
+): Effect.Effect<void> =>
+  recordSuccessfulOutcome(stepCompletions, ["pf_trigger", trigger])
 
 /** Terminal outcome of one deployment pipeline, including post-activation cleanup. */
 export const recordDeploymentOutcome = ({
@@ -132,3 +142,9 @@ export const recordDeploymentOutcome = ({
     ),
   )
 }
+
+/** Count actions after commit, without participant identity or human-session provenance. */
+export const recordSuccessfulExternalAction = (
+  action: "submission" | "todo_completion",
+): Effect.Effect<void> =>
+  recordSuccessfulOutcome(externalActions, ["pf_action", action])

@@ -664,6 +664,7 @@ export const calendarPeriod = pgTable("pf_calendar_period", {
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   kinddateidxIdx: index("pf_calendar_period_kinddateidx_idx").on(table.periodKind, table.periodStart, table.periodEnd).where(sql`_deleted = false`),
+  orgunitidxIdx: index("pf_calendar_period_orgunitidx_idx").on(table.orgUnitId).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_calendar_period_updated_at_id_idx").on(table.updatedAt, table.id),
   periodTitleLengthCheck: check("period_title_length_check", sql.raw(`length("pf_calendar_period"."period_title") <= 256`)),
 }))

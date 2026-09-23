@@ -14,6 +14,7 @@ import {
   Schema,
 } from "effect"
 import { recordSuccessfulStepCompletion } from "@pf/business-metrics"
+import { withReadSnapshot } from "@pf/db-info"
 import {
   BusinessCalendarQueries,
   CompletedJobOperations,
@@ -559,8 +560,27 @@ const handleTodoSystemStepExecution = (job: Job<SystemStepTodoPayload>) =>
     })
 
     // Get todo info with step information
-    const todoInfo = yield* stepCompletionOps.queryTodoById(todoId)
-    if (!todoInfo) {
+    const inputs = yield* withReadSnapshot(
+      sqlClient,
+      Effect.gen(function* () {
+        const todoInfo = yield* stepCompletionOps.queryTodoById(todoId)
+        if (!todoInfo) return null
+
+        const processState =
+          yield* stepCompletionOps.getProcessStateByTodoId(todoId)
+        if (!processState) {
+          return yield* new ProcessStateNotFoundError({
+            processExecutionId: todoInfo.processExecutionId,
+          })
+        }
+        const completedSteps =
+          yield* stepCompletionOps.getCompletedStepsForExecution(
+            todoInfo.processExecutionId,
+          )
+        return { todoInfo, processState, completedSteps }
+      }),
+    )
+    if (!inputs) {
       // Todo doesn't exist - flow-execution may have rolled back
       // Mark as completed so we don't keep retrying
       yield* Effect.logWarning(
@@ -574,6 +594,7 @@ const handleTodoSystemStepExecution = (job: Job<SystemStepTodoPayload>) =>
       return
     }
 
+    const { todoInfo, processState, completedSteps } = inputs
     const initiatingAudit = todoInfo.createdBy
     if (initiatingAudit !== undefined) {
       const actor = decodeDelegationAudit(initiatingAudit)
@@ -583,20 +604,7 @@ const handleTodoSystemStepExecution = (job: Job<SystemStepTodoPayload>) =>
       }
     }
 
-    // Get process state
-    const processState =
-      yield* stepCompletionOps.getProcessStateByTodoId(todoId)
-    if (!processState) {
-      return yield* new ProcessStateNotFoundError({
-        processExecutionId: todoInfo.processExecutionId,
-      })
-    }
-
     // Build FlowContext from completed steps
-    const completedSteps =
-      yield* stepCompletionOps.getCompletedStepsForExecution(
-        todoInfo.processExecutionId,
-      )
     const ctx = buildFlowContext(
       todoInfo.processExecutionId,
       processState.processStartedAt,
@@ -947,11 +955,34 @@ const handleStartedSystemStepExecution = (
       stepPath,
     })
 
-    const processStateRaw =
-      yield* flowExecutionOps.getProcessStateByExecutionId(processExecutionId)
-    if (!processStateRaw) {
-      return yield* new ProcessStateNotFoundError({ processExecutionId })
-    }
+    const sqlClient = yield* SqlClient.SqlClient
+    const { processStateRaw, executionDetails, completedSteps } =
+      yield* withReadSnapshot(
+        sqlClient,
+        Effect.gen(function* () {
+          const processStateRaw =
+            yield* flowExecutionOps.getProcessStateByExecutionId(
+              processExecutionId,
+            )
+          if (!processStateRaw) {
+            return yield* new ProcessStateNotFoundError({ processExecutionId })
+          }
+          const executionDetails =
+            yield* flowExecutionOps.getExecutionDetailsForCompletion(
+              processExecutionId,
+            )
+          if (!executionDetails) {
+            return yield* new ProcessExecutionNotFoundError({
+              processExecutionId,
+            })
+          }
+          const completedSteps =
+            yield* stepCompletionOps.getCompletedStepsForExecution(
+              processExecutionId,
+            )
+          return { processStateRaw, executionDetails, completedSteps }
+        }),
+      )
 
     const initiatingAudit = processStateRaw.createdBy
     if (
@@ -974,16 +1005,6 @@ const handleStartedSystemStepExecution = (
       ),
     )
 
-    const executionDetails =
-      yield* flowExecutionOps.getExecutionDetailsForCompletion(
-        processExecutionId,
-      )
-    if (!executionDetails) {
-      return yield* new ProcessExecutionNotFoundError({ processExecutionId })
-    }
-
-    const completedSteps =
-      yield* stepCompletionOps.getCompletedStepsForExecution(processExecutionId)
     const ctx = buildFlowContext(
       processExecutionId,
       DateTime.unsafeMake(executionDetails.createdAtMs),

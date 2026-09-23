@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react"
 import { Button } from "@pf/shadcn-components"
 import { createDelegation, listDelegations, updateDelegation } from "./actions"
 import type { DelegationList, DelegationMetadata } from "@/lib/auth/delegations"
+import { environmentUnavailableMessage } from "@/lib/auth/session-admission-message"
 import { authenticateWithPasskey } from "@/lib/auth/verify-passkey"
 
 function TokenTime({ value }: { value: string }) {
@@ -160,7 +161,10 @@ export function DelegationsClient({
             controller.signal.aborted ||
             (error instanceof Error && error.name === "NotAllowedError")
               ? "Verification was cancelled. Your input is saved here; no token was changed."
-              : "Verification failed. Use the same account's passkey and try again. Your input is saved here; no token was changed.",
+              : error instanceof Error &&
+                  error.message === environmentUnavailableMessage
+                ? environmentUnavailableMessage
+                : "Verification failed. Use the same account's passkey and try again. Your input is saved here; no token was changed.",
         }
       } finally {
         verification.current = null

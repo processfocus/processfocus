@@ -1,5 +1,4 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ProjectGraph } from "@nx/devkit"
 import {
@@ -80,10 +79,6 @@ test("rejects future official and private runtime implementation dependencies", 
   }
 })
 
-import {
-  capturePublicWorktree,
-  createPublicSourceSnapshot,
-} from "./create-public-source-snapshot"
 import { afterAll, describe, expect, test } from "bun:test"
 
 const node = (name: string, root: string, tags: string[]) => ({
@@ -669,93 +664,6 @@ describe("project boundary policy", () => {
       ),
     ).toEqual([])
   })
-
-  test("public snapshots contain only demo and on-boarding examples", async () => {
-    const root = await mkdtemp(join(tmpdir(), "pf-public-snapshot-"))
-    const destination = join(root, "snapshot")
-    try {
-      const receipt = createPublicSourceSnapshot(destination, {
-        sourceTree: capturePublicWorktree(),
-      })
-      const examples = [
-        ...new Set(
-          receipt.files
-            .filter(({ path }) => path.startsWith("examples/"))
-            .map(({ path }) => path.split("/")[1]),
-        ),
-      ].sort()
-      expect(examples).toEqual(["demo", "on-boarding"])
-      expect(
-        receipt.files
-          .map((file) => file.path)
-          .filter((path) => path.startsWith(".github/workflows/")),
-      ).toEqual([
-        ".github/workflows/public-release.yml",
-        ".github/workflows/public-source.yml",
-      ])
-      expect(PRIVATE_SOURCE_PROJECT_ROOTS).toContain("examples/school")
-      expect(PRIVATE_SOURCE_PROJECT_ROOTS).toContain("examples/tbsnz")
-      expect(receipt.files.map((file) => file.path)).not.toContain(
-        "packages/auth-local-cedar/test/delegation.spec.ts",
-      )
-      expect(receipt.files.map((file) => file.path)).not.toContain(
-        "packages/sqlite-operations/test/delegation-management.test.ts",
-      )
-      const manifest = await Bun.file(join(destination, "package.json")).json()
-      expect(manifest.workspaces).toContain("examples/demo")
-      expect(manifest.workspaces).not.toContain("examples/school")
-      expect(manifest.scripts.prepare).toBeUndefined()
-      const sqliteOperations = await Bun.file(
-        join(destination, "packages/sqlite-operations/package.json"),
-      ).json()
-      expect(
-        sqliteOperations.devDependencies["@pf/layer-sqlite-bun"],
-      ).toBeUndefined()
-      const sqliteReferences = await Bun.file(
-        join(destination, "packages/sqlite-operations/tsconfig.lib.json"),
-      ).json()
-      expect(sqliteReferences.references).not.toContainEqual({
-        path: "../layer-sqlite-bun/tsconfig.lib.json",
-      })
-      expect(sqliteReferences.references).toContainEqual({
-        path: "../service-drizzle-sqlite/tsconfig.lib.json",
-      })
-      const lock = await Bun.file(join(destination, "bun.lock")).json()
-      expect(Object.keys(lock.workspaces).sort()).toEqual(
-        ["", ...manifest.workspaces].sort(),
-      )
-      const references = await Bun.file(
-        join(destination, "tsconfig.json"),
-      ).json()
-      expect(references.references).toContainEqual({
-        path: "./fixtures/external-authoring",
-      })
-      for (const { path } of references.references)
-        expect(
-          await Bun.file(join(destination, path, "tsconfig.json")).exists(),
-        ).toBe(true)
-      const runtime = await Bun.file(
-        join(destination, "runtime/local/project.json"),
-      ).json()
-      expect(runtime.targets["dashboard-build"].options.command).toBe(
-        "NODE_ENV=production DASHBOARD_DISTRIBUTION=generic bash scripts/build-public-dashboard.sh",
-      )
-      expect(
-        await Bun.file(
-          join(destination, "apps/graphql-e2e/steps/index.ts"),
-        ).text(),
-      ).not.toContain("cloud-org.steps")
-      for (const path of [
-        "scripts/build-public-dashboard.sh",
-        "scripts/ci-frontend-build-lifecycle.sh",
-        "scripts/ci-frontend-build-database.sh",
-        "public-source.json",
-      ])
-        expect(receipt.files.some((file) => file.path === path)).toBe(true)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  }, 30_000)
 
   test("rejects private Docker Compose contexts", () => {
     const errors = validateNonGraphReferenceFiles({

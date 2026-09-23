@@ -75,6 +75,7 @@ import { getRequestTime } from "@pf/request-time"
 import { buildStepPrincipal, canModifyField } from "./authorization"
 import {
   type ProcessStartTrigger,
+  recordSuccessfulExternalAction,
   recordSuccessfulProcessStart,
   recordSuccessfulStepCompletion,
 } from "./business-metrics"
@@ -261,6 +262,8 @@ interface StartProcessExecutionOptions {
 }
 
 interface CompleteStepOptions {
+  /** Public capability provenance, including legacy links without participant email. */
+  readonly source?: "public"
   readonly externalParticipantEmail?: string
   /** Role path that authorized this step completion (resolved to role ID for completed_by_role) */
   readonly completingRolePath?: string
@@ -1526,6 +1529,9 @@ export const startProcessExecution = (
     // The transaction is committed and retry deduplication is known here.
     // Emit before external queue work so an enqueue retry cannot double count.
     if (!startResult.deduplicated) {
+      if (options.externalParticipantEmail !== undefined) {
+        yield* recordSuccessfulExternalAction("submission")
+      }
       yield* recordSuccessfulProcessStart(trigger)
       if (!enqueueStartSystemStep) {
         yield* recordSuccessfulStepCompletion(trigger)
@@ -2126,6 +2132,12 @@ export const completeStep = <
     )
 
     if (result.kind === "completed") {
+      if (
+        options.source === "public" ||
+        options.externalParticipantEmail !== undefined
+      ) {
+        yield* recordSuccessfulExternalAction("todo_completion")
+      }
       yield* recordSuccessfulStepCompletion(
         options.externalParticipantEmail
           ? "human"

@@ -16,6 +16,8 @@ import { getAuthClient } from "@/lib/auth/client"
 import { readReauthenticationState } from "@/lib/auth/reauthentication-state"
 import { validateRedirect } from "@/lib/auth/redirect"
 import { getCookieNamesFromHost, setSessionCookies } from "@/lib/auth/session"
+import { admitsNewSession } from "@/lib/auth/session-admission"
+import { environmentUnavailableMessage } from "@/lib/auth/session-admission-message"
 import { runEffect } from "@/lib/effect/run-effect"
 import { CedarAuthorizationLayer } from "@/lib/effect/services"
 
@@ -212,6 +214,20 @@ export const GET = async (request: NextRequest) => {
       })
       return NextResponse.redirect(
         new URL("/login?error=not_authorized", request.url),
+      )
+    }
+
+    if (!(await admitsNewSession())) {
+      if (request.headers.get("accept") === "application/json")
+        return NextResponse.json(
+          {
+            error: "environment_unavailable",
+            message: environmentUnavailableMessage,
+          },
+          { status: 503, headers: { "cache-control": "no-store" } },
+        )
+      return NextResponse.redirect(
+        new URL("/login?error=environment_unavailable", request.url),
       )
     }
 

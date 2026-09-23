@@ -26,6 +26,7 @@ import {
   isSqlLockError,
   isSqlWriteWriteConflictError,
   normalizeDatabasePath,
+  readSnapshotRequested,
   transactionMode,
 } from "@pf/db-info"
 
@@ -538,12 +539,15 @@ const makeClient = (
           Effect.gen(this, function* () {
             yield* this.ensurePragmas()
             const transactionSdk = yield* createSdk(currentAuthToken)
+            const readSnapshot = yield* FiberRef.get(readSnapshotRequested)
             const concurrentTransaction = yield* FiberRef.get(
               concurrentTransactionRequested,
             )
             yield* FiberRef.set(
               transactionMode,
-              concurrentTransaction && concurrentTransactionsEnabled
+              !readSnapshot &&
+                concurrentTransaction &&
+                concurrentTransactionsEnabled
                 ? "concurrent"
                 : "immediate",
             )
@@ -554,13 +558,15 @@ const makeClient = (
                   [],
                 )
                 await transactionSdk.session.sequence(
-                  concurrentTransaction
-                    ? concurrentTransactionsEnabled
-                      ? "BEGIN CONCURRENT"
-                      : "BEGIN IMMEDIATE"
-                    : options?.deferredTransactions
-                      ? "BEGIN DEFERRED"
-                      : "BEGIN IMMEDIATE",
+                  readSnapshot
+                    ? "BEGIN DEFERRED"
+                    : concurrentTransaction
+                      ? concurrentTransactionsEnabled
+                        ? "BEGIN CONCURRENT"
+                        : "BEGIN IMMEDIATE"
+                      : options?.deferredTransactions
+                        ? "BEGIN DEFERRED"
+                        : "BEGIN IMMEDIATE",
                 )
               },
               catch: (cause) =>

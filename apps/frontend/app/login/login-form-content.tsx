@@ -2,8 +2,13 @@ import { LoginButton } from "./login-button"
 import { PasskeyButton } from "./passkey-button"
 import { SecretLoginForm } from "./secret-login-form"
 import { getDummyBypassUserMissingMessage } from "@/lib/auth/callback-error"
+import { environmentUnavailableMessage } from "@/lib/auth/session-admission-message"
 
 const errorMessages: Record<string, { title: string; message: string }> = {
+  environment_unavailable: {
+    title: "Environment unavailable",
+    message: environmentUnavailableMessage,
+  },
   not_authorized: {
     title: "Access Denied",
     message:

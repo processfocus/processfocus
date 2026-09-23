@@ -11,6 +11,7 @@ import {
   Layer,
   Option,
 } from "effect"
+import { readSnapshotRequested } from "@pf/db-info"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   BusinessCalendarQueries,
@@ -728,6 +729,71 @@ const makeExecutionFailureNotificationsOrg = (props?: {
 }
 
 describe("System Step Execution Handler", () => {
+  it("snapshots handler inputs and calendars but releases snapshots before execution and writes", async () => {
+    const observed: string[] = []
+    const { org } = makeTestOrg(
+      Effect.gen(function* () {
+        expect(yield* FiberRef.get(readSnapshotRequested)).toBe(false)
+        observed.push("execute")
+        return {}
+      }),
+    )
+    const { layers } = createTestLayers(org)
+    const program = Effect.gen(function* () {
+      yield* storeOrganisation(org)
+      const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
+      const ops = yield* StepCompletionOperations
+      const calendars = yield* BusinessCalendarQueries
+      const now = yield* DateTime.now
+      const observe = <A, E, R>(
+        name: string,
+        snapshot: boolean,
+        effect: Effect.Effect<A, E, R>,
+      ) =>
+        Effect.gen(function* () {
+          expect(yield* FiberRef.get(readSnapshotRequested)).toBe(snapshot)
+          observed.push(name)
+          return yield* effect
+        })
+      yield* systemStepExecutionHandler
+        .handle({
+          jobId: "job-snapshot-boundaries",
+          queue: SYSTEM_STEP_EXECUTION_QUEUE,
+          payload: { todoId, stepPath },
+          attempts: 1,
+          maxAttempts: 5,
+          availableAt: now,
+          lockedUntil: now,
+        })
+        .pipe(
+          Effect.provideService(StepCompletionOperations, {
+            ...ops,
+            queryTodoById: (id) => observe("todo", true, ops.queryTodoById(id)),
+            getProcessStateByTodoId: (id) =>
+              observe("state", true, ops.getProcessStateByTodoId(id)),
+            getCompletedStepsForExecution: (id) =>
+              observe("steps", true, ops.getCompletedStepsForExecution(id)),
+            completeToDo: (...args) =>
+              observe("complete", false, ops.completeToDo(...args)),
+          }),
+          Effect.provideService(BusinessCalendarQueries, {
+            ...calendars,
+            getCalendarData: (ids) =>
+              observe("calendar", true, calendars.getCalendarData(ids)),
+          }),
+        )
+      expect(observed).toEqual([
+        "todo",
+        "state",
+        "steps",
+        "execute",
+        "calendar",
+        "complete",
+      ])
+    })
+    await Effect.runPromise(program.pipe(Effect.provide(layers)))
+  })
+
   it("records failure on last attempt", async () => {
     const { org } = makeTestOrg(
       Effect.fail({ _tag: "TestFailure", message: "boom" }),

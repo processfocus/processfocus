@@ -362,6 +362,162 @@ describe("pfcli auth login", () => {
     )
   })
 
+  it("retries transient auth server 5xx token responses", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "pfcli-auth-login-retry-"))
+    tempPaths.push(tempDir)
+    const credentialsPath = join(tempDir, "credentials.json")
+    process.env["CI_PIPELINE_SECRET"] = "test-ci-secret"
+    process.env["PFCLI_CREDENTIALS_PATH"] = credentialsPath
+    const tokenRequests: string[] = []
+
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      if (String(input).endsWith("/oauth/token")) {
+        const body = String(init?.body)
+        tokenRequests.push(body)
+
+        if (
+          body === "grant_type=client_credentials" &&
+          tokenRequests.length === 1
+        ) {
+          return new Response("Internal Server Error", { status: 500 })
+        }
+
+        return new Response(
+          JSON.stringify({
+            access_token:
+              body === "grant_type=client_credentials"
+                ? baseToken
+                : providerToken,
+            expires_in: 3600,
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        )
+      }
+
+      return Response.json({
+        data: {
+          requestProviderUserPermissions: { success: true, error: null },
+        },
+      })
+    }) as typeof fetch
+
+    await Effect.runPromise(
+      runAuthLogin("https://dev.console.processfocus.com", {
+        ciProviderUser: "e2e-admin@example.com",
+      }),
+    )
+
+    expect(tokenRequests).toEqual([
+      "grant_type=client_credentials",
+      "grant_type=client_credentials",
+      "grant_type=client_credentials&scope=email%3Ae2e-admin%40example.com",
+    ])
+    expect(readCredentialsFile(credentialsPath).accessToken).toBe(providerToken)
+  })
+
+  it("reports persistent transient auth server failures after retries", async () => {
+    process.env["CI_PIPELINE_SECRET"] = "test-ci-secret"
+    let tokenRequestCount = 0
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/oauth/token")) {
+        tokenRequestCount += 1
+        return new Response("Internal Server Error", { status: 500 })
+      }
+
+      return Response.json({
+        data: {
+          requestProviderUserPermissions: { success: true, error: null },
+        },
+      })
+    }) as typeof fetch
+
+    await expect(
+      Effect.runPromise(
+        runAuthLogin("https://dev.console.processfocus.com", {
+          ciProviderUser: "e2e-admin@example.com",
+        }),
+      ),
+    ).rejects.toThrow(
+      "OAuth token request kept failing: OAuth token endpoint returned HTTP 500: Internal Server Error",
+    )
+    expect(tokenRequestCount).toBe(6)
+  })
+
+  it("keeps server_error diagnostics after retries are exhausted", async () => {
+    process.env["CI_PIPELINE_SECRET"] = "test-ci-secret"
+    let tokenRequestCount = 0
+    const body = JSON.stringify({
+      error: "server_error",
+      error_description: "Database connection pool exhausted",
+    })
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/oauth/token")) {
+        tokenRequestCount += 1
+        // Non-5xx so this exercises the parsed server_error branch, not the
+        // plain-text 5xx path above it.
+        return new Response(body, {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+
+      return Response.json({
+        data: {
+          requestProviderUserPermissions: { success: true, error: null },
+        },
+      })
+    }) as typeof fetch
+
+    await expect(
+      Effect.runPromise(
+        runAuthLogin("https://dev.console.processfocus.com", {
+          ciProviderUser: "e2e-admin@example.com",
+        }),
+      ),
+    ).rejects.toThrow(
+      'OAuth token request kept failing: OAuth token endpoint returned HTTP 400 server_error: Database connection pool exhausted ({"error":"server_error","error_description":"Database connection pool exhausted"})',
+    )
+    expect(tokenRequestCount).toBe(6)
+  })
+
+  it("does not retry OAuth client credential errors", async () => {
+    process.env["CI_PIPELINE_SECRET"] = "wrong-ci-secret"
+    let tokenRequestCount = 0
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith("/oauth/token")) {
+        tokenRequestCount += 1
+        return new Response(
+          JSON.stringify({
+            error: "invalid_client",
+            error_description: "Invalid client credentials",
+          }),
+          { status: 401, headers: { "Content-Type": "application/json" } },
+        )
+      }
+
+      return Response.json({
+        data: {
+          requestProviderUserPermissions: { success: true, error: null },
+        },
+      })
+    }) as typeof fetch
+
+    await expect(
+      Effect.runPromise(
+        runAuthLogin("https://dev.console.processfocus.com", {
+          ciProviderUser: "e2e-admin@example.com",
+        }),
+      ),
+    ).rejects.toThrow("invalid_client: Invalid client credentials")
+    expect(tokenRequestCount).toBe(1)
+  })
+
   it.each([0, -1, 1e300, 1e-300])(
     "does not store a CI credential with invalid lifetime %s",
     async (expiresIn) => {

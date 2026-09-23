@@ -24,6 +24,7 @@ interface WaitForExecutionOptions {
   readonly heartbeatMs: number
   readonly hasPendingInitialLine: boolean
   readonly formatLogMessage: (message: string, now?: number) => string
+  readonly quiet?: boolean
   readonly includeExecutionIdInTimeout?: boolean
 }
 
@@ -85,20 +86,28 @@ const nextUpdateWithTimeout = async <T>(
   iterator: AsyncIterator<T>,
   timeoutMs: number,
   timeoutMessage: string,
+  signal: AbortSignal,
 ): Promise<IteratorResult<T>> =>
   await new Promise<IteratorResult<T>>((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error(timeoutMessage))
     }, timeoutMs)
 
+    const abort = () => {
+      clearTimeout(timeout)
+      reject(new Error("Execution wait cancelled"))
+    }
+    signal.addEventListener("abort", abort, { once: true })
     iterator
       .next()
       .then((result) => {
         clearTimeout(timeout)
+        signal.removeEventListener("abort", abort)
         resolve(result)
       })
       .catch((error) => {
         clearTimeout(timeout)
+        signal.removeEventListener("abort", abort)
         reject(error)
       })
   })
@@ -109,7 +118,7 @@ export const waitForExecutionToFinish = (
   options: WaitForExecutionOptions,
 ): Effect.Effect<ExecutionSnapshot, CliError> =>
   Effect.tryPromise({
-    try: async () => {
+    try: async (signal) => {
       let previousExecution: ExecutionSnapshot | undefined
       let lastEventTime = Date.now()
       let hasPendingLine = options.hasPendingInitialLine
@@ -121,8 +130,10 @@ export const waitForExecutionToFinish = (
         options.includeExecutionIdInTimeout ?? false,
       )
       const heartbeat = setInterval(() => {
-        process.stdout.write(".")
-        hasPendingLine = true
+        if (!options.quiet) {
+          process.stdout.write(".")
+          hasPendingLine = true
+        }
       }, options.heartbeatMs)
 
       try {
@@ -131,6 +142,7 @@ export const waitForExecutionToFinish = (
             iterator,
             options.timeoutMs,
             timeoutMessage,
+            signal,
           )
 
           if (nextResult.done) {
@@ -151,7 +163,9 @@ export const waitForExecutionToFinish = (
 
           lastEventTime = now
 
-          const lines = renderExecutionUpdateLines(previousExecution, execution)
+          const lines = options.quiet
+            ? []
+            : renderExecutionUpdateLines(previousExecution, execution)
           if (lines.length > 0) {
             if (hasPendingLine) {
               process.stdout.write("\n")

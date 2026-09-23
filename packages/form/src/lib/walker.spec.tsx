@@ -1,18 +1,25 @@
-import type { ReactElement } from "react"
+import type { ReactElement, ReactNode } from "react"
 import type { FormComponent } from "@pf/form-client-representation/types"
 import { FormComponentType } from "@pf/form-client-representation/types"
+import type { FrontendPluginForm } from "@pf/frontend-plugin-host"
 import { FieldDescription } from "@pf/shadcn-components"
 import { walkClientRepresentation } from "./walker"
 import { describe, expect, it } from "bun:test"
 
 // Create a mock form - AppField is used as JSX component
 // In JSX, it becomes a React element with type=MockAppField
-const createMockForm = () => ({
+const createMockForm = (): FrontendPluginForm => ({
   AppField: function MockAppField(_props: {
     name: string
     children: () => unknown
   }) {
     return null // JSX doesn't execute this, it creates an element with this as type
+  },
+  Subscribe: function MockSubscribe<TSelected = unknown>(_props: {
+    selector?: (state: Readonly<{ values: unknown }>) => TSelected
+    children: ((values: TSelected) => ReactNode) | ReactNode
+  }) {
+    return null
   },
 })
 

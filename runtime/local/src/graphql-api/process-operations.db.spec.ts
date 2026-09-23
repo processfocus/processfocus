@@ -3,14 +3,7 @@ import * as Otel from "@effect/opentelemetry"
 import * as SqlClient from "@effect/sql/SqlClient"
 import { SqlError } from "@effect/sql/SqlError"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
-import {
-  type DataPoint,
-  DataPointType,
-  type MetricData,
-  PeriodicExportingMetricReader,
-  type PushMetricExporter,
-  type ResourceMetrics,
-} from "@opentelemetry/sdk-metrics"
+import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
 import { EnqueueError, type Payload, QueueService } from "@processfocus/runtime"
 import { eq } from "drizzle-orm"
 import {
@@ -98,6 +91,13 @@ import {
 } from "@pf/process"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import {
+  businessMetricsOtlpUrl,
+  businessMetricsPrometheusUrl,
+  makeTimestampedMetricExporter,
+  queryPrometheusRangeUntil,
+  queryPrometheusUntil,
+} from "../test-support/business-metrics"
+import {
   type GraphqlDbCase,
   postgresDbCase,
   seedActiveTodo,
@@ -113,174 +113,6 @@ import { describe, expect, it } from "bun:test"
 const uniqueSuffix = () => randomUUID().slice(0, 8)
 const runPostgresDbSpecs =
   process.env["PF_RUNTIME_LOCAL_POSTGRES_DB_SPECS"] === "1"
-const businessMetricsOtlpUrl =
-  process.env["PF_BUSINESS_METRICS_OTLP_URL"] ?? null
-const businessMetricsPrometheusUrl =
-  process.env["PF_BUSINESS_METRICS_PROMETHEUS_URL"] ?? null
-
-const PrometheusVectorResponse = Schema.Struct({
-  status: Schema.Literal("success"),
-  data: Schema.Struct({
-    resultType: Schema.Literal("vector"),
-    result: Schema.Array(
-      Schema.Struct({
-        metric: Schema.Record({ key: Schema.String, value: Schema.String }),
-        value: Schema.Tuple(Schema.Unknown, Schema.String),
-      }),
-    ),
-  }),
-})
-type PrometheusVectorResult =
-  (typeof PrometheusVectorResponse.Type)["data"]["result"]
-
-const PrometheusMatrixResponse = Schema.Struct({
-  status: Schema.Literal("success"),
-  data: Schema.Struct({
-    resultType: Schema.Literal("matrix"),
-    result: Schema.Array(
-      Schema.Struct({
-        metric: Schema.Record({ key: Schema.String, value: Schema.String }),
-        values: Schema.Array(Schema.Tuple(Schema.Number, Schema.String)),
-      }),
-    ),
-  }),
-})
-type PrometheusMatrixResult =
-  (typeof PrometheusMatrixResponse.Type)["data"]["result"]
-
-const epochMillisecondsToHrTime = (
-  epochMilliseconds: number,
-): [number, number] => {
-  const seconds = Math.floor(epochMilliseconds / 1_000)
-  return [seconds, (epochMilliseconds - seconds * 1_000) * 1_000_000]
-}
-
-const timestampDataPoints = <T>(
-  dataPoints: DataPoint<T>[],
-  startTime: [number, number],
-  endTime: [number, number],
-): DataPoint<T>[] =>
-  dataPoints.map((dataPoint) => ({ ...dataPoint, startTime, endTime }))
-
-const timestampMetric = (
-  metric: MetricData,
-  startTime: [number, number],
-  endTime: [number, number],
-): MetricData =>
-  metric.dataPointType === DataPointType.SUM
-    ? {
-        ...metric,
-        dataPoints: timestampDataPoints(metric.dataPoints, startTime, endTime),
-      }
-    : metric
-
-const timestampResourceMetrics = (
-  metrics: ResourceMetrics,
-  startTime: [number, number],
-  endTime: [number, number],
-): ResourceMetrics => ({
-  ...metrics,
-  scopeMetrics: metrics.scopeMetrics.map((scopeMetrics) => ({
-    ...scopeMetrics,
-    metrics: scopeMetrics.metrics.map((metric) =>
-      timestampMetric(metric, startTime, endTime),
-    ),
-  })),
-})
-
-const makeTimestampedMetricExporter = (
-  exporter: OTLPMetricExporter,
-  timestamps: readonly [number, ...number[]],
-): PushMetricExporter => {
-  const startTime = epochMillisecondsToHrTime(timestamps[0] - 60_000)
-  let timestampIndex = 0
-
-  return {
-    export: (metrics, resultCallback) => {
-      const timestamp = timestamps[timestampIndex]
-      timestampIndex += 1
-      exporter.export(
-        timestamp === undefined
-          ? metrics
-          : timestampResourceMetrics(
-              metrics,
-              startTime,
-              epochMillisecondsToHrTime(timestamp),
-            ),
-        resultCallback,
-      )
-    },
-    forceFlush: () => exporter.forceFlush(),
-    selectAggregation: (instrumentType) =>
-      exporter.selectAggregation(instrumentType),
-    selectAggregationTemporality: (instrumentType) =>
-      exporter.selectAggregationTemporality(instrumentType),
-    shutdown: () => exporter.shutdown(),
-  }
-}
-
-const queryPrometheusUntil = async (
-  prometheusUrl: string,
-  query: string,
-  ready: (results: PrometheusVectorResult) => boolean,
-  time?: number,
-) => {
-  let latest: PrometheusVectorResult = []
-
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const url = new URL("/api/v1/query", prometheusUrl)
-    url.searchParams.set("query", query)
-    if (time !== undefined) url.searchParams.set("time", time.toString())
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(`Prometheus query failed with HTTP ${response.status}`)
-    }
-    latest = await Schema.decodeUnknownPromise(PrometheusVectorResponse)(
-      await response.json(),
-    ).then((result) => result.data.result)
-    if (ready(latest)) return latest
-    await Bun.sleep(250)
-  }
-
-  throw new Error(
-    `Prometheus query did not converge: ${JSON.stringify(latest)}`,
-  )
-}
-
-const queryPrometheusRangeUntil = async (options: {
-  readonly prometheusUrl: string
-  readonly query: string
-  readonly start: number
-  readonly end: number
-  readonly step: number
-  readonly ready: (results: PrometheusMatrixResult) => boolean
-}) => {
-  let latest: PrometheusMatrixResult = []
-
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const url = new URL("/api/v1/query_range", options.prometheusUrl)
-    url.searchParams.set("query", options.query)
-    url.searchParams.set("start", options.start.toString())
-    url.searchParams.set("end", options.end.toString())
-    url.searchParams.set("step", options.step.toString())
-    const response = await fetch(url)
-    if (!response.ok) {
-      throw new Error(
-        `Prometheus range query failed with HTTP ${response.status}`,
-      )
-    }
-    latest = await Schema.decodeUnknownPromise(PrometheusMatrixResponse)(
-      await response.json(),
-    ).then((result) => result.data.result)
-    if (options.ready(latest)) return latest
-    await Bun.sleep(250)
-  }
-
-  throw new Error(
-    `Prometheus range query did not converge: ${JSON.stringify(latest)}`,
-  )
-}
-
 const runDbEffect = <R, A, E, RExtra = never, REffect = never>(
   db: GraphqlDbCase<R>,
   enqueuedJobs: EnqueuedJob[],
@@ -5519,17 +5351,17 @@ businessMetricsIntegrationIt(
     )
 
     const selector = `pf_business_process_starts_total{pf_account_scope="customer",pf_project=~"${projectPrefix}-.+"}`
-    const totals = await queryPrometheusUntil(
-      businessMetricsPrometheusUrl,
-      selector,
-      (results) =>
+    const totals = await queryPrometheusUntil({
+      prometheusUrl: businessMetricsPrometheusUrl,
+      query: selector,
+      ready: (results) =>
         results.length === 4 &&
         results.reduce(
           (total, result) => total + Number(result.value[1]),
           0,
         ) === 10,
-      currentUtcDayStart - 60,
-    )
+      time: currentUtcDayStart - 60,
+    })
     const totalBySeries = Object.fromEntries(
       totals.map((result) => [
         [
@@ -5548,27 +5380,27 @@ businessMetricsIntegrationIt(
       [`CustomerTwo|${secondAccountProject}|production|automated`]: 2,
     })
 
-    const startCompletions = await queryPrometheusUntil(
-      businessMetricsPrometheusUrl,
-      selector.replace(
+    const startCompletions = await queryPrometheusUntil({
+      prometheusUrl: businessMetricsPrometheusUrl,
+      query: selector.replace(
         "pf_business_process_starts_total",
         "pf_business_step_completions_total",
       ),
-      (results) =>
+      ready: (results) =>
         results.length === 4 &&
         results.reduce((sum, row) => sum + Number(row.value[1]), 0) === 10,
-      currentUtcDayStart - 60,
-    )
+      time: currentUtcDayStart - 60,
+    })
     expect(startCompletions.map((row) => Number(row.value[1])).sort()).toEqual([
       2, 2, 2, 4,
     ])
 
-    const excluded = await queryPrometheusUntil(
-      businessMetricsPrometheusUrl,
-      `pf_business_process_starts_total{pf_project="${consoleProject}"}`,
-      (results) => results.length === 0,
-      currentUtcDayStart - 60,
-    )
+    const excluded = await queryPrometheusUntil({
+      prometheusUrl: businessMetricsPrometheusUrl,
+      query: `pf_business_process_starts_total{pf_project="${consoleProject}"}`,
+      ready: (results) => results.length === 0,
+      time: currentUtcDayStart - 60,
+    })
     expect(excluded).toEqual([])
 
     const utcDaily = await queryPrometheusRangeUntil({
@@ -5857,14 +5689,14 @@ businessMetricsIntegrationIt(
     )
 
     const selector = `pf_business_step_completions_total{pf_project=~"${projectPrefix}-.+"}`
-    const totals = await queryPrometheusUntil(
-      businessMetricsPrometheusUrl,
-      selector,
-      (results) =>
+    const totals = await queryPrometheusUntil({
+      prometheusUrl: businessMetricsPrometheusUrl,
+      query: selector,
+      ready: (results) =>
         results.length === 6 &&
         results.reduce((sum, row) => sum + Number(row.value[1]), 0) === 48,
-      midnight - 60,
-    )
+      time: midnight - 60,
+    })
     expect(
       Object.fromEntries(
         totals.map((row) => [

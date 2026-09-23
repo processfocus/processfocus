@@ -109,6 +109,9 @@ export const PRIVATE_SOURCE_PROJECT_ROOTS = [
   "infra/network",
   "infra/soc2",
   "runtime/aws",
+  "tools/build-tests",
+  "tools/repository-tests",
+  "tools/publication-tests",
 ] as const
 
 export const PUBLICATION_ALLOWLIST = [
@@ -225,6 +228,7 @@ export const PUBLIC_SNAPSHOT_ROOT_INPUTS = [
   "nx.json",
   "package.json",
   "scripts/check-project-boundaries.test.ts",
+  "scripts/public-source-snapshot.test.ts",
   "scripts/check-project-boundaries.ts",
   "scripts/clean-package-distribution.ts",
   "scripts/create-public-source-snapshot.ts",

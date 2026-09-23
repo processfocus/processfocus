@@ -1,4 +1,4 @@
-import { inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, sql } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
 import {
@@ -27,7 +27,7 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
             return new Map()
           }
 
-          // Fetch all calendar-related data in parallel
+          // A session executes serially; avoid reporting queue wait as query time.
           const [orgUnits, weeklySchedules, dateExceptions, holidays, periods] =
             yield* Effect.all(
               [
@@ -38,7 +38,12 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
                     timezone: schema.orgUnit.timezone,
                   })
                   .from(schema.orgUnit)
-                  .where(inArray(schema.orgUnit.id, orgUnitIds)),
+                  .where(
+                    and(
+                      inArray(schema.orgUnit.id, orgUnitIds),
+                      eq(schema.orgUnit._deleted, false),
+                    ),
+                  ),
 
                 // Weekly schedules
                 db
@@ -48,7 +53,12 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
                     timeRanges: schema.weeklySchedule.timeRanges,
                   })
                   .from(schema.weeklySchedule)
-                  .where(inArray(schema.weeklySchedule.orgUnitId, orgUnitIds)),
+                  .where(
+                    and(
+                      inArray(schema.weeklySchedule.orgUnitId, orgUnitIds),
+                      eq(schema.weeklySchedule._deleted, false),
+                    ),
+                  ),
 
                 // Date exceptions
                 db
@@ -63,7 +73,12 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
                     exceptionNote: schema.dateException.exceptionNote,
                   })
                   .from(schema.dateException)
-                  .where(inArray(schema.dateException.orgUnitId, orgUnitIds)),
+                  .where(
+                    and(
+                      inArray(schema.dateException.orgUnitId, orgUnitIds),
+                      eq(schema.dateException._deleted, false),
+                    ),
+                  ),
 
                 // Holiday instances
                 db
@@ -79,7 +94,12 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
                     ),
                   })
                   .from(schema.holidayInstance)
-                  .where(inArray(schema.holidayInstance.orgUnitId, orgUnitIds)),
+                  .where(
+                    and(
+                      inArray(schema.holidayInstance.orgUnitId, orgUnitIds),
+                      eq(schema.holidayInstance._deleted, false),
+                    ),
+                  ),
 
                 // Calendar periods
                 db
@@ -100,9 +120,14 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
                     periodSchedule: schema.calendarPeriod.periodSchedule,
                   })
                   .from(schema.calendarPeriod)
-                  .where(inArray(schema.calendarPeriod.orgUnitId, orgUnitIds)),
+                  .where(
+                    and(
+                      inArray(schema.calendarPeriod.orgUnitId, orgUnitIds),
+                      eq(schema.calendarPeriod._deleted, false),
+                    ),
+                  ),
               ],
-              { concurrency: "unbounded" },
+              { concurrency: 1 },
             )
 
           // Build a map of org unit ID to timezone

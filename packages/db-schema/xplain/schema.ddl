@@ -381,6 +381,7 @@ base period schedule (J). # Optional weekly schedule override as JSON
 # of that kind are non-business days.
 type calendar period "calp" = org unit, period kind, period title, period start, period end, period active, optional period schedule.
 index calendar period its kinddateidx = period kind, period start, period end.
+index calendar period its orgunitidx = org unit.
 
 # Date exceptions - one-off overrides for specific dates
 # Takes precedence over holidays and periods.

@@ -62,6 +62,7 @@ jobs:
           bun run lint
           bun run lint:project-boundaries
           bun test scripts/check-project-boundaries.test.ts
+          bun test scripts/public-source-snapshot.test.ts
           bun scripts/check-public-source.ts
           bun test scripts/public-release.test.ts
           bunx tsgo --ignoreConfig --noEmit --strict --skipLibCheck --moduleResolution bundler --module preserve --target es2024 --types bun scripts/public-release.ts scripts/public-release.test.ts scripts/check-public-source.ts tools/public-release/policy.ts

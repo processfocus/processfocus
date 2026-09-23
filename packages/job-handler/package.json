@@ -17,6 +17,7 @@
     "@effect/sql": "^0.52.1",
     "@pf/business-calendar": "workspace:*",
     "@pf/business-metrics": "workspace:*",
+    "@pf/db-info": "workspace:*",
     "@pf/document-store-service": "workspace:*",
     "@pf/graphql-db-operations": "workspace:*",
     "@pf/graphql-schema": "workspace:*",

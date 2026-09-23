@@ -745,6 +745,7 @@ const createGraphqlWsExecutionEventSource = async (
 const createAppSyncExecutionEventSource = async (
   config: Extract<ExecutionEventSourceConfig, { kind: "APPSYNC_EVENTS" }>,
   nowMillis: number,
+  signal: AbortSignal,
 ): Promise<ExecutionEventSource> => {
   // Decode only for routing. AppSync still verifies the signature and current
   // authority. Never substitute config.userId/sub for canonical session facts.
@@ -804,7 +805,20 @@ const createAppSyncExecutionEventSource = async (
     },
   })
 
-  await socket.connect()
+  const abort = () => {
+    isClosed = true
+    socket.disconnect()
+    queue.finish()
+  }
+  signal.throwIfAborted()
+  signal.addEventListener("abort", abort, { once: true })
+  try {
+    await socket.connect()
+  } catch (error) {
+    signal.removeEventListener("abort", abort)
+    socket.disconnect()
+    throw error
+  }
 
   return {
     [Symbol.asyncIterator]: () => queue[Symbol.asyncIterator](),
@@ -813,6 +827,7 @@ const createAppSyncExecutionEventSource = async (
         return
       }
       isClosed = true
+      signal.removeEventListener("abort", abort)
       socket.disconnect()
       queue.finish()
     },
@@ -824,10 +839,10 @@ export const createExecutionEventSource = (
 ): Effect.Effect<ExecutionEventSource, CliError> =>
   Effect.flatMap(Clock.currentTimeMillis, (nowMillis) =>
     Effect.tryPromise({
-      try: () =>
+      try: (signal) =>
         config.kind === "GRAPHQL_WS"
           ? createGraphqlWsExecutionEventSource(config)
-          : createAppSyncExecutionEventSource(config, nowMillis),
+          : createAppSyncExecutionEventSource(config, nowMillis, signal),
       catch: (cause) =>
         new CliError({
           message: `Failed to subscribe to execution updates: ${toError(cause).message}`,
