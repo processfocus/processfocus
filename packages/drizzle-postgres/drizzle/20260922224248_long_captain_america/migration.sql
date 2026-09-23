@@ -1,0 +1,1 @@
+CREATE INDEX "pf_calendar_period_orgunitidx_idx" ON "pf_calendar_period" ("org_unit_id") WHERE _deleted = false;

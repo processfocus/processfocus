@@ -1,4 +1,4 @@
-import { Console, Effect } from "effect"
+import { Console, Data, Effect, Schedule } from "effect"
 import { getAuthUrlFromPortFile } from "@pf/frontend-endpoints/port-files"
 import { AuthLoginError } from "../../errors"
 import { writeCredentials } from "../../utils/credentials"
@@ -44,6 +44,30 @@ const CI_PIPELINE_CLIENT_ID = "ci-pipeline"
 
 const LOCALHOST_HOSTS = new Set(["localhost", "127.0.0.1"])
 
+/**
+ * Transient token-endpoint failure. In CI the auth server can briefly return a
+ * plain-text 5xx while the database is contended; token requests are safe to
+ * retry.
+ */
+class AuthTokenTransientError extends Data.TaggedError(
+  "AuthTokenTransientError",
+)<{
+  readonly message: string
+}> {}
+
+/**
+ * Retry transient token-endpoint failures the same way the deployed GraphQL
+ * e2e helper does (apps/graphql-e2e/support/auth-helpers.ts): exponential
+ * backoff from 150ms with at most 5 retries.
+ */
+const transientTokenRetryOptions = {
+  schedule: Schedule.exponential("150 millis").pipe(
+    Schedule.compose(Schedule.recurs(5)),
+  ),
+  while: (error: AuthLoginError | AuthTokenTransientError) =>
+    error._tag === "AuthTokenTransientError",
+} as const
+
 const isOAuthTokenJson = (value: unknown): value is OAuthTokenJson => {
   if (typeof value !== "object" || value === null) {
     return false
@@ -85,6 +109,28 @@ const formatOAuthError = (value: unknown): string => {
   return error ?? "OAuth token response did not contain an access token"
 }
 
+const OAUTH_RESPONSE_EXCERPT_LENGTH = 200
+
+const oauthResponseExcerpt = (responseText: string): string =>
+  responseText.slice(0, OAUTH_RESPONSE_EXCERPT_LENGTH)
+
+const transientTokenFailureMessage = (input: {
+  readonly status: number
+  readonly responseText: string
+  readonly errorDescription?: string
+}): string => {
+  const body = oauthResponseExcerpt(input.responseText)
+  if (input.errorDescription) {
+    const description = input.errorDescription.slice(
+      0,
+      OAUTH_RESPONSE_EXCERPT_LENGTH,
+    )
+    return `OAuth token endpoint returned HTTP ${input.status} server_error: ${description} (${body})`
+  }
+
+  return `OAuth token endpoint returned HTTP ${input.status}: ${body}`
+}
+
 const resolveAuthTokenEndpoint = (baseUrl: string): string => {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "")
 
@@ -100,7 +146,7 @@ const resolveAuthTokenEndpoint = (baseUrl: string): string => {
   return `${normalizedBaseUrl}/oauth/token`
 }
 
-const requestClientCredentialsToken = (
+const requestClientCredentialsTokenOnce = (
   authTokenEndpoint: string,
   clientSecret: string,
   scope?: string,
@@ -137,16 +183,44 @@ const requestClientCredentialsToken = (
         }),
     })
 
+    // In CI the auth server can briefly return a plain-text 5xx while the
+    // database is contended. Treat any 5xx as transient and retry.
+    if (response.status >= 500 && response.status <= 599) {
+      return yield* new AuthTokenTransientError({
+        message: transientTokenFailureMessage({
+          status: response.status,
+          responseText,
+        }),
+      })
+    }
+
     const responseJson = yield* Effect.try({
       try: () => JSON.parse(responseText) as unknown,
       catch: (cause) =>
         new AuthLoginError({
-          message: `Failed to parse OAuth token response: ${responseText.slice(0, 200)}`,
+          message: `Failed to parse OAuth token response (HTTP ${response.status}): ${oauthResponseExcerpt(responseText)}`,
           cause,
         }),
     })
 
     if (!response.ok || !isOAuthTokenJson(responseJson)) {
+      if (
+        typeof responseJson === "object" &&
+        responseJson !== null &&
+        (responseJson as Record<string, unknown>)["error"] === "server_error"
+      ) {
+        const record = responseJson as Record<string, unknown>
+        return yield* new AuthTokenTransientError({
+          message: transientTokenFailureMessage({
+            status: response.status,
+            responseText,
+            ...(typeof record["error_description"] === "string"
+              ? { errorDescription: record["error_description"] }
+              : {}),
+          }),
+        })
+      }
+
       return yield* new AuthLoginError({
         message: `OAuth token request failed: ${formatOAuthError(responseJson)}`,
       })
@@ -164,6 +238,27 @@ const requestClientCredentialsToken = (
         }),
     })
   })
+
+const requestClientCredentialsToken = (
+  authTokenEndpoint: string,
+  clientSecret: string,
+  scope?: string,
+) =>
+  requestClientCredentialsTokenOnce(
+    authTokenEndpoint,
+    clientSecret,
+    scope,
+  ).pipe(
+    Effect.retry(transientTokenRetryOptions),
+    Effect.catchTag("AuthTokenTransientError", (error) =>
+      Effect.fail(
+        new AuthLoginError({
+          message: `OAuth token request kept failing: ${error.message}`,
+          cause: error,
+        }),
+      ),
+    ),
+  )
 
 const writeLoginCredentials = (
   baseUrl: string,

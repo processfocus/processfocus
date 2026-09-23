@@ -129,10 +129,15 @@ describe("trusted Google Drive browser entrypoint", () => {
       },
     } satisfies FrontendPluginField
 
-    const fieldElement = registration!.renderer({ AppField }, component, true, {
-      todoId: "todo-1",
-      stepPath: "/request-eotc-permission/Select students",
-    })
+    const fieldElement = registration!.renderer(
+      { AppField, Subscribe: () => null },
+      component,
+      true,
+      {
+        todoId: "todo-1",
+        stepPath: "/request-eotc-permission/Select students",
+      },
+    )
     const suspenseElement = fieldElement.props.children({
       state: { value: "" },
       handleChange: () => undefined,
@@ -195,7 +200,11 @@ describe("trusted Google Drive browser entrypoint", () => {
       },
     } satisfies FrontendPluginField
 
-    const fieldElement = registration!.renderer({ AppField }, component, false)
+    const fieldElement = registration!.renderer(
+      { AppField, Subscribe: () => null },
+      component,
+      false,
+    )
     const suspenseElement = fieldElement.props.children({
       state: { value: "" },
       handleChange: () => undefined,

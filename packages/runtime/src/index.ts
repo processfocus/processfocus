@@ -1,3 +1,4 @@
+export * from "./lib/admission.js"
 export * from "./lib/artifact.js"
 export * from "./lib/artifact-inventory.js"
 export * from "./lib/deploy-artifact.js"

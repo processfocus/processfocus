@@ -68,6 +68,34 @@ const loadRunDeploy = async (): Promise<RunDeploy> => {
   return module.runDeploy
 }
 
+const executionSnapshot = (
+  status = "Completed",
+  failureReason: string | null = null,
+): ExecutionSnapshot => ({
+  id: "exec-1",
+  status,
+  failureReason,
+  abandonedReason: null,
+  finishedAt: null,
+  steps: [],
+})
+const executionSource = (
+  snapshot = executionSnapshot(),
+): ExecutionEventSource => ({
+  close: async () => undefined,
+  async *[Symbol.asyncIterator]() {
+    yield snapshot
+  },
+})
+const silentSource = <T>(): AsyncIterable<T> & {
+  close: () => Promise<void>
+} => ({
+  close: async () => undefined,
+  [Symbol.asyncIterator]: () => ({
+    next: () => new Promise<IteratorResult<T>>(() => {}),
+  }),
+})
+
 const runDeployEffect = async (
   orgPath: string,
   projectId: string,
@@ -76,6 +104,7 @@ const runDeployEffect = async (
   dependencies?: Parameters<RunDeploy>[4],
 ) =>
   (await loadRunDeploy())(orgPath, projectId, environmentId, options, {
+    createExecutionEventSource: () => Effect.succeed(executionSource()),
     buildOrg: () => Effect.void,
     prepareArtifact: (_orgPath, artifactPath) =>
       Effect.sync(() => writeFileSync(artifactPath, "prepared archive")),
@@ -265,6 +294,28 @@ const createDeployFetchMock = (options: DeployFetchMockOptions = {}) =>
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       )
+    }
+
+    if (body.query.includes("DeployExecutionLocation")) {
+      return Response.json({
+        data: {
+          executions: {
+            nodes: [{ id: "exec-1", startedAt: "2026-09-22T00:00:00Z" }],
+            hasNextPage: false,
+          },
+        },
+      })
+    }
+
+    if (body.query.includes("DeployExecutionSnapshot")) {
+      return Response.json({
+        data: {
+          pullExecution: {
+            documents: [executionSnapshot("Running")],
+            checkpoint: null,
+          },
+        },
+      })
     }
 
     if (body.query.includes("getDnsRecords")) {
@@ -1015,6 +1066,231 @@ describe("pfcli deploy", () => {
     expect(logs.some((log) => log.includes("Frontend URL:"))).toBe(false)
   })
 
+  for (const timing of [
+    "before subscription",
+    "during snapshot",
+    "after snapshot",
+  ] as const) {
+    it.each([
+      null,
+      "Command exited with code 1 | build status FAILED | current phase COMPLETED",
+      "Insufficient project credit for project 1000-0000-0001. Remaining balance: USD -0.001. An operator must add credit before deploying.",
+      "Unable to check project credit for project 1000-0000-0001. Please retry the deployment.",
+    ])(
+      `reports persisted outcomes ${timing} with silent progress: %s`,
+      async (failure) => {
+        const testDir = mkdtempSync(join(tmpdir(), "pfcli-outcome-"))
+        const orgPath = createTempOrg()
+        tempPaths.push(testDir, orgPath)
+        process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+          testDir,
+          "https://deploy.example.test",
+          new Date(Date.now() + 60_000).toISOString(),
+          createJwt({ aud: "graphql-api", properties: { userId: "user-123" } }),
+        )
+        const terminal = executionSnapshot(
+          failure ? "Failed" : "Completed",
+          failure,
+        )
+        const ready = Promise.withResolvers<void>()
+        const snapshotStarted = Promise.withResolvers<void>()
+        const snapshotRead = Promise.withResolvers<void>()
+        const events: ExecutionSnapshot[] = []
+        let pending:
+          | ((value: IteratorResult<ExecutionSnapshot>) => void)
+          | undefined
+        let executionClosed = 0
+        let progressClosed = 0
+        const push = (value: ExecutionSnapshot) => {
+          if (pending) {
+            const resolve = pending
+            pending = undefined
+            resolve({ done: false, value })
+          } else events.push(value)
+        }
+        const source: ExecutionEventSource = {
+          close: async () => {
+            executionClosed++
+            pending?.({ done: true, value: undefined })
+          },
+          [Symbol.asyncIterator]: () => ({
+            next: () => {
+              const value = events.shift()
+              return value
+                ? Promise.resolve({ done: false, value })
+                : new Promise((resolve) => {
+                    pending = resolve
+                  })
+            },
+          }),
+        }
+        const baseFetch = createDeployFetchMock({
+          subscriptionTransportKind: "APPSYNC_EVENTS",
+          appSyncEventsHttpHost: "appsync.test",
+        })
+        let subscribed = false
+        let queried = false
+        globalThis.fetch = Object.assign(
+          async (input: string | URL | Request, init?: RequestInit) => {
+            if (String(init?.body).includes("DeployExecutionSnapshot")) {
+              expect(subscribed).toBe(true)
+              queried = true
+              snapshotStarted.resolve()
+              if (timing === "during snapshot") {
+                push({ ...terminal, id: "other-execution" })
+                push(terminal)
+                push(terminal)
+                await snapshotRead.promise
+              }
+              const response = Response.json({
+                data: {
+                  pullExecution: {
+                    documents: [
+                      timing === "before subscription"
+                        ? terminal
+                        : executionSnapshot("Running"),
+                    ],
+                    checkpoint: null,
+                  },
+                },
+              })
+              snapshotRead.resolve()
+              return response
+            }
+            return baseFetch(input, init)
+          },
+          { preconnect: baseFetch.preconnect },
+        )
+        const effect = await runDeployEffect(
+          orgPath,
+          "project-123",
+          "env-456",
+          {},
+          {
+            createExecutionEventSource: () =>
+              Effect.promise(async () => {
+                await ready.promise
+                subscribed = true
+                return source
+              }),
+            createDeployProgressEventSource: () =>
+              Effect.succeed({
+                ...silentSource(),
+                close: async () => {
+                  progressClosed++
+                },
+              }),
+          },
+        )
+        const logs = await captureConsoleLogs(async () => {
+          const result = Effect.runPromise(Effect.either(effect))
+          expect(queried).toBe(false)
+          ready.resolve()
+          await snapshotStarted.promise
+          if (timing === "during snapshot") {
+            // The terminal event must finish the command without awaiting this stale response.
+            const outcome = await result
+            expect(outcome._tag).toBe(failure ? "Left" : "Right")
+            snapshotRead.resolve()
+          } else if (timing === "after snapshot") {
+            await snapshotRead.promise
+            push({ ...terminal, id: "other-execution" })
+            push(terminal)
+            push(terminal)
+          }
+          const outcome = await result
+          if (failure) {
+            expect(outcome._tag).toBe("Left")
+            if (outcome._tag === "Left")
+              expect(String(outcome.left)).toContain(failure)
+          } else expect(outcome._tag).toBe("Right")
+        })
+        expect(executionClosed).toBe(1)
+        expect(progressClosed).toBe(1)
+        expect(
+          logs.filter((line) => line.includes("Deployment completed.")).length,
+        ).toBe(failure ? 0 : 1)
+        if (!failure) expect(logs.join("\n")).toContain("Frontend URL:")
+      },
+    )
+  }
+
+  it.each(["snapshot error", "cancel"])(
+    "cleans up a silent AppSync deployment on %s",
+    async (mode) => {
+      const testDir = mkdtempSync(join(tmpdir(), "pfcli-cleanup-"))
+      const orgPath = createTempOrg()
+      tempPaths.push(testDir, orgPath)
+      process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+        testDir,
+        "https://deploy.example.test",
+        new Date(Date.now() + 60_000).toISOString(),
+        createJwt({ properties: { userId: "user-123" } }),
+      )
+      const fetched = Promise.withResolvers<void>()
+      const baseFetch = createDeployFetchMock({
+        subscriptionTransportKind: "APPSYNC_EVENTS",
+        appSyncEventsHttpHost: "appsync.test",
+      })
+      globalThis.fetch = Object.assign(
+        async (input: string | URL | Request, init?: RequestInit) => {
+          if (String(init?.body).includes("DeployExecutionSnapshot")) {
+            fetched.resolve()
+            return mode === "snapshot error"
+              ? Response.json({
+                  errors: [{ message: "Execution access denied" }],
+                })
+              : Response.json({
+                  data: {
+                    pullExecution: {
+                      documents: [executionSnapshot("Running")],
+                      checkpoint: null,
+                    },
+                  },
+                })
+          }
+          return baseFetch(input, init)
+        },
+        { preconnect: baseFetch.preconnect },
+      )
+      let executionClosed = 0
+      let progressClosed = 0
+      const controller = new AbortController()
+      const effect = await runDeployEffect(
+        orgPath,
+        "project-123",
+        "env-456",
+        {},
+        {
+          createExecutionEventSource: () =>
+            Effect.succeed({
+              ...silentSource<ExecutionSnapshot>(),
+              close: async () => {
+                executionClosed++
+              },
+            }),
+          createDeployProgressEventSource: () =>
+            Effect.succeed({
+              ...silentSource(),
+              close: async () => {
+                progressClosed++
+              },
+            }),
+        },
+      )
+      const result = Effect.runPromise(effect, { signal: controller.signal })
+      await fetched.promise
+      if (mode === "cancel") controller.abort()
+      await expect(result).rejects.toThrow(
+        mode === "cancel"
+          ? ""
+          : "Failed to read deployment execution status: GraphQL error: Execution access denied",
+      )
+      expect(executionClosed).toBe(1)
+      expect(progressClosed).toBe(1)
+    },
+  )
+
   it("waits for dedicated AppSync deploy progress events when available", async () => {
     const testDir = mkdtempSync(join(tmpdir(), "pfcli-deploy-test-"))
     tempPaths.push(testDir)
@@ -1090,9 +1366,7 @@ describe("pfcli deploy", () => {
               expect(startCalled).toBe(true)
               return fakeProgressSource
             }),
-          createExecutionEventSource: () => {
-            throw new Error("Execution stream should not be used for AppSync")
-          },
+          createExecutionEventSource: () => Effect.succeed(executionSource()),
         },
       ),
     )
@@ -1334,9 +1608,8 @@ describe("pfcli deploy", () => {
           {
             createDeployProgressEventSource: () =>
               Effect.succeed(fakeProgressSource),
-            createExecutionEventSource: () => {
-              throw new Error("Execution stream should not be used")
-            },
+            createExecutionEventSource: () =>
+              Effect.succeed(silentSource<ExecutionSnapshot>()),
           },
         )
       ).pipe(Effect.flip),
@@ -1348,7 +1621,12 @@ describe("pfcli deploy", () => {
     }
   })
 
-  it("fails when the waited deployment reaches a failed terminal state", async () => {
+  it.each([
+    "Command exited with code 1 | build status FAILED | current phase COMPLETED",
+    "Insufficient project credit for project project-123. Remaining balance: USD 0. An operator must add credit before deploying.",
+    "Insufficient project credit for project project-123. Remaining balance: USD -0.001. An operator must add credit before deploying.",
+    "Unable to check project credit for project project-123. Please retry the deployment.",
+  ])("surfaces backend deployment failure: %s", async (noisyFailureReason) => {
     const testDir = mkdtempSync(join(tmpdir(), "pfcli-deploy-test-"))
     tempPaths.push(testDir)
 
@@ -1366,8 +1644,6 @@ describe("pfcli deploy", () => {
     process.env["PATH"] = `${fakeZipBin}:${process.env["PATH"] ?? ""}`
 
     globalThis.fetch = createDeployFetchMock()
-    const noisyFailureReason =
-      "Command exited with code 1 | build status FAILED | current phase COMPLETED"
 
     const fakeEventSource: ExecutionEventSource = {
       close: async () => undefined,
@@ -1418,7 +1694,7 @@ describe("pfcli deploy", () => {
     }
   })
 
-  it("surfaces failed AppSync deploy progress messages", async () => {
+  it("surfaces persisted AppSync failure reasons alongside progress", async () => {
     const testDir = mkdtempSync(join(tmpdir(), "pfcli-deploy-test-"))
     tempPaths.push(testDir)
 
@@ -1484,9 +1760,10 @@ describe("pfcli deploy", () => {
           {
             createDeployProgressEventSource: () =>
               Effect.succeed(fakeProgressSource),
-            createExecutionEventSource: () => {
-              throw new Error("Execution stream should not be used for AppSync")
-            },
+            createExecutionEventSource: () =>
+              Effect.succeed(
+                executionSource(executionSnapshot("Failed", detailedFailure)),
+              ),
           },
         )
       ).pipe(Effect.flip),

@@ -16,6 +16,7 @@ import {
   isSqlLockError,
   isSqlWriteWriteConflictError,
   withConcurrentTransaction,
+  withReadSnapshot,
 } from "@pf/db-info"
 import { beforeEach, describe, expect, it, mock } from "bun:test"
 
@@ -164,6 +165,57 @@ describe("cloud concurrent transactions", () => {
     closeCalls = 0
     transactionCloseCalls = 0
     executeFailure = undefined
+  })
+
+  it.each([undefined, "1"])(
+    "uses deferred read snapshots without changing subsequent writes (concurrent=%s)",
+    async (flag) => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* withReadSnapshot(sql, sql.unsafe("SELECT 1"))
+          yield* sql.withTransaction(sql.unsafe("SELECT 2"))
+        }).pipe(Effect.provide(makeTestLayer(flag))),
+      )
+      expect(sequences).toEqual([
+        "BEGIN DEFERRED",
+        "COMMIT",
+        "BEGIN IMMEDIATE",
+        "COMMIT",
+      ])
+    },
+  )
+
+  it("rolls back a failed snapshot and allows the next operation", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        const result = yield* Effect.either(
+          withReadSnapshot(sql, Effect.fail("failed read")),
+        )
+        expect(result._tag).toBe("Left")
+        yield* sql.withTransaction(sql.unsafe("SELECT 1"))
+      }).pipe(Effect.provide(makeTestLayer(undefined))),
+    )
+    expect(sequences).toEqual([
+      "BEGIN DEFERRED",
+      "ROLLBACK",
+      "BEGIN IMMEDIATE",
+      "COMMIT",
+    ])
+  })
+
+  it("reuses an outer write transaction for nested snapshot reads", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql.withTransaction(
+          withReadSnapshot(sql, sql.unsafe("SELECT 1")),
+        )
+      }).pipe(Effect.provide(makeTestLayer(undefined))),
+    )
+    expect(sequences).toEqual(["BEGIN IMMEDIATE", "COMMIT"])
+    expect(executions).toContain("SAVEPOINT effect_sql_1;")
   })
 
   describe("statement error diagnostics", () => {

@@ -1236,9 +1236,12 @@ export const systemSchema = Effect.gen(function* () {
         form,
         form.submissionEffectSchema,
         context,
-        payload.externalParticipantEmail
-          ? { externalParticipantEmail: payload.externalParticipantEmail }
-          : {},
+        {
+          source: "public",
+          ...(payload.externalParticipantEmail
+            ? { externalParticipantEmail: payload.externalParticipantEmail }
+            : {}),
+        },
       )
 
       return {

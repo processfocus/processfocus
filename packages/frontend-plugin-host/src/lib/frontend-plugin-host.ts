@@ -78,6 +78,12 @@ export interface FrontendPluginForm {
     readonly name: string
     readonly children: () => JSX.Element
   }>
+  readonly Subscribe: <TSelected = unknown>(props: {
+    readonly selector?: (
+      state: Readonly<{ readonly values: unknown }>,
+    ) => TSelected
+    readonly children: ((values: TSelected) => ReactNode) | ReactNode
+  }) => ReactNode | Promise<ReactNode>
 }
 
 export interface FormRendererOptions {

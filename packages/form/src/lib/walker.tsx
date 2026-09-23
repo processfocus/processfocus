@@ -18,6 +18,7 @@ import type {
   TableField as TableFieldType,
 } from "@pf/form-client-representation/types"
 import { FormComponentType } from "@pf/form-client-representation/types"
+import type { FrontendPluginForm } from "@pf/frontend-plugin-host"
 import {
   BooleanField,
   Button,
@@ -45,13 +46,7 @@ import {
 } from "./lookup-context"
 import { getPluginRenderer } from "./plugin-registry"
 
-// Type alias for forms
-type AnyAppForm = {
-  AppField: React.ComponentType<{
-    name: string
-    children: () => React.JSX.Element
-  }>
-}
+type AnyAppForm = FrontendPluginForm
 
 const effectiveReadOnly = (component: FormComponent): boolean | undefined => {
   if (component.disabled === true) return true

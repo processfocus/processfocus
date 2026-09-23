@@ -1,9 +1,20 @@
 import { randomUUID } from "node:crypto"
+import * as Otel from "@effect/opentelemetry"
 import { FileSystem } from "@effect/platform"
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
+import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
 import { EnqueueError, QueueService } from "@processfocus/runtime"
-import { DateTime, Schema as ES, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Schema as ES, Effect, Either, FiberRef, Layer } from "effect"
 import type { AuthorizationService } from "@pf/auth-policy"
-import { type UserContext, systemSchema } from "@pf/graphql-api"
+import { EmailField } from "@pf/form-schema"
+import {
+  type BusinessMetricDimensionInput,
+  type UserContext,
+  completeStep,
+  makeBusinessMetricDimensionsLayer,
+  startProcess,
+  systemSchema,
+} from "@pf/graphql-api"
 import {
   type FlowExecutionOperations,
   type ProcessExecutionOperations,
@@ -37,6 +48,13 @@ import {
   Role,
   normalizePath,
 } from "@pf/process"
+import {
+  businessMetricsOtlpUrl,
+  businessMetricsPrometheusUrl,
+  makeTimestampedMetricExporter,
+  queryPrometheusRangeUntil,
+  queryPrometheusUntil,
+} from "../test-support/business-metrics"
 import {
   type GraphqlDbCase,
   postgresDbCase,
@@ -905,3 +923,338 @@ runSuite(sqliteDbCase)
 if (runPostgresDbSpecs) {
   runSuite(postgresDbCase)
 }
+
+const externalMetricsIt =
+  businessMetricsOtlpUrl && businessMetricsPrometheusUrl ? it : it.skip
+
+externalMetricsIt(
+  "exports real public submissions and Todo completions as external actions through dashboard queries",
+  async () => {
+    if (!businessMetricsOtlpUrl || !businessMetricsPrometheusUrl) {
+      throw new Error("Business metrics integration endpoints are required")
+    }
+    const prefix = `external-${uniqueSuffix()}`
+    const day = 86_400
+    const midnight = Math.floor(Date.now() / (day * 1000)) * day
+    const reader = new PeriodicExportingMetricReader({
+      exporter: makeTimestampedMetricExporter(
+        new OTLPMetricExporter({ url: businessMetricsOtlpUrl }),
+        [
+          (midnight - 2 * day + 60) * 1000,
+          (midnight - day - 60) * 1000,
+          (midnight - day + 60) * 1000,
+          (midnight - 60) * 1000,
+        ],
+      ),
+      exportIntervalMillis: 60_000,
+    })
+    const telemetry = Otel.NodeSdk.layer(() => ({
+      resource: { serviceName: "external-action-integration" },
+      metricReader: reader,
+    }))
+    const scopes = [
+      {
+        accountId: "111111111111",
+        account: { name: "CustomerOne", scope: "customer" },
+        project: `${prefix}-first`,
+        environment: "development",
+      },
+      {
+        accountId: "111111111111",
+        account: { name: "CustomerOne", scope: "customer" },
+        project: `${prefix}-first`,
+        environment: "staging",
+      },
+      {
+        accountId: "222222222222",
+        account: { name: "CustomerTwo", scope: "customer" },
+        project: `${prefix}-second`,
+        environment: "production",
+      },
+      {
+        accountId: "333333333333",
+        account: { name: "PFConsole", scope: "internal" },
+        project: `${prefix}-console`,
+        environment: "production",
+      },
+      {
+        accountId: "444444444444",
+        project: `${prefix}-unclassified`,
+        environment: "development",
+      },
+    ] satisfies BusinessMetricDimensionInput[]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        for (let sample = 0; sample < 4; sample += 1) {
+          for (const scope of scopes) {
+            const seed = makePublicTodoOrganisation(uniqueSuffix())
+            const unit = new OrgUnit(seed.org, "Embed", {
+              name: "Embed",
+              type: "department",
+            })
+            const role = new Role(unit, "employee", { name: "Employee" })
+            const process = new Process(unit, "Submit", {
+              name: "Submit",
+              purpose: "Public analytics journey",
+            })
+            const form = new Form(process, "Submit", {
+              role,
+              embed: {
+                externalParticipantEmailField: "email",
+                sites: ["https://example.com"],
+                thankYou: "Thanks",
+              },
+              form: () => ({ email: EmailField() }),
+            })
+            process.start(form).end()
+            yield* Effect.gen(function* () {
+              const todo = yield* seedActiveTodo(sqliteDbCase, {
+                ...seed,
+                organisation: seed.org,
+              })
+              const processPath = normalizePath(process.node.path)
+              const processId =
+                yield* sqliteDbCase.getProcessIdByPath(processPath)
+              const executionId = `pex-${uniqueSuffix()}`
+              const submit = (email: string) =>
+                startProcess(
+                  processId,
+                  processPath,
+                  normalizePath(form.node.path),
+                  { email },
+                  form.submissionEffectSchema,
+                  form,
+                  makeContext(),
+                  { executionId },
+                )
+              expect(
+                Either.isLeft(yield* submit("invalid").pipe(Effect.either)),
+              ).toBe(true)
+              const queue = yield* QueueService
+              const failingQueue: QueueService["Type"] = {
+                ...queue,
+                enqueue: (name) =>
+                  Effect.fail(
+                    new EnqueueError({
+                      queue: name,
+                      message: "Rollback public action",
+                    }),
+                  ),
+              }
+              expect(
+                Either.isLeft(
+                  yield* submit("parent@example.com").pipe(
+                    Effect.provideService(QueueService, failingQueue),
+                    Effect.either,
+                  ),
+                ),
+              ).toBe(true)
+              expect(
+                yield* sqliteDbCase.getProcessStateByExecutionId(executionId),
+              ).toBeNull()
+              yield* submit("parent@example.com")
+              yield* submit("parent@example.com") // existing logical-start replay protection
+
+              const token = yield* makeToken(todo.todoId, "parent@example.com")
+              expect(
+                Either.isLeft(
+                  yield* completePublicTodoEffect("invalid-token", {
+                    comment: "Done",
+                  }).pipe(Effect.either),
+                ),
+              ).toBe(true)
+              expect(
+                Either.isLeft(
+                  yield* completePublicTodoEffect(token, { comment: 123 }).pipe(
+                    Effect.either,
+                  ),
+                ),
+              ).toBe(true)
+              expect(
+                Either.isLeft(
+                  yield* completePublicTodoEffect(token, {
+                    comment: "Done",
+                  }).pipe(
+                    Effect.provideService(QueueService, failingQueue),
+                    Effect.either,
+                  ),
+                ),
+              ).toBe(true)
+              expect(
+                (yield* (yield* StepCompletionOperations).queryTodoForCompletionById(
+                  todo.todoId,
+                ))?.completed,
+              ).toBe(false)
+              yield* completePublicTodoEffect(token, { comment: "Done" })
+              yield* completePublicTodoEffect(token, { comment: "Replay" })
+
+              // Old public capabilities lack email, but still represent external actions.
+              const legacy = yield* seedActiveTodo(sqliteDbCase, {
+                ...seed,
+                organisation: seed.org,
+              })
+              const legacyToken = yield* makeToken(legacy.todoId)
+              // Commit succeeds; external dispatch fails. The replay recovers dispatch only.
+              expect(
+                Either.isLeft(
+                  yield* completePublicTodoEffect(legacyToken, {
+                    comment: "Done",
+                  }).pipe(
+                    Effect.provideService(QueueService, {
+                      ...failingQueue,
+                      queueInTransaction: false,
+                    }),
+                    Effect.either,
+                  ),
+                ),
+              ).toBe(true)
+              expect(
+                (yield* (yield* StepCompletionOperations).queryTodoForCompletionById(
+                  legacy.todoId,
+                ))?.completed,
+              ).toBe(true)
+              yield* completePublicTodoEffect(legacyToken, {
+                comment: "Replay",
+              }).pipe(
+                Effect.provideService(QueueService, {
+                  ...queue,
+                  queueInTransaction: false,
+                }),
+              )
+
+              // Staff completing a public-capable form is not an external action.
+              const staff = yield* seedActiveTodo(sqliteDbCase, {
+                ...seed,
+                organisation: seed.org,
+              })
+              yield* completeStep(
+                staff.todoId,
+                { comment: "Staff completion" },
+                seed.form,
+                seed.form.submissionEffectSchema,
+                makeContext(),
+              )
+            }).pipe(
+              Effect.provide(
+                Layer.merge(
+                  makePublicTodoLayer(sqliteDbCase, [], seed.org),
+                  makeBusinessMetricDimensionsLayer(scope),
+                ),
+              ),
+            )
+          }
+          yield* Effect.promise(() => reader.forceFlush())
+        }
+      }).pipe(Effect.provide(telemetry)),
+    )
+
+    const selector = `pf_business_external_actions_total{pf_project=~"${prefix}-.+"}`
+    const totals = await queryPrometheusUntil({
+      prometheusUrl: businessMetricsPrometheusUrl,
+      query: selector,
+      ready: (rows) =>
+        rows.length === 6 &&
+        rows.reduce((sum, row) => sum + Number(row.value[1]), 0) === 36,
+      time: midnight - 60,
+    })
+    expect(
+      Object.fromEntries(
+        totals.map((row) => [
+          `${row.metric["pf_account_name"]}|${row.metric["pf_environment"]}|${row.metric["pf_action"]}`,
+          Number(row.value[1]),
+        ]),
+      ),
+    ).toEqual({
+      "CustomerOne|development|submission": 4,
+      "CustomerOne|development|todo_completion": 8,
+      "CustomerOne|staging|submission": 4,
+      "CustomerOne|staging|todo_completion": 8,
+      "CustomerTwo|production|submission": 4,
+      "CustomerTwo|production|todo_completion": 8,
+    })
+    for (const row of totals) {
+      expect(row.metric["pf_account_scope"]).toBe("customer")
+      expect(row.metric["pf_account_id"]).toBe(
+        row.metric["pf_account_name"] === "CustomerOne"
+          ? "111111111111"
+          : "222222222222",
+      )
+      expect(
+        Object.keys(row.metric)
+          .filter((key) => key.startsWith("pf_"))
+          .sort(),
+      ).toEqual([
+        "pf_account_id",
+        "pf_account_name",
+        "pf_account_scope",
+        "pf_action",
+        "pf_environment",
+        "pf_project",
+      ])
+      expect(JSON.stringify(row)).not.toContain("parent@example.com")
+      expect(JSON.stringify(row)).not.toContain("identity")
+      expect(JSON.stringify(row)).not.toContain("human_session")
+    }
+    const { panels } = ES.decodeUnknownSync(
+      ES.Struct({
+        panels: ES.Array(
+          ES.Struct({
+            title: ES.String,
+            targets: ES.Array(ES.Struct({ expr: ES.String })),
+          }),
+        ),
+      }),
+    )(
+      await Bun.file(
+        new URL(
+          "../../grafana/dashboards/customer-process-starts.json",
+          import.meta.url,
+        ),
+      ).json(),
+    )
+    for (const title of [
+      "Daily external actions (UTC)",
+      "External actions by project",
+    ]) {
+      const expression = panels.find((panel) => panel.title === title)
+        ?.targets[0]?.expr
+      if (!expression) throw new Error(`Missing ${title}`)
+      for (const [account, project, environment, multiplier] of [
+        [".*", `${prefix}-.+`, ".*", 3],
+        ["CustomerOne", `${prefix}-first`, "staging", 1],
+        ["CustomerTwo", `${prefix}-second`, "production", 1],
+      ] as const) {
+        const query = expression
+          .replaceAll("$account", account)
+          .replaceAll("$project", project)
+          .replaceAll("$environment", environment)
+          .replaceAll("$__range", "1d")
+        const results = await queryPrometheusRangeUntil({
+          prometheusUrl: businessMetricsPrometheusUrl,
+          query,
+          start: midnight - day,
+          end: midnight,
+          step: day,
+          ready: (rows) =>
+            rows.length ===
+              (title === "Daily external actions (UTC)" ? 2 : 2 * multiplier) &&
+            rows.every((row) => row.values.length === 2),
+        })
+        for (const row of results) {
+          for (const [timestamp, value] of row.values) {
+            expect(timestamp % day).toBe(0)
+            // Prometheus extrapolates the 23h58m observed interval to 24h.
+            expect(Number(value)).toBeCloseTo(
+              (day / (day - 120)) *
+                (row.metric["pf_action"] === "submission" ? 1 : 2) *
+                (title === "Daily external actions (UTC)" ? multiplier : 1),
+              2,
+            )
+          }
+        }
+      }
+    }
+  },
+  { timeout: 60_000 },
+)

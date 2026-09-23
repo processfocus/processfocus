@@ -23,8 +23,10 @@ import {
   closeExecutionEventSource,
 } from "../utils/execution-event-source"
 import { formatExecutionLogMessage } from "../utils/execution-log-format"
+import { fetchExecutionSnapshot } from "../utils/execution-snapshot"
 import {
   type ExecutionEventSource,
+  type ExecutionSnapshot,
   createExecutionEventSource,
 } from "../utils/execution-subscription"
 import {
@@ -162,20 +164,28 @@ const isRecoverableDeployProgressError = (error: CliError): boolean => {
 const nextUpdateWithTimeout = async <T>(
   iterator: AsyncIterator<T>,
   timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<IteratorResult<T>> =>
   await new Promise<IteratorResult<T>>((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error(formatDeploymentWaitTimeoutMessage(timeoutMs)))
     }, timeoutMs)
 
+    const abort = () => {
+      clearTimeout(timeout)
+      reject(new Error("Deployment wait cancelled"))
+    }
+    signal.addEventListener("abort", abort, { once: true })
     iterator
       .next()
       .then((result) => {
         clearTimeout(timeout)
+        signal.removeEventListener("abort", abort)
         resolve(result)
       })
       .catch((error) => {
         clearTimeout(timeout)
+        signal.removeEventListener("abort", abort)
         reject(error)
       })
   })
@@ -186,7 +196,7 @@ const waitForDeployToFinish = (
   hasPendingInitialLine: boolean,
 ): Effect.Effect<DeployProgressEvent, CliError> =>
   Effect.tryPromise({
-    try: async () => {
+    try: async (signal) => {
       let lastEventTime = Date.now()
       let hasPendingLine = hasPendingInitialLine
       let lastPrintedKey: string | undefined
@@ -201,6 +211,7 @@ const waitForDeployToFinish = (
           const nextResult = await nextUpdateWithTimeout(
             iterator,
             DEPLOY_WAIT_TIMEOUT_MS,
+            signal,
           )
 
           if (nextResult.done) {
@@ -466,36 +477,61 @@ export const runDeploy = (
     const waitForExecutionResult = (
       executionEventSource: ExecutionEventSource,
       executionId: string,
+      readSnapshot = false,
     ) =>
       Effect.gen(function* () {
-        const waitStartedAt = Date.now()
-        yield* Effect.sync(() =>
-          process.stdout.write(
-            formatExecutionLogMessage(
-              "Waiting for deployment to start...",
-              waitStartedAt,
+        if (!readSnapshot) {
+          yield* Effect.sync(() =>
+            process.stdout.write(
+              formatExecutionLogMessage("Waiting for deployment to start..."),
             ),
-          ),
-        )
-        const terminalExecution = yield* waitForExecutionToFinish(
+          )
+        }
+        const updates = waitForExecutionToFinish(
           executionEventSource,
           executionId,
           {
             executionLabel: "deployment",
             timeoutMs: DEPLOY_WAIT_TIMEOUT_MS,
             heartbeatMs: DEPLOY_WAIT_HEARTBEAT_MS,
-            hasPendingInitialLine: true,
+            hasPendingInitialLine: !readSnapshot,
+            quiet: readSnapshot,
             formatLogMessage: formatExecutionLogMessage,
             includeExecutionIdInTimeout: true,
           },
         )
 
+        // Only terminal snapshots participate in the race: an older running
+        // snapshot must never replace an event received while the query ran.
+        const terminalExecution = yield* readSnapshot
+          ? Effect.raceFirst(
+              updates,
+              fetchExecutionSnapshot(
+                endpoint,
+                credentials.accessToken,
+                executionId,
+              ).pipe(
+                Effect.flatMap((snapshot) =>
+                  snapshot.status === "Completed" ||
+                  snapshot.status === "Failed" ||
+                  snapshot.status === "Abandoned"
+                    ? Effect.succeed(snapshot)
+                    : Effect.never,
+                ),
+              ),
+            )
+          : updates
+
+        return terminalExecution
+      })
+
+    const reportExecutionResult = (terminalExecution: ExecutionSnapshot) =>
+      Effect.gen(function* () {
         if (terminalExecution.status === "Completed") {
           yield* Console.log(formatExecutionLogMessage("Deployment completed."))
           yield* logDeployFrontendUrl()
           return
         }
-
         return yield* new CliError({
           message:
             extractExecutionFailureMessage(terminalExecution) ??
@@ -540,23 +576,14 @@ export const runDeploy = (
               ),
             ),
           )
-          const terminalEvent = yield* waitForDeployToFinish(
+          yield* waitForDeployToFinish(
             deployProgressEventSource,
             params.executionId,
             true,
           )
-
-          if (terminalEvent.status === "completed") {
-            yield* Console.log(
-              formatExecutionLogMessage("Deployment completed."),
-            )
-            yield* logDeployFrontendUrl()
-            return
-          }
-
-          return yield* new CliError({
-            message: terminalEvent.message ?? "Deployment failed.",
-          })
+          // Progress is for live output; only persisted execution state decides
+          // the outcome, including pre-build failures with no progress events.
+          return yield* Effect.never
         }).pipe(Effect.ensuring(closeDeployProgressEventSource))
       })
 
@@ -594,44 +621,59 @@ export const runDeploy = (
       // The executionId determines the deploy-progress channel, so the deploy
       // has to be started before the CLI can subscribe.
       const deployStart = yield* startDeployment()
-      return yield* waitForDeployProgressResult({
-        executionId: deployStart.executionId,
-        userId,
-        appSyncEventsHttpHost,
-      }).pipe(
-        Effect.catchAll((error) => {
-          if (!isRecoverableDeployProgressError(error)) {
-            return Effect.fail(error)
-          }
-
-          return Effect.gen(function* () {
-            // Fall back to the execution watcher as the source of truth. It
-            // has the same no-update timeout as the progress watcher.
-            yield* Console.log(
-              formatExecutionLogMessage(
-                "Deploy progress connection closed; waiting for deployment result...",
-              ),
-            )
-            const executionEventSource = yield* buildExecutionEventSource({
+      const terminalExecution = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const executionEventSource = yield* Effect.acquireRelease(
+            buildExecutionEventSource({
               credentials,
               subscriptionTransport:
                 subscriptionTransport.subscriptionTransport,
               missingUserIdMessage:
                 "CLI access token is missing userId/sub claims required for execution subscriptions.",
               createExecutionEventSourceImpl,
-            })
-            const closeEventSource = closeExecutionEventSource(
-              executionEventSource,
-              "Failed to close execution subscription.",
-            )
-
-            return yield* waitForExecutionResult(
+            }).pipe(
+              Effect.timeoutFail({
+                duration: "30 seconds",
+                onTimeout: () =>
+                  new CliError({
+                    message:
+                      "Timed out subscribing to deployment execution updates.",
+                  }),
+              }),
+              Effect.interruptible,
+            ),
+            (source) =>
+              closeExecutionEventSource(
+                source,
+                "Failed to close execution subscription.",
+              ),
+          )
+          return yield* Effect.raceFirst(
+            waitForExecutionResult(
               executionEventSource,
               deployStart.executionId,
-            ).pipe(Effect.ensuring(closeEventSource))
-          })
+              true,
+            ),
+            waitForDeployProgressResult({
+              executionId: deployStart.executionId,
+              userId,
+              appSyncEventsHttpHost,
+            }).pipe(
+              Effect.catchAll((error) =>
+                isRecoverableDeployProgressError(error)
+                  ? Console.log(
+                      formatExecutionLogMessage(
+                        "Deploy progress connection closed; waiting for deployment result...",
+                      ),
+                    ).pipe(Effect.zipRight(Effect.never))
+                  : Effect.fail(error),
+              ),
+            ),
+          )
         }),
       )
+      yield* Effect.sync(() => process.stdout.write("\n"))
+      return yield* reportExecutionResult(terminalExecution)
     }
 
     const executionEventSource = yield* buildExecutionEventSource({
@@ -652,7 +694,7 @@ export const runDeploy = (
       yield* waitForExecutionResult(
         executionEventSource,
         deployStart.executionId,
-      )
+      ).pipe(Effect.flatMap(reportExecutionResult))
     }).pipe(Effect.ensuring(closeEventSource))
   }).pipe(Effect.ensuring(Effect.sync(() => rmSync(zipPath, { force: true }))))
 }

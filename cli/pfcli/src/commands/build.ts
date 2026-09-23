@@ -231,7 +231,11 @@ try {
         )
       }
       registration.renderer(
-        { AppField: ({ children }) => children() },
+        {
+          AppField: ({ children }) => children(),
+          Subscribe: ({ children }) =>
+            typeof children === "function" ? children({ values: {} }) : children,
+        },
         {
           _tag: "plugin",
           field: "browserPluginValidation",

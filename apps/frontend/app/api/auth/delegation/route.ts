@@ -4,6 +4,7 @@ import { getAuthClient } from "@/lib/auth/client"
 import { getFrontendAuthClientConfig } from "@/lib/auth/issuer"
 import { decodeJwtPayload } from "@/lib/auth/jwt"
 import { setSessionCookies } from "@/lib/auth/session"
+import { admitsNewSession } from "@/lib/auth/session-admission"
 
 const Tokens = Schema.Struct({
   access_token: Schema.NonEmptyString,
@@ -113,6 +114,14 @@ export async function POST(request: Request): Promise<Response> {
       (session.delegation.expiresAt - Date.now()) / 1000,
     )
     if (remaining <= 0) return respond(false, 401)
+    if (!(await admitsNewSession()))
+      return Response.json(
+        { success: false, error: "environment_unavailable" },
+        {
+          status: 503,
+          headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
+        },
+      )
     await setSessionCookies({
       access: tokens.access_token,
       refresh: tokens.refresh_token,

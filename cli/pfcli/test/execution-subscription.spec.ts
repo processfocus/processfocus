@@ -254,3 +254,120 @@ it("narrows wire strings to branded realtime recipient IDs only after validation
   )
   encoded satisfies RealtimeRecipientId | undefined
 })
+
+it.each(["ready", "cancel", "error"])(
+  "waits for AppSync subscription acknowledgement and cleans up on %s",
+  async (mode) => {
+    const subscribed = Promise.withResolvers<() => void>()
+    const closed = Promise.withResolvers<void>()
+    let ready = false
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request, server) =>
+        server.upgrade(request) ? undefined : new Response("upgrade required"),
+      websocket: {
+        message: (socket, data) => {
+          const message: unknown = JSON.parse(data.toString())
+          if (
+            typeof message !== "object" ||
+            message === null ||
+            !("type" in message)
+          )
+            return
+          if (message.type === "connection_init")
+            socket.send(JSON.stringify({ type: "connection_ack" }))
+          if (message.type === "subscribe" && "id" in message)
+            subscribed.resolve(() => {
+              if (mode === "error") {
+                socket.send(
+                  JSON.stringify({
+                    type: "subscribe_error",
+                    id: message.id,
+                    errors: [
+                      {
+                        errorType: "Unauthorized",
+                        message: "Execution access denied",
+                      },
+                    ],
+                  }),
+                )
+                return
+              }
+              // A terminal update received during setup must be queued until consumed.
+              socket.send(
+                JSON.stringify({
+                  type: "data",
+                  id: message.id,
+                  event: JSON.stringify({
+                    documents: [
+                      {
+                        id: "early",
+                        status: "Failed",
+                        steps: [],
+                        failureReason: "credit rejected",
+                      },
+                    ],
+                  }),
+                }),
+              )
+              socket.send(
+                JSON.stringify({ type: "subscribe_success", id: message.id }),
+              )
+            })
+        },
+        close: () => closed.resolve(),
+      },
+    })
+    const controller = new AbortController()
+    try {
+      const result = Effect.runPromise(
+        createExecutionEventSource({
+          kind: "APPSYNC_EVENTS",
+          realtimeUrl: `ws://127.0.0.1:${server.port}`,
+          appSyncEventsHttpHost: "local.test",
+          userId: properties.userId,
+          accessToken: token({
+            mode: "access",
+            type: "providerUser",
+            properties,
+            exp,
+          }),
+        }).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              ready = true
+            }),
+          ),
+          Effect.either,
+        ),
+        { signal: controller.signal },
+      )
+      const acknowledge = await subscribed.promise
+      expect(ready).toBe(false)
+      if (mode === "cancel") {
+        controller.abort()
+        await expect(result).rejects.toThrow()
+      } else {
+        acknowledge()
+        const outcome = await result
+        if (mode === "error") {
+          expect(Either.isLeft(outcome)).toBe(true)
+          if (Either.isLeft(outcome))
+            expect(outcome.left.message).toContain("Execution access denied")
+        } else {
+          expect(Either.isRight(outcome)).toBe(true)
+          if (Either.isRight(outcome)) {
+            const event = await outcome.right[Symbol.asyncIterator]().next()
+            expect(event.value?.failureReason).toBe("credit rejected")
+            await outcome.right.close()
+          }
+        }
+      }
+      await closed.promise
+    } finally {
+      controller.abort()
+      await server.stop(true)
+    }
+  },
+)

@@ -4,6 +4,7 @@ import { useState } from "react"
 import { Button } from "@pf/shadcn-components"
 import { Input } from "@/components/ui/input"
 import { getValidRedirect } from "@/lib/auth/redirect"
+import { environmentUnavailableMessage } from "@/lib/auth/session-admission-message"
 
 export function SecretLoginForm({
   enabled = false,
@@ -13,7 +14,7 @@ export function SecretLoginForm({
   redirect?: string | undefined
 }) {
   const [pending, setPending] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState<string | null>(null)
   if (!enabled) return null
   return (
     <details className="rounded-lg border p-4">
@@ -32,7 +33,7 @@ export function SecretLoginForm({
           const secret = new FormData(form).get("secret")
           form.reset()
           setPending(true)
-          setFailed(false)
+          setFailed(null)
           try {
             const response = await fetch("/api/auth/delegation", {
               method: "POST",
@@ -41,6 +42,19 @@ export function SecretLoginForm({
               credentials: "same-origin",
               cache: "no-store",
             })
+            if (response.status === 503) {
+              const result: unknown = await response.json()
+              if (
+                typeof result === "object" &&
+                result !== null &&
+                "error" in result &&
+                result.error === "environment_unavailable"
+              ) {
+                setFailed(environmentUnavailableMessage)
+                setPending(false)
+                return
+              }
+            }
             if (response.ok) {
               const destination = new URL(
                 getValidRedirect(redirect),
@@ -56,7 +70,9 @@ export function SecretLoginForm({
           } catch {
             // Errors may contain request details. Show only fixed safe copy.
           }
-          setFailed(true)
+          setFailed(
+            "Unable to log in with this secret. It may be invalid or delegated access may be unavailable.",
+          )
           setPending(false)
         }}
       >
@@ -78,8 +94,7 @@ export function SecretLoginForm({
         />
         {failed && (
           <p role="alert" className="text-sm text-destructive">
-            Unable to log in with this secret. It may be invalid or delegated
-            access may be unavailable.
+            {failed}
           </p>
         )}
         <Button type="submit" disabled={pending}>

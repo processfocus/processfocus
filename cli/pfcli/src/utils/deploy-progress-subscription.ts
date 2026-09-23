@@ -397,9 +397,7 @@ class AppSyncDeployProgressSocket {
             const error = new Error(
               message.errors[0]?.message ?? "AppSync stream failed",
             )
-            if (!connectionSettled) {
-              connectionSettled = true
-              reject(error)
+            if (rejectConnection(error)) {
               return
             }
             this.config.onError(error)
@@ -461,6 +459,7 @@ class AppSyncDeployProgressSocket {
 
 const createAppSyncDeployProgressEventSource = async (
   config: DeployProgressEventSourceConfig,
+  signal: AbortSignal,
 ): Promise<DeployProgressEventSource> => {
   const queue = new AsyncDeployProgressQueue()
   let isClosed = false
@@ -496,7 +495,20 @@ const createAppSyncDeployProgressEventSource = async (
     },
   })
 
-  await socket.connect()
+  const abort = () => {
+    isClosed = true
+    socket.disconnect()
+    queue.finish()
+  }
+  signal.throwIfAborted()
+  signal.addEventListener("abort", abort, { once: true })
+  try {
+    await socket.connect()
+  } catch (error) {
+    signal.removeEventListener("abort", abort)
+    socket.disconnect()
+    throw error
+  }
 
   return {
     [Symbol.asyncIterator]: () => queue[Symbol.asyncIterator](),
@@ -505,6 +517,7 @@ const createAppSyncDeployProgressEventSource = async (
         return
       }
       isClosed = true
+      signal.removeEventListener("abort", abort)
       socket.disconnect()
       queue.finish()
     },
@@ -515,7 +528,7 @@ export const createDeployProgressEventSource = (
   config: DeployProgressEventSourceConfig,
 ): Effect.Effect<DeployProgressEventSource, CliError> =>
   Effect.tryPromise({
-    try: () => createAppSyncDeployProgressEventSource(config),
+    try: (signal) => createAppSyncDeployProgressEventSource(config, signal),
     catch: (cause) =>
       new CliError({
         message: `Failed to subscribe to deployment progress: ${toError(cause).message}`,

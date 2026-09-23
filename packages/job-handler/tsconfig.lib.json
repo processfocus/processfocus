@@ -35,6 +35,9 @@
       "path": "../document-store-service/tsconfig.lib.json"
     },
     {
+      "path": "../db-info/tsconfig.lib.json"
+    },
+    {
       "path": "../business-metrics/tsconfig.lib.json"
     },
     {

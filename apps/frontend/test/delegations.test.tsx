@@ -4,6 +4,7 @@ import { Activity, type ComponentProps, act } from "react"
 import { type Root, createRoot, hydrateRoot } from "react-dom/client"
 import { renderToString } from "react-dom/server"
 import type { DelegationMetadata } from "../lib/auth/delegations"
+import { environmentUnavailableMessage } from "../lib/auth/session-admission-message"
 import {
   afterEach,
   beforeEach,
@@ -544,6 +545,7 @@ describe("delegation management interaction", () => {
       "success",
       "cancel",
       "failure",
+      "environment_unavailable",
       "denied",
       "stale",
     ] as const) {
@@ -606,11 +608,21 @@ describe("delegation management interaction", () => {
             ceremony.reject(new DOMException("cancelled", "NotAllowedError"))
           } else if (outcome === "failure")
             ceremony.reject(new Error("wrong owner"))
+          else if (outcome === "environment_unavailable")
+            ceremony.reject(new Error(environmentUnavailableMessage))
           else ceremony.resolve()
         })
         expect(bodies).toHaveLength(
-          outcome === "cancel" || outcome === "failure" ? 1 : 2,
+          outcome === "cancel" ||
+            outcome === "failure" ||
+            outcome === "environment_unavailable"
+            ? 1
+            : 2,
         )
+        if (outcome === "environment_unavailable") {
+          expect(container.textContent).toContain(environmentUnavailableMessage)
+          expect(container.textContent).not.toContain("Verification failed")
+        }
         if (bodies.length === 2) expect(bodies[1]).toEqual(bodies[0])
         expect(bodies[0]).toMatchObject({
           name: "preserved-name",

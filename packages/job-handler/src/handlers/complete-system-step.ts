@@ -6,6 +6,7 @@ import {
   makeBusinessCalendarService,
 } from "@pf/business-calendar"
 import { recordSuccessfulStepCompletion } from "@pf/business-metrics"
+import { withReadSnapshot } from "@pf/db-info"
 import type {
   BusinessCalendarQueries,
   CompletedJobOperations,
@@ -37,6 +38,7 @@ import {
  * If no calendar is configured, falls back to wallclock time.
  */
 const calculateStepBusinessDuration = (
+  sqlClient: SqlClient.SqlClient,
   calendarQueries: BusinessCalendarQueries["Type"],
   createdAtMs: number,
   completedAtMs: number,
@@ -44,7 +46,10 @@ const calculateStepBusinessDuration = (
 ) =>
   Effect.gen(function* () {
     // Load calendar data for the org unit
-    const calendarDataMap = yield* calendarQueries.getCalendarData([orgUnitId])
+    const calendarDataMap = yield* withReadSnapshot(
+      sqlClient,
+      calendarQueries.getCalendarData([orgUnitId]),
+    )
     const calendarData = calendarDataMap.get(orgUnitId)
 
     if (calendarData && hasCalendarConfigured(calendarData)) {
@@ -160,6 +165,7 @@ export const completeSystemStep = (params: {
 
     // Calculate business duration for the step
     const businessDurationMs = yield* calculateStepBusinessDuration(
+      sqlClient,
       calendarQueries,
       todoInfo.createdAtMs,
       completedAtMs,
@@ -315,6 +321,7 @@ export const completeAsyncSystemStep = (params: {
     const completedAtMs = DateTime.toEpochMillis(requestTime)
 
     const businessDurationMs = yield* calculateStepBusinessDuration(
+      sqlClient,
       calendarQueries,
       todoInfo.createdAtMs,
       completedAtMs,

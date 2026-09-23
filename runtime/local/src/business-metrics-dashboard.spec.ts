@@ -102,6 +102,31 @@ it("deployment panels share UTC buckets and include targets without process star
   )
   expect(breakdown?.targets[0]?.expr).toContain("[1d])[$__range:1d]")
   expect(contents).toContain(
-    "pf_business_(process_starts|step_completions|deployment_attempts)_total",
+    "pf_business_(process_starts|step_completions|deployment_attempts|external_actions)_total",
   )
+})
+
+it("keeps external action counts separate with shared scope filters and daily UTC queries", async () => {
+  const { contract, contents } = await readDashboard()
+  const externalPanels = contract.panels.filter((panel) =>
+    ["Daily external actions (UTC)", "External actions by project"].includes(
+      panel.title,
+    ),
+  )
+  expect(externalPanels).toHaveLength(2)
+  for (const panel of externalPanels) {
+    const query = panel.targets[0]?.expr
+    expect(query).toContain("pf_business_external_actions_total")
+    expect(query).toContain('pf_account_scope="customer"')
+    expect(query).toContain('pf_account_name=~"$account"')
+    expect(query).toContain('pf_project=~"$project"')
+    expect(query).toContain('pf_environment=~"$environment"')
+    expect(query).toContain("pf_action")
+    expect(query).not.toContain("identity")
+    expect(query).not.toContain("pf_trigger")
+  }
+  expect(externalPanels[0]?.targets[0]?.interval).toBe("1d")
+  expect(externalPanels[0]?.targets[0]?.expr).toContain("[1d]")
+  expect(contents).toContain("deployment_attempts|external_actions)_total")
+  expect(contents).toContain("these panels are not additive")
 })

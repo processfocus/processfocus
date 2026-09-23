@@ -1,6 +1,7 @@
 import { unlink } from "node:fs/promises"
 import * as SqlClient from "@effect/sql/SqlClient"
 import { ConfigProvider, Effect, Layer } from "effect"
+import { withReadSnapshot } from "@pf/db-info"
 import { makeTursoLive } from "../src/index"
 import { describe, expect, it } from "bun:test"
 
@@ -16,6 +17,51 @@ const cleanupDb = async (dbPath: string) => {
 }
 
 describe("makeTursoLive", () => {
+  it("keeps a read snapshot stable while another connection commits", async () => {
+    const dbPath = tempDbPath()
+    const config = Layer.setConfigProvider(
+      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    )
+    const reader = makeTursoLive().pipe(Layer.provide(config))
+    const writer = makeTursoLive().pipe(Layer.provide(config))
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql.unsafe(
+            "CREATE TABLE snapshot_value (value INTEGER NOT NULL)",
+          )
+          yield* sql.unsafe("INSERT INTO snapshot_value VALUES (1)")
+          yield* withReadSnapshot(
+            sql,
+            Effect.gen(function* () {
+              expect(
+                yield* sql.unsafe("SELECT value FROM snapshot_value"),
+              ).toEqual([{ value: 1 }])
+              // A separate runtime keeps the writer outside the reader's transaction context.
+              yield* Effect.promise(() =>
+                Effect.runPromise(
+                  Effect.gen(function* () {
+                    const sql = yield* SqlClient.SqlClient
+                    yield* sql.unsafe("UPDATE snapshot_value SET value = 2")
+                  }).pipe(Effect.provide(writer)),
+                ),
+              )
+              expect(
+                yield* sql.unsafe("SELECT value FROM snapshot_value"),
+              ).toEqual([{ value: 1 }])
+            }),
+          )
+          expect(yield* sql.unsafe("SELECT value FROM snapshot_value")).toEqual(
+            [{ value: 2 }],
+          )
+        }).pipe(Effect.provide(reader)),
+      )
+    } finally {
+      await cleanupDb(dbPath)
+    }
+  })
+
   it("uses WAL-backed transactions", async () => {
     const dbPath = tempDbPath()
     const ConfigLayer = Layer.setConfigProvider(

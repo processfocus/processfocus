@@ -2,6 +2,7 @@ import {
   WebAuthnAbortService,
   startAuthentication,
 } from "@simplewebauthn/browser"
+import { environmentUnavailableMessage } from "./session-admission-message"
 
 /** Run the existing OAuth/WebAuthn ceremony. Only the callback sets session cookies. */
 export async function authenticateWithPasskey({
@@ -82,6 +83,13 @@ export async function authenticateWithPasskey({
     cache: "no-store",
   })
   const result: unknown = await completed.json()
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "error" in result &&
+    result.error === "environment_unavailable"
+  )
+    throw new Error(environmentUnavailableMessage)
   if (
     !completed.ok ||
     typeof result !== "object" ||
