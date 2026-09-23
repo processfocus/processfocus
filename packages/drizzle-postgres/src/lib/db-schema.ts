@@ -227,6 +227,7 @@ export const processExecution = pgTable("pf_process_execution", {
   businessDuration: integer("business_duration"),
   abandonedAt: effectDateTime("abandoned_at"),
   abandonedReason: citext("abandoned_reason"),
+  notStartedReason: citext("not_started_reason"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
   createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -253,6 +254,7 @@ export const toDo = pgTable("pf_to_do", {
   itemData: jsonb("item_data").$type<Record<string, unknown> | unknown[]>(),
   barrierScheduledFlowId: varchar("barrier_scheduled_flow_id", { length: 41 }),
   completedByRoleId: varchar("completed_by_role", { length: 41 }).references(() => role.id),
+  notStartedReason: citext("not_started_reason"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
   createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -633,6 +635,21 @@ export const completedJob = pgTable("pf_completed_job", {
   updatedAtIdIdx: index("pf_completed_job_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
+export const notStartedJob = pgTable("pf_not_started_job", {
+  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `nsj-${ulid()}`),
+  queue: varchar("queue", { length: 512 }).notNull(),
+  jobId: varchar("job_id", { length: 1024 }).notNull(),
+  notStartedReason: citext("not_started_reason").notNull(),
+  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
+  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
+  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  _deleted: boolean("_deleted").notNull().default(false),
+}, (table) => ({
+  jobIdIxIdx: uniqueIndex("pf_not_started_job_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = false`),
+  updatedAtIdIdx: index("pf_not_started_job_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
 export const weeklySchedule = pgTable("pf_weekly_schedule", {
   id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `ws-${ulid()}`),
   orgUnitId: varchar("org_unit_id", { length: 41 }).notNull().references(() => orgUnit.id),
@@ -879,6 +896,8 @@ export type JobQueue = typeof jobQueue.$inferSelect
 export type NewJobQueue = typeof jobQueue.$inferInsert
 export type CompletedJob = typeof completedJob.$inferSelect
 export type NewCompletedJob = typeof completedJob.$inferInsert
+export type NotStartedJob = typeof notStartedJob.$inferSelect
+export type NewNotStartedJob = typeof notStartedJob.$inferInsert
 export type WeeklySchedule = typeof weeklySchedule.$inferSelect
 export type NewWeeklySchedule = typeof weeklySchedule.$inferInsert
 export type CalendarPeriod = typeof calendarPeriod.$inferSelect

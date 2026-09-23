@@ -58,6 +58,7 @@ export const PostgresExecutionQueriesLive = Layer.effect(
             stepPath: schema.step.path,
             completed: schema.toDo._deleted,
             failureReason: schema.toDo.failureReason,
+            notStartedReason: schema.toDo.notStartedReason,
             correctionRequiredAt: sql<
               number | null
             >`CASE WHEN ${schema.toDo.correctionRequiredAt} IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM ${schema.toDo.correctionRequiredAt}) * 1000 END`.as(
@@ -136,6 +137,7 @@ export const PostgresExecutionQueriesLive = Layer.effect(
           stepPath: row.stepPath,
           completed: row.completed,
           failureReason: row.failureReason,
+          notStartedReason: row.notStartedReason,
           correctionRequiredAt: row.correctionRequiredAt,
           correctionFailureReason: row.correctionFailureReason,
           completedByUserId: row.completedByUserId,
@@ -241,6 +243,7 @@ export const PostgresExecutionQueriesLive = Layer.effect(
               "abandoned_at_iso",
             ),
             abandonedReason: schema.processExecution.abandonedReason,
+            notStartedReason: schema.processExecution.notStartedReason,
             startedAt:
               sql<string>`TO_CHAR(${schema.processExecution.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`.as(
                 "started_at_iso",
@@ -265,6 +268,10 @@ export const PostgresExecutionQueriesLive = Layer.effect(
             startStepName: startStep.name,
             startStepPath: startStep.path,
             startStepRoleId: startStepRole.id,
+            systemStartCompleted:
+              sql<boolean>`EXISTS (SELECT 1 FROM ${schema.completedJob} WHERE ${schema.completedJob.queue} = 'system-step-execution' AND ${schema.completedJob.jobId} = 'start-' || ${schema.processExecution.id} AND ${schema.completedJob._deleted} = false)`.mapWith(
+                Boolean,
+              ),
             startStepRoleName: startStepRole.name,
             startStepRoleOrgUnitPath: startStepRoleOrgUnit.path,
             startedByRoleId: startedByRole.id,
@@ -377,13 +384,15 @@ export const PostgresExecutionQueriesLive = Layer.effect(
             // system-start failures are represented until the schema grows a
             // dedicated execution-level failure field.
             status:
-              row.abandonedAt != null
-                ? "Abandoned"
-                : row.abandonedReason != null
-                  ? "Failed"
-                  : row.finishedAt != null
-                    ? "Completed"
-                    : "Running",
+              row.notStartedReason != null
+                ? "Not started"
+                : row.abandonedAt != null
+                  ? "Abandoned"
+                  : row.abandonedReason != null
+                    ? "Failed"
+                    : row.finishedAt != null
+                      ? "Completed"
+                      : "Running",
             startedAt: row.startedAt,
             finishedAt: row.finishedAt,
             durationMs:
@@ -396,6 +405,7 @@ export const PostgresExecutionQueriesLive = Layer.effect(
             startStepName: row.startStepName,
             startStepPath: row.startStepPath,
             startStepRoleId: row.startStepRoleId,
+            systemStartCompleted: row.systemStartCompleted,
             startStepRoleName: row.startStepRoleName,
             startStepRoleOrgUnitPath: row.startStepRoleOrgUnitPath,
             startedByRoleId: row.startedByRoleId,
@@ -419,6 +429,7 @@ export const PostgresExecutionQueriesLive = Layer.effect(
             typicalDurationMaxMs: row.typicalDurationMaxMs,
             processOrgUnitId: row.processOrgUnitId,
             abandonedReason: row.abandonedReason,
+            notStartedReason: row.notStartedReason,
           }),
         )
       })

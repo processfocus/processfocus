@@ -26,16 +26,26 @@ const manifest = () => ({
   dependencies: { "@processfocus/runtime": RELEASE_VERSION },
 })
 
-test("the initial fixed group contains exactly the ten issue packages", () => {
-  expect(RELEASE_PACKAGES).toHaveLength(10)
+test("the fixed group contains the publication packages", () => {
+  expect(RELEASE_PACKAGES).toEqual([
+    "processfocus",
+    "@processfocus/runtime",
+    "@processfocus/runtime-local",
+    "@processfocus/cli",
+    "@processfocus/pforg",
+    "@processfocus/hosting-contract",
+    "@processfocus/plugin-aws-lambda",
+    "@processfocus/plugin-docker",
+    "@processfocus/plugin-google-drive",
+    "@processfocus/plugin-posthog",
+    "@processfocus/plugin-resend",
+    "@processfocus/plugin-xero",
+  ])
   expect(Object.keys(releaseConfiguration.groups)).toEqual(["public"])
   expect(releaseConfiguration.groups.public.projectsRelationship).toBe("fixed")
-  expect(releaseConfiguration.groups.public.projects).not.toContain(
-    "@processfocus/pforg",
-  )
-  expect(releaseConfiguration.groups.public.projects).not.toContain(
-    "@processfocus/plugin-xero",
-  )
+  expect(releaseConfiguration.groups.public.projects).toEqual([
+    ...RELEASE_PACKAGES,
+  ])
   assertReleaseManifest(manifest(), "processfocus")
 })
 
@@ -48,7 +58,11 @@ test("packed manifests fail closed on nonmembers, tags, private packages and dep
     { dependencies: { "@pf/process": "1.0.0" } },
     { dependencies: { "@processfocus/runtime": "workspace:*" } },
     { peerDependencies: { "@processfocus/runtime": "^0.1.0" } },
-    { optionalDependencies: { "@processfocus/plugin-xero": RELEASE_VERSION } },
+    {
+      optionalDependencies: {
+        "@processfocus/not-in-release": RELEASE_VERSION,
+      },
+    },
     { dependencies: { outside: "file:../outside" } },
   ])
     expect(() =>
@@ -127,6 +141,9 @@ test("PRs cannot reach OIDC and publication requires an explicit protected opt-i
     /pull_request_target|secrets\.|id-token: write|secrets: inherit/,
   )
   expect(release).toContain("environment: npm-next")
+  expect(release).toContain(
+    "is not on npm, so trusted publishing is not configured",
+  )
   expect(release).toContain("github.ref == 'refs/heads/trunk'")
   expect(release).not.toContain("actions/checkout")
   expect(release).not.toContain("bun install")

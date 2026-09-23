@@ -9,9 +9,9 @@ Use Bun 1.4.2 and Node.js 26 (verified on Linux with Node 26.3.1).
 Install the fixed release group in your organisation project:
 
 ```bash
-bun add @processfocus/cli@0.1.0-next.0 \
-  @processfocus/runtime-local@0.1.0-next.0 \
-  processfocus@0.1.0-next.0
+bun add @processfocus/cli@0.1.0-next.1 \
+  @processfocus/runtime-local@0.1.0-next.1 \
+  processfocus@0.1.0-next.1
 ```
 
 Define standard project scripts:

@@ -1,6 +1,6 @@
 {
   "name": "@processfocus/runtime-local",
-  "version": "0.1.0-next.0",
+  "version": "0.1.0-next.1",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",
@@ -27,8 +27,8 @@
     "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
     "@opentelemetry/sdk-metrics": "^2.11.0",
     "@opentelemetry/sdk-trace-base": "^2.11.0",
-    "@processfocus/cli": "0.1.0-next.0",
-    "@processfocus/runtime": "0.1.0-next.0",
+    "@processfocus/cli": "0.1.0-next.1",
+    "@processfocus/runtime": "0.1.0-next.1",
     "@tursodatabase/database": "0.7.2",
     "@tursodatabase/serverless": "1.4.0",
     "@tursodatabase/sync": "0.7.2",

@@ -45,7 +45,9 @@ interface ExecutionStepData {
     | "Potential"
     | "Failed"
     | "Correction Required"
+    | "Not started"
   failureReason: string | null
+  notStartedReason?: string | null
   roleId: string | null
   roleName: string | null
   roleOrgUnitPath: string | null // org unit path of the role (for authorization)
@@ -73,7 +75,12 @@ export interface AssembledExecution {
   slaTargets: SlaTargets
 }
 
-export type ExecutionStatus = "Running" | "Completed" | "Failed" | "Abandoned"
+export type ExecutionStatus =
+  | "Running"
+  | "Completed"
+  | "Failed"
+  | "Abandoned"
+  | "Not started"
 
 type MaybeEffect<T> = T | Effect.Effect<T, unknown, unknown>
 
@@ -224,6 +231,8 @@ export const assembleSteps = (
         return "Completed"
       case "Failed":
         return "Failed"
+      case "Not started":
+        return execution.systemStartCompleted ? "Completed" : "Not started"
       case "Abandoned":
         // Step status has no Abandoned variant; use Failed so abandoned
         // system-start executions do not look waiting or completed.
@@ -266,6 +275,10 @@ export const assembleSteps = (
     status: startStepStatus,
     failureReason:
       startStepStatus === "Failed" ? execution.abandonedReason : null,
+    notStartedReason:
+      startStepStatus === "Not started"
+        ? (execution.notStartedReason ?? null)
+        : null,
     roleId: execution.startStepRoleId,
     roleName: execution.startStepRoleName,
     roleOrgUnitPath: execution.startStepRoleOrgUnitPath,
@@ -295,7 +308,7 @@ export const assembleSteps = (
 
   // 1. Add completed steps (exclude those with a failureReason, e.g. abandoned todos)
   for (const todo of executionTodos.filter(
-    (t) => t.completed && t.failureReason == null,
+    (t) => t.completed && t.failureReason == null && t.notStartedReason == null,
   )) {
     addTodoStep(
       {
@@ -330,15 +343,18 @@ export const assembleSteps = (
   }
 
   // 2. Add failed steps (includes abandoned todos that have both _deleted and failureReason)
-  const failedTodos = executionTodos.filter((t) => t.failureReason != null)
+  const failedTodos = executionTodos.filter(
+    (t) => t.failureReason != null || t.notStartedReason != null,
+  )
   for (const todo of failedTodos) {
     addTodoStep(
       {
         id: todo.todoId,
         name: todo.stepName,
         path: todo.stepPath,
-        status: "Failed",
+        status: todo.notStartedReason != null ? "Not started" : "Failed",
         failureReason: todo.failureReason,
+        notStartedReason: todo.notStartedReason ?? null,
         roleId: todo.roleId,
         roleName: todo.roleName,
         roleOrgUnitPath: todo.roleOrgUnitPath,
@@ -397,7 +413,10 @@ export const assembleSteps = (
 
   const waitingTodos = executionTodos.filter(
     (t) =>
-      !t.completed && t.failureReason == null && t.correctionRequiredAt == null,
+      !t.completed &&
+      t.failureReason == null &&
+      t.notStartedReason == null &&
+      t.correctionRequiredAt == null,
   )
   for (const todo of waitingTodos) {
     addTodoStep(
@@ -437,6 +456,7 @@ export const assembleSteps = (
     execution.status !== "Completed" &&
     execution.status !== "Failed" &&
     execution.status !== "Abandoned" &&
+    execution.status !== "Not started" &&
     (!hasFailedSteps || activeTodos.length > 0)
   ) {
     let startPaths: string[] = []
@@ -509,19 +529,21 @@ export const assembleSteps = (
   // - Else, if status is "Running" but no waiting todos and no potential steps,
   //   it's actually completed (handles old data without finishedAt set)
   const correctedStatus: ExecutionStatus =
-    execution.status === "Abandoned"
-      ? "Abandoned"
-      : execution.status === "Completed"
-        ? "Completed"
-        : execution.status === "Failed"
-          ? "Failed"
-          : hasFailedSteps && activeTodos.length === 0
+    execution.status === "Not started"
+      ? "Not started"
+      : execution.status === "Abandoned"
+        ? "Abandoned"
+        : execution.status === "Completed"
+          ? "Completed"
+          : execution.status === "Failed"
             ? "Failed"
-            : activeTodos.length === 0 &&
-                !hasPotentialSteps &&
-                execution.startStepRoleId != null
-              ? "Completed"
-              : "Running"
+            : hasFailedSteps && activeTodos.length === 0
+              ? "Failed"
+              : activeTodos.length === 0 &&
+                  !hasPotentialSteps &&
+                  execution.startStepRoleId != null
+                ? "Completed"
+                : "Running"
 
   return { steps, correctedStatus }
 }
@@ -625,6 +647,7 @@ const mapToGraphql = (
       (execution.status === "Failed" ? execution.abandonedReason : null),
     abandonedReason:
       execution.status === "Abandoned" ? execution.abandonedReason : null,
+    notStartedReason: execution.notStartedReason ?? null,
     startedAt: execution.startedAt,
     finishedAt: execution.finishedAt,
     completedSteps: assembled.completedSteps,
@@ -643,6 +666,7 @@ const mapToGraphql = (
       path: step.path,
       status: step.status,
       failureReason: step.failureReason,
+      notStartedReason: step.notStartedReason ?? null,
       role: step.completingRoleId
         ? {
             id: step.completingRoleId,

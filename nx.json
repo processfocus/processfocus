@@ -162,12 +162,14 @@
           "@processfocus/runtime",
           "@processfocus/runtime-local",
           "@processfocus/cli",
+          "@processfocus/pforg",
           "@processfocus/hosting-contract",
           "@processfocus/plugin-aws-lambda",
           "@processfocus/plugin-docker",
           "@processfocus/plugin-google-drive",
           "@processfocus/plugin-posthog",
-          "@processfocus/plugin-resend"
+          "@processfocus/plugin-resend",
+          "@processfocus/plugin-xero"
         ],
         "projectsRelationship": "fixed"
       }

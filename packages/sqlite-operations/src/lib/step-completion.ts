@@ -623,6 +623,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               ...(completedByRoleId !== undefined ? { completedByRoleId } : {}),
               businessDuration: businessDurationMs,
               failureReason: null,
+              notStartedReason: null,
               // Clear the correction state bundle together on completion.
               correctionRequiredAt: null,
               correctionFailureReason: null,
@@ -746,6 +747,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               completedByRoleId: input.completedByRoleId,
               businessDuration: input.businessDurationMs,
               failureReason: null,
+              notStartedReason: null,
               correctionRequiredAt: null,
               correctionFailureReason: null,
               correctionInvitationAttemptId: null,
@@ -808,6 +810,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               completedByUserId: userId,
               businessDuration: businessDurationMs,
               failureReason: null,
+              notStartedReason: null,
               // Clear the correction state bundle together on completion.
               correctionRequiredAt: null,
               correctionFailureReason: null,
@@ -834,6 +837,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .update(schema.toDo)
             .set({
               failureReason,
+              notStartedReason: null,
               // Clear stale correction state when this Todo becomes failed.
               correctionRequiredAt: null,
               correctionFailureReason: null,
@@ -857,6 +861,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .update(schema.toDo)
             .set({
               failureReason,
+              notStartedReason: null,
               updatedAt: requestTime,
               updatedBy: userDetails.by,
             })
@@ -1244,6 +1249,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .update(schema.toDo)
             .set({
               failureReason: null,
+              notStartedReason: null,
               updatedAt: requestTime,
               updatedBy: userDetails.by,
             })

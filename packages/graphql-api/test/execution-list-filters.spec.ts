@@ -13,6 +13,7 @@ describe("parseExecutionListStatus", () => {
       "Completed",
       "Failed",
       "Abandoned",
+      "Not started",
     ] satisfies readonly ExecutionListStatus[]
 
     for (const status of statuses) {

@@ -1,6 +1,6 @@
 {
   "name": "@processfocus/plugin-google-drive",
-  "version": "0.1.0-next.0",
+  "version": "0.1.0-next.1",
   "private": true,
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.md",

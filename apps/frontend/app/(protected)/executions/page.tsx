@@ -20,12 +20,24 @@ import {
 import { type Execution, executions as mockExecutions } from "@/lib/mock-data"
 import { cn } from "@/lib/utils"
 
-type ExecutionStatus = "Running" | "Completed" | "Failed" | "Abandoned"
-type ExecutionTabKey = "in-progress" | "completed" | "failed" | "all"
+type ExecutionStatus =
+  | "Running"
+  | "Completed"
+  | "Failed"
+  | "Abandoned"
+  | "Not started"
+type ExecutionTabKey =
+  | "in-progress"
+  | "completed"
+  | "failed"
+  | "not-started"
+  | "all"
 type MockExecutionView = "timeline" | "kanban"
 type MockExecutionTabKey = "in-progress" | "completed" | "failed" | "all"
 
 const executionStatusTheme: Record<ExecutionStatus, string> = {
+  "Not started":
+    "bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30",
   Running:
     "bg-sky-100 text-sky-700 border border-sky-200 dark:bg-sky-500/10 dark:text-sky-300 dark:border-sky-500/30",
   Completed:
@@ -58,6 +70,7 @@ const mockExecutionTabFilters: Record<
 }
 
 const executionTabKeys = [
+  "not-started",
   "in-progress",
   "completed",
   "failed",
@@ -162,6 +175,7 @@ function ExecutionsPageInner({
         canRestartExecution: execution.canRestartExecution ?? false,
         status: execution.status,
         failureReason: execution.failureReason,
+        notStartedReason: execution.notStartedReason,
         abandonedReason: execution.abandonedReason,
         startedAt: execution.startedAt,
         finishedAt: execution.finishedAt,
@@ -195,6 +209,8 @@ function ExecutionsPageInner({
   // Filter based on tab
   const filtered = (() => {
     switch (tab) {
+      case "not-started":
+        return executions.filter((e) => e.status === "Not started")
       case "in-progress":
         return executions.filter((e) => e.status === "Running")
       case "completed":
@@ -305,6 +321,14 @@ function ExecutionsPageInner({
               count={executions.length}
               active={tab === "all"}
               onClick={() => handleSelectTab("all")}
+            />
+            <TabPill
+              label="Not started"
+              count={
+                executions.filter((e) => e.status === "Not started").length
+              }
+              active={tab === "not-started"}
+              onClick={() => handleSelectTab("not-started")}
             />
           </div>
         </div>
@@ -467,7 +491,9 @@ interface ExecutionStep {
     | "Potential"
     | "Failed"
     | "Correction Required"
+    | "Not started"
   readonly failureReason?: string | undefined
+  readonly notStartedReason?: string | undefined
   readonly role?:
     | {
         readonly id: string
@@ -499,8 +525,9 @@ interface ExecutionData {
   processPath: string
   canAbandonExecution: boolean
   canRestartExecution: boolean
-  status: "Running" | "Completed" | "Failed" | "Abandoned"
+  status: ExecutionStatus
   failureReason?: string | undefined
+  notStartedReason?: string | undefined
   abandonedReason?: string | undefined
   startedAt: string // ISO date string
   finishedAt: string | undefined // ISO date string
@@ -603,6 +630,12 @@ function LiveExecutionDetail({ execution }: { execution: ExecutionData }) {
       </div>
 
       {/* Progress */}
+      {execution.status === "Not started" && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200">
+          <h4 className="text-sm font-semibold">Not started</h4>
+          <p className="mt-2 text-sm">{execution.notStartedReason}</p>
+        </div>
+      )}
       {execution.status === "Failed" &&
         (execution.failureReason || failedStep) && (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-200">
@@ -750,6 +783,11 @@ function LiveExecutionDetail({ execution }: { execution: ExecutionData }) {
                       {step.failureReason}
                     </p>
                   )}
+                  {step.status === "Not started" && (
+                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                      Not started: {step.notStartedReason}
+                    </p>
+                  )}
                   {step.status === "Correction Required" &&
                     step.failureReason && (
                       <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
@@ -757,14 +795,16 @@ function LiveExecutionDetail({ execution }: { execution: ExecutionData }) {
                       </p>
                     )}
                   <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                    {step.startedAt && (
+                    {step.startedAt && step.status !== "Not started" && (
                       <span>Started {formatRelativeTime(step.startedAt)}</span>
                     )}
                     {step.completedAt && (
                       <span>
-                        {step.status === "Failed"
-                          ? `Failed ${formatRelativeTime(step.completedAt)}`
-                          : `Completed ${formatRelativeTime(step.completedAt)}`}
+                        {step.status === "Not started"
+                          ? `Not started ${formatRelativeTime(step.completedAt)}`
+                          : step.status === "Failed"
+                            ? `Failed ${formatRelativeTime(step.completedAt)}`
+                            : `Completed ${formatRelativeTime(step.completedAt)}`}
                       </span>
                     )}
                   </div>
@@ -827,9 +867,11 @@ function LiveExecutionDetail({ execution }: { execution: ExecutionData }) {
               <dt className="text-xs tracking-wide text-slate-400 uppercase dark:text-slate-500">
                 {execution.status === "Abandoned"
                   ? "Abandoned"
-                  : execution.finishedAt
-                    ? "Completed"
-                    : "Estimated completion"}
+                  : execution.status === "Not started"
+                    ? "Not started"
+                    : execution.finishedAt
+                      ? "Completed"
+                      : "Estimated completion"}
               </dt>
               <dd>
                 {execution.finishedAt

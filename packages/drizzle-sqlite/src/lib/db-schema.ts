@@ -236,6 +236,7 @@ export const processExecution = sqliteTable("pf_process_execution", {
   businessDuration: integer("business_duration"),
   abandonedAt: effectDateTime("abandoned_at"),
   abandonedReason: citextColumn("abandoned_reason"),
+  notStartedReason: citextColumn("not_started_reason"),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -262,6 +263,7 @@ export const toDo = sqliteTable("pf_to_do", {
   itemData: jsonColumn("item_data"),
   barrierScheduledFlowId: text("barrier_scheduled_flow_id", { length: 41 }),
   completedByRoleId: text("completed_by_role", { length: 41 }).references(() => role.id),
+  notStartedReason: citextColumn("not_started_reason"),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -642,6 +644,21 @@ export const completedJob = sqliteTable("pf_completed_job", {
   updatedAtIdIdx: index("pf_completed_job_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
+export const notStartedJob = sqliteTable("pf_not_started_job", {
+  id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `nsj-${ulid()}`),
+  queue: text("queue", { length: 512 }).notNull(),
+  jobId: text("job_id", { length: 1024 }).notNull(),
+  notStartedReason: citextColumn("not_started_reason").notNull(),
+  createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
+  createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
+  updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
+}, (table) => ({
+  jobIdIxIdx: uniqueIndex("pf_not_started_job_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = 0`),
+  updatedAtIdIdx: index("pf_not_started_job_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
 export const weeklySchedule = sqliteTable("pf_weekly_schedule", {
   id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `ws-${ulid()}`),
   orgUnitId: text("org_unit_id", { length: 41 }).notNull().references(() => orgUnit.id),
@@ -888,6 +905,8 @@ export type JobQueue = typeof jobQueue.$inferSelect
 export type NewJobQueue = typeof jobQueue.$inferInsert
 export type CompletedJob = typeof completedJob.$inferSelect
 export type NewCompletedJob = typeof completedJob.$inferInsert
+export type NotStartedJob = typeof notStartedJob.$inferSelect
+export type NewNotStartedJob = typeof notStartedJob.$inferInsert
 export type WeeklySchedule = typeof weeklySchedule.$inferSelect
 export type NewWeeklySchedule = typeof weeklySchedule.$inferInsert
 export type CalendarPeriod = typeof calendarPeriod.$inferSelect

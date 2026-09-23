@@ -179,6 +179,11 @@ BEFORE UPDATE ON "pf_completed_job"
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
+CREATE TRIGGER pf_not_started_job_updated_at_trigger
+BEFORE UPDATE ON "pf_not_started_job"
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+--> statement-breakpoint
 CREATE TRIGGER pf_weekly_schedule_updated_at_trigger
 BEFORE UPDATE ON "pf_weekly_schedule"
 FOR EACH ROW
