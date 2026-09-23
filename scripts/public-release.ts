@@ -175,7 +175,7 @@ export const prepareRelease = (output: string): void => {
       2,
     ),
   )
-  console.info("Installing all ten tarballs outside the workspace")
+  console.info(`Installing ${packages.length} tarballs outside the workspace`)
   writeFileSync(
     join(output, "consumer-install.txt"),
     run(["bun", "install", "--ignore-scripts"], consumer),

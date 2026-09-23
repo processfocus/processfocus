@@ -13,11 +13,12 @@ patterns are a regression guard, not a replacement for security review.
 Third-party dependency license approval remains a human review of the retained
 dependency closure; the automatic license check covers first-party packages.
 
-`tools/public-release/policy.ts` defines the one fixed Nx Release group: exactly
-the ten packages listed in #2483. Xero and pforg are outside this first release.
+`tools/public-release/policy.ts` defines the one fixed Nx Release group:
+`RELEASE_PACKAGES`. #2483 started with ten packages. `@processfocus/pforg` and
+`@processfocus/plugin-xero` joined that group for `0.1.0-next.1`.
 Nx configuration is added to the exported workspace, not the private repository's
-release surface. The only accepted version is `0.1.0-next.0`, with public access
-and the `next` tag. Source manifests already declare that initial version;
+release surface. The only accepted version is `RELEASE_VERSION`, with public access
+and the `next` tag. Source manifests declare that same version;
 Nx Release plans it without writing versions, Git tags, commits, or changelogs.
 Existing pack targets rewrite workspace dependencies and inspect their output.
 The release guard checks every internal runtime/peer/optional dependency against
@@ -48,9 +49,10 @@ protected trunk, with three modes:
   successful package publication or provenance generation.
 - `rehearse`: complete CI, build and pack once, then download the same run's
   artifact in the approved job and perform `npm publish --dry-run`.
-- `publish`: perform the rehearsal, reject the entire group before publishing
-  if any version already exists or its registry lookup fails, then publish those
-  same tarballs with `--ignore-scripts --access public --tag next --provenance`.
+- `publish`: build and pack on that run, reject the entire group before publishing
+  if any version already exists or its registry lookup fails, then publish that
+  run's tarballs with `--ignore-scripts --access public --tag next --provenance`.
+  It does not reuse an earlier rehearse artifact.
 
 Neither privileged job checks out source, installs dependencies, rebuilds,
 repacks, or executes package lifecycle scripts. There is no GitHub release or
@@ -69,9 +71,11 @@ Before a future, separately authorized publication:
    Berend may approve a manually dispatched run that he started. Required
    environment approval remains enabled; no administrator bypass is needed.
 2. Complete legal/security/source-snapshot approvals and human npm bootstrap
-   for all ten names. Do not place npm tokens in repository or environment
-   secrets. Configure each npm trusted publisher for the final repository,
-   `public-release.yml`, and environment `npm-next`.
+   for every name in `RELEASE_PACKAGES`. A name that is not yet on npm cannot
+   receive a trusted publisher, and the publish job refuses the whole group
+   before uploading any tarball. Do not place npm tokens in repository or
+   environment secrets. Configure each npm trusted publisher for the final
+   repository, `public-release.yml`, and environment `npm-next`.
 3. Confirm the public source repository matches each manifest's `repository`.
    npm provenance requires public source; a private staging dry run cannot
    verify provenance issuance. Node 26 supplies an OIDC-capable npm; verify

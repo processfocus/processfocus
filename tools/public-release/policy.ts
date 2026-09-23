@@ -1,20 +1,22 @@
 import type { NxReleaseConfiguration } from "nx/src/config/nx-json"
 
-// Deliberately narrower than the source/publication boundary: #2483's first ten.
+// #2483 started with ten packages. pforg and Xero joined for 0.1.0-next.1.
 export const RELEASE_PACKAGES: readonly string[] = [
   "processfocus",
   "@processfocus/runtime",
   "@processfocus/runtime-local",
   "@processfocus/cli",
+  "@processfocus/pforg",
   "@processfocus/hosting-contract",
   "@processfocus/plugin-aws-lambda",
   "@processfocus/plugin-docker",
   "@processfocus/plugin-google-drive",
   "@processfocus/plugin-posthog",
   "@processfocus/plugin-resend",
+  "@processfocus/plugin-xero",
 ]
 
-export const RELEASE_VERSION = "0.1.0-next.0"
+export const RELEASE_VERSION = "0.1.0-next.1"
 export const RELEASE_TAG = "next"
 export const releaseConfiguration = {
   groups: {

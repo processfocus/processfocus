@@ -28,9 +28,10 @@ jobs:
     env:
       NPM_PACKAGES: >-
         ["processfocus", "@processfocus/runtime", "@processfocus/runtime-local",
-        "@processfocus/cli", "@processfocus/hosting-contract", "@processfocus/plugin-aws-lambda",
-        "@processfocus/plugin-docker", "@processfocus/plugin-google-drive",
-        "@processfocus/plugin-posthog", "@processfocus/plugin-resend"]
+        "@processfocus/cli", "@processfocus/pforg", "@processfocus/hosting-contract",
+        "@processfocus/plugin-aws-lambda", "@processfocus/plugin-docker",
+        "@processfocus/plugin-google-drive", "@processfocus/plugin-posthog",
+        "@processfocus/plugin-resend", "@processfocus/plugin-xero"]
     steps:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -96,7 +97,14 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum --check SHA256SUMS
-          test "$(find . -maxdepth 1 -name '*.tgz' | wc -l)" -eq 10
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readdirSync, readFileSync } from 'node:fs';
+          const receipt = JSON.parse(readFileSync('release.json', 'utf8'));
+          const tarballs = readdirSync('.').filter((name) => name.endsWith('.tgz')).sort();
+          const expected = receipt.packages.map((pkg) => pkg.tarball).sort();
+          assert.deepEqual(tarballs, expected);
+          NODE
           for package in ./*.tgz; do
             npm publish "$package" --dry-run --ignore-scripts --access public --tag next
           done
@@ -112,7 +120,12 @@ jobs:
           const receipt = JSON.parse(readFileSync('release.json', 'utf8'));
           assert.equal(receipt.sourceCommit, process.env.GITHUB_SHA);
           for (const { name, manifest } of receipt.packages) {
-            const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(manifest.version)}`, {
+            const encodedName = encodeURIComponent(name);
+            const packageDocument = await fetch(`https://registry.npmjs.org/${encodedName}`, {
+              signal: AbortSignal.timeout(30_000),
+            });
+            assert.equal(packageDocument.status, 200, `Refusing publication: ${name} is not on npm, so trusted publishing is not configured (${packageDocument.status})`);
+            const response = await fetch(`https://registry.npmjs.org/${encodedName}/${encodeURIComponent(manifest.version)}`, {
               signal: AbortSignal.timeout(30_000),
             });
             assert.equal(response.status, 404, `Refusing publication: ${name}@${manifest.version} already exists or registry check failed (${response.status})`);

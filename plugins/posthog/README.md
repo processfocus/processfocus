@@ -19,7 +19,7 @@ This package is part of the workspace. Add it to your org dependencies:
 ```json
 {
   "dependencies": {
-    "@processfocus/plugin-posthog": "0.1.0-next.0"
+    "@processfocus/plugin-posthog": "0.1.0-next.1"
   }
 }
 ```
