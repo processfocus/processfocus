@@ -101,3 +101,130 @@ Then(
     assert.notStrictEqual(previous.id, latest.id)
   },
 )
+
+const EXECUTION_FIELDS = `
+  id status failureReason abandonedReason finishedAt
+  canAbandonExecution canRestartExecution
+  steps { name path status failureReason }
+`
+
+interface ExecutionDocument {
+  readonly id: string
+  readonly status: string
+  readonly failureReason: string | null
+  readonly abandonedReason: string | null
+  readonly finishedAt: string | null
+  readonly canAbandonExecution: boolean
+  readonly canRestartExecution: boolean
+  readonly steps: readonly {
+    readonly name: string
+    readonly path: string
+    readonly status: string
+    readonly failureReason: string | null
+  }[]
+}
+
+Then(
+  "I can read the started Execution with its persisted details and capabilities",
+  async function (this: TestWorld) {
+    assert.ok(this.startProcessResult)
+    const id = this.startProcessResult.executionId
+    const result = await this.executeGraphQL<{
+      execution: ExecutionDocument | null
+      pullExecution: { documents: ExecutionDocument[] }
+    }>(
+      `query Execution($id: ID!) {
+      execution(id: $id) { ${EXECUTION_FIELDS} }
+      pullExecution(limit: 100) { documents { ${EXECUTION_FIELDS} } }
+    }`,
+      { id },
+    )
+    assert.ok(result.execution)
+    assert.strictEqual(result.execution.id, id)
+    assert.strictEqual(result.execution.status, "Running")
+    // Local e2e imports a disposable organisation that permits this provider
+    // user to abandon purchase-request steps. Deployed demo policy does not,
+    // so false is the authorized projection there.
+    const canAbandonExecution = process.env["BASE_URL"] === undefined
+    assert.strictEqual(
+      result.execution.canAbandonExecution,
+      canAbandonExecution,
+    )
+    assert.strictEqual(result.execution.canRestartExecution, false)
+    assert.strictEqual(result.execution.failureReason, null)
+    assert.strictEqual(result.execution.abandonedReason, null)
+    assert.strictEqual(result.execution.finishedAt, null)
+    assert.ok(
+      result.execution.steps.some((step) => step.status === "Completed"),
+    )
+    assert.ok(result.execution.steps.some((step) => step.status === "Waiting"))
+    assert.deepStrictEqual(
+      result.execution,
+      result.pullExecution.documents.find((doc) => doc.id === id),
+    )
+  },
+)
+
+Then(
+  "the started Execution is not accessible by id",
+  async function (this: TestWorld) {
+    assert.ok(this.startProcessResult)
+    const result = await this.executeGraphQL<{
+      execution: ExecutionDocument | null
+    }>(
+      `query Execution($id: ID!) { execution(id: $id) { ${EXECUTION_FIELDS} } }`,
+      { id: this.startProcessResult.executionId },
+    )
+    assert.strictEqual(result.execution, null)
+  },
+)
+
+Then("an unknown Execution id returns null", async function (this: TestWorld) {
+  const result = await this.executeGraphQL<{
+    execution: ExecutionDocument | null
+  }>(`query { execution(id: "unknown-execution") { ${EXECUTION_FIELDS} } }`)
+  assert.strictEqual(result.execution, null)
+})
+
+Then(
+  "the single Execution query requires an id and the list query has no id argument",
+  async function (this: TestWorld) {
+    const result = await this.executeGraphQL<{
+      __type: {
+        fields: {
+          name: string
+          type: { kind: string; name: string | null }
+          args: {
+            name: string
+            type: { kind: string; ofType: { name: string } | null }
+          }[]
+        }[]
+      }
+    }>(`query {
+      __type(name: "Query") {
+        fields { name type { kind name } args { name type { kind ofType { name } } } }
+      }
+    }`)
+    const execution = result.__type.fields.find(
+      (field) => field.name === "execution",
+    )
+    assert.ok(execution)
+    assert.deepStrictEqual(execution.type, {
+      kind: "OBJECT",
+      name: "Execution",
+    })
+    assert.deepStrictEqual(execution.args, [
+      { name: "id", type: { kind: "NON_NULL", ofType: { name: "ID" } } },
+    ])
+    const executions = result.__type.fields.find(
+      (field) => field.name === "executions",
+    )
+    assert.ok(executions)
+    assert.deepStrictEqual(executions.args.map((arg) => arg.name).toSorted(), [
+      "limit",
+      "page",
+      "processPath",
+      "status",
+    ])
+  },
+)

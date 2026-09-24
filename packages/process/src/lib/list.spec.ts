@@ -2,6 +2,7 @@ import { desc, sql } from "drizzle-orm"
 import { PgDialect, integer, pgTable, text } from "drizzle-orm/pg-core"
 import { Effect, Schema } from "effect"
 import { MetricBreakdown } from "@pf/form-schema"
+import { Form } from "./form"
 import { List, ListSortable, ListVisibleInList } from "./list"
 import {
   type ListQuerySortExpression,
@@ -14,6 +15,7 @@ import {
 import { OrgUnit } from "./org-unit"
 import { normalizePath, pathToPascalCase } from "./org-utils"
 import { Organisation } from "./organisation"
+import { Process } from "./process"
 import { Role } from "./role"
 import { describe, expect, it } from "bun:test"
 
@@ -718,5 +720,53 @@ describe("listQueryOrderBy", () => {
     expect(() =>
       listQuerySelectedSortFields(fields, { caseInsensitive: ["missing"] }),
     ).toThrow(ListQuerySortFieldNotFoundError)
+  })
+})
+
+describe("List process-start button", () => {
+  it("derives the label and start path from a configured process", () => {
+    const org = new Organisation({ name: "Test" })
+    const role = new Role(org, "viewer", { name: "Viewer" })
+    const process = new Process(org, "sign-in", {
+      name: "Sign-in",
+      purpose: "Record attendance",
+    })
+    const form = new Form(process, "Choose child", {
+      name: "Choose child",
+      role,
+      form: () => ({ child: Schema.String }),
+    })
+    process.start(form).end()
+    const list = new List(org, "attendance", {
+      name: "Attendance",
+      roles: [role],
+      output: { child: Schema.String },
+      query: () => Effect.succeed({ items: [], totalCount: 0 }),
+      startProcess: process,
+    })
+    expect(list.startProcess).toEqual({
+      path: "/sign-in",
+      name: "Sign-in",
+      startStepPath: "/sign-in/Choose child",
+    })
+  })
+
+  it("rejects a process without a start form instead of publishing a broken link", () => {
+    const org = new Organisation({ name: "Test" })
+    const role = new Role(org, "viewer", { name: "Viewer" })
+    const process = new Process(org, "unfinished", {
+      name: "Unfinished",
+      purpose: "Test",
+    })
+    expect(
+      () =>
+        new List(org, "attendance", {
+          name: "Attendance",
+          roles: [role],
+          output: { child: Schema.String },
+          query: () => Effect.succeed({ items: [], totalCount: 0 }),
+          startProcess: process,
+        }),
+    ).toThrow("exactly one start form")
   })
 })

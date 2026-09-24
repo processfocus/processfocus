@@ -773,6 +773,14 @@ const validateFormRuleTargets = (
  */
 export type Summary = Record<string, string>
 
+/** Client-safe rejection from an authored form submission callback. */
+export class FormSubmissionError extends Data.TaggedError(
+  "FormSubmissionError",
+)<{
+  readonly field: string
+  readonly message: string
+}> {}
+
 export interface FormEmbedConfig {
   readonly sites: readonly string[]
   readonly thankYou: string
@@ -1123,6 +1131,15 @@ interface FormStepPropsBase<
   ) => AssigneeResult
 
   /**
+   * Persist domain data after validation, inside the submission transaction.
+   * Failure rolls back submission. Completion retries can rerun this callback:
+   * use transactional database writes, never irreversible external effects.
+   */
+  readonly onSubmit?: (
+    input: InferFormSchemaType<TInput>,
+  ) => Effect.Effect<void, FormSubmissionError, unknown>
+
+  /**
    * Optional struct-level validation that runs after individual field
    * validation during schema decode. Receives the flat decoded struct
    * (wrapper fields are flattened), so it can perform cross-field checks.
@@ -1294,6 +1311,13 @@ export class Form<
     item: TItem,
   ) => TInput
 
+  private readonly _onSubmit: FormProps<
+    TState,
+    TSteps,
+    TInput,
+    TItem
+  >["onSubmit"]
+
   /**
    * The summary function, stored for computing summary from process state.
    */
@@ -1418,6 +1442,7 @@ export class Form<
 
     // Build validation schema: struct of fields, optionally refined
     const struct = Schema.Struct(this._formFields)
+    this._onSubmit = props.onSubmit
     this._schema = props.validate
       ? // biome-ignore lint/suspicious/noExplicitAny: Struct.Type<TInput> is structurally identical to filterEffect's inferred type
         struct.pipe(Schema.filterEffect(props.validate as any))
@@ -1562,6 +1587,13 @@ export class Form<
    */
   override get outputSchema(): Schema.Schema.Any {
     return this._schema
+  }
+
+  /** Invoke only after the runtime has validated and authorized the submission. */
+  executeSubmit(
+    input: InferFormSchemaType<TInput>,
+  ): Effect.Effect<void, FormSubmissionError, unknown> {
+    return Effect.suspend(() => this._onSubmit?.(input) ?? Effect.void)
   }
 
   /**

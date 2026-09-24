@@ -34,11 +34,19 @@ input ListSortInput {
   direction: ListSortDirection!
 }
 
+"A process this caller may start from a List."
+type ListStartProcess {
+  name: String!
+  startStepPath: String!
+}
+
 """
 Information about a list that the user can access.
 Used by the frontend sidebar to display available lists.
 """
 type ListInfo {
+  "Optional start button, omitted when the caller cannot start the process."
+  startProcess: ListStartProcess
   "Whether this caller may create records in this List."
   canCreate: Boolean!
   id: ID!
@@ -700,6 +708,12 @@ type Query {
     processPath: String
     status: String
   ): ExecutionListPage!
+  """
+  The Process Execution with this id, when the current provider user may view it.
+  A missing id and an id the caller may not view both return null.
+  This is a single-row read. It does not page or scan execution history.
+  """
+  execution(id: ID!): Execution
   # Current logged-in provider user
   currentProviderUser: ProviderUser!
   """

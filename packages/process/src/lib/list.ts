@@ -28,9 +28,11 @@ import {
   getSchemaDefaults,
   submissionSchemaSync as makeSubmissionSchema,
 } from "@pf/form-submission-schema"
+import { isForm } from "./brands"
 import { mergeFormDefaults, resolveFormFieldDefaults } from "./form-defaults"
 import type { OrgUnit } from "./org-unit"
 import { normalizePath, pathToPascalCase } from "./org-utils"
+import type { Process } from "./process"
 import type { Role } from "./role"
 
 /**
@@ -376,6 +378,8 @@ export interface ListProps<
   readonly roles: readonly [Role, ...Role[]]
   /** Output schema defining the shape of list items `query` should return */
   readonly output: TOutput
+  /** Optional button opening this process's single start form. Uses its start permission. */
+  readonly startProcess?: Process
   /** Default page size (default: 20, max: 100) */
   readonly defaultPageSize?: number
   /** Query function returning paginated results */
@@ -541,6 +545,15 @@ export class List<
   /** Output schema defining the shape of list items */
   readonly output: TOutput
 
+  /** Start button metadata; visibility is authorized separately from List access. */
+  readonly startProcess:
+    | {
+        readonly path: string
+        readonly name: string
+        readonly startStepPath: string
+      }
+    | undefined
+
   /** Default page size */
   readonly defaultPageSize: number
 
@@ -594,6 +607,20 @@ export class List<
       throw new Error(
         `List ${normalizePath(this.node.path)} create form requires at least one submittable field`,
       )
+    }
+    if (props.startProcess) {
+      const starts = props.startProcess.startNodes()
+      const start = starts[0]
+      if (starts.length !== 1 || !isForm(start)) {
+        throw new Error(
+          `List ${normalizePath(this.node.path)} startProcess must have exactly one start form`,
+        )
+      }
+      this.startProcess = {
+        path: normalizePath(props.startProcess.node.path),
+        name: props.startProcess.props.name,
+        startStepPath: normalizePath(start.node.path),
+      }
     }
     this.name = props.name
     if (props.detailName !== undefined) {

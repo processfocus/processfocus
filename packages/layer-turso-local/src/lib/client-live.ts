@@ -179,25 +179,16 @@ const makeClient = (
         })
       }
 
-      readonly run = Effect.fn("TursoConnection.run")(function* (
-        this: TursoConnectionImpl,
-        sql: string,
-        params: ReadonlyArray<unknown> = [],
-      ) {
-        yield* this.ensurePragmas()
-        return yield* this.runDirect(sql, params)
-      })
+      run(sql: string, params: ReadonlyArray<unknown> = []) {
+        return Effect.gen(this, function* () {
+          yield* this.ensurePragmas()
+          return yield* this.runDirect(sql, params)
+        })
+      }
 
-      readonly runRaw = Effect.fn("TursoConnection.runRaw")(function* (
-        this: TursoConnectionImpl,
-        sql: string,
-        params: ReadonlyArray<unknown> = [],
-      ) {
-        // Inline the same body as `run` so raw calls get a single span, not
-        // nested TursoConnection.runRaw → TursoConnection.run spans.
-        yield* this.ensurePragmas()
-        return yield* this.runDirect(sql, params)
-      })
+      runRaw(sql: string, params: ReadonlyArray<unknown> = []) {
+        return this.run(sql, params)
+      }
 
       execute(
         sql: string,

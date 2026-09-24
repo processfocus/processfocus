@@ -12,7 +12,6 @@ afterEach(() => {
 })
 
 const startedAt = "2020-01-01T00:00:00Z"
-const startedAtMillis = Date.parse(startedAt)
 const terminal: ExecutionSnapshot = {
   id: "deployment",
   status: "Failed",
@@ -31,58 +30,33 @@ const terminal: ExecutionSnapshot = {
 }
 
 it.each([0, 10_000])(
-  "reads the full terminal snapshot in two requests with %i older executions",
+  "reads the full terminal snapshot in one request with %i newer executions",
   async (historyCount) => {
-    const history = Array.from({ length: historyCount }, (_, i) => ({
-      ...terminal,
-      id: `old-${i}`,
-      updatedAt: startedAtMillis - historyCount + i,
-    }))
-    // Same timestamp as createdAt: the lower checkpoint must include ties, and
-    // must come from server data even when the client's clock is years ahead.
-    const rows = [...history, { ...terminal, updatedAt: startedAtMillis }]
+    const rows = new Map([
+      [terminal.id, terminal],
+      ...Array.from(
+        { length: historyCount },
+        (_, i): [string, ExecutionSnapshot] => [
+          `newer-${i}`,
+          { ...terminal, id: `newer-${i}`, finishedAt: "2026-01-01T00:00:00Z" },
+        ],
+      ),
+    ])
     const requests: string[] = []
     globalThis.fetch = Object.assign(
       async (_input: string | URL | Request, init?: RequestInit) => {
         const { query, variables } = JSON.parse(String(init?.body))
-        if (query.includes("DeployExecutionLocation")) {
-          requests.push("location")
-          expect(variables.page).toBe(1)
-          return Response.json({
-            data: {
-              executions: {
-                nodes: [{ id: terminal.id, startedAt }],
-                hasNextPage: historyCount >= 100,
-              },
-            },
-          })
-        }
-        requests.push("snapshot")
-        const checkpoint = variables.checkpoint
-        const documents = rows
-          .filter(
-            (row) =>
-              checkpoint === null ||
-              row.updatedAt > checkpoint.updatedAt ||
-              (row.updatedAt === checkpoint.updatedAt &&
-                row.id > checkpoint.id),
-          )
-          .slice(0, 100)
-        const last = documents.at(-1)
+        requests.push(query)
+        expect(query).toContain("execution(id: $id)")
+        expect(query).not.toContain("executions(")
+        expect(query).not.toContain("pullExecution")
+        expect(variables).toEqual({ id: terminal.id })
         return Response.json({
-          data: {
-            pullExecution: {
-              documents,
-              checkpoint: last
-                ? { id: last.id, updatedAt: last.updatedAt }
-                : null,
-            },
-          },
+          data: { execution: rows.get(variables.id) ?? null },
         })
       },
       { preconnect: originalFetch.preconnect },
     )
-
     const snapshot = await Effect.runPromise(
       fetchExecutionSnapshot(
         "https://backend.test/graphql",
@@ -90,53 +64,19 @@ it.each([0, 10_000])(
         terminal.id,
       ),
     )
-    expect(snapshot).toMatchObject(terminal)
-    expect(requests).toEqual(["location", "snapshot"])
+    expect(snapshot).toEqual(terminal)
+    expect(requests).toHaveLength(1)
   },
 )
 
-it("pages past newer executions and retains abandonment details from the full projection", async () => {
-  const pages: number[] = []
+it("retains abandonment details and failed-step evidence", async () => {
+  const abandoned: ExecutionSnapshot = {
+    ...terminal,
+    status: "Abandoned",
+    abandonedReason: "Operator cancelled",
+  }
   globalThis.fetch = Object.assign(
-    async (_input: string | URL | Request, init?: RequestInit) => {
-      const { query, variables } = JSON.parse(String(init?.body))
-      if (query.includes("DeployExecutionLocation")) {
-        pages.push(variables.page)
-        return Response.json({
-          data: {
-            executions: {
-              nodes: [
-                {
-                  id: variables.page === 1 ? "newer-execution" : terminal.id,
-                  startedAt,
-                },
-              ],
-              hasNextPage: variables.page === 1,
-            },
-          },
-        })
-      }
-      expect(variables.checkpoint).toEqual({
-        id: "",
-        updatedAt: startedAtMillis,
-      })
-      return Response.json({
-        data: {
-          pullExecution: {
-            documents: [
-              {
-                ...terminal,
-                status: "Abandoned",
-                failureReason: null,
-                steps: [],
-                abandonedReason: "Operator cancelled",
-              },
-            ],
-            checkpoint: null,
-          },
-        },
-      })
-    },
+    async () => Response.json({ data: { execution: abandoned } }),
     { preconnect: originalFetch.preconnect },
   )
   const snapshot = await Effect.runPromise(
@@ -146,19 +86,31 @@ it("pages past newer executions and retains abandonment details from the full pr
       terminal.id,
     ),
   )
-  expect(pages).toEqual([1, 2])
-  expect(snapshot.status).toBe("Abandoned")
-  expect(snapshot.abandonedReason).toBe("Operator cancelled")
+  expect(snapshot).toEqual(abandoned)
 })
 
-it("reports an inaccessible execution without scanning historical replication pages", async () => {
+it.each([
+  {
+    response: { data: { execution: null } },
+    error: "not found or is not accessible",
+  },
+  {
+    response: {
+      errors: [{ message: 'Cannot query field "execution" on type "Query".' }],
+    },
+    error: 'Cannot query field "execution"',
+  },
+  { response: { errors: [{ message: "Read failed" }] }, error: "Read failed" },
+])("reports $error without scanning history", async ({ response, error }) => {
   let requests = 0
   globalThis.fetch = Object.assign(
-    async () => {
+    async (_input: string | URL | Request, init?: RequestInit) => {
       requests++
-      return Response.json({
-        data: { executions: { nodes: [], hasNextPage: false } },
-      })
+      const { query } = JSON.parse(String(init?.body))
+      expect(query).toContain("execution(id: $id)")
+      expect(query).not.toContain("executions(")
+      expect(query).not.toContain("pullExecution")
+      return Response.json(response)
     },
     { preconnect: originalFetch.preconnect },
   )
@@ -170,6 +122,6 @@ it("reports an inaccessible execution without scanning historical replication pa
         terminal.id,
       ),
     ),
-  ).rejects.toThrow("not found or is not accessible")
+  ).rejects.toThrow(error)
   expect(requests).toBe(1)
 })

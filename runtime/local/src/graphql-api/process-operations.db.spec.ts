@@ -78,6 +78,7 @@ import {
   ConditionEvaluator,
   Form,
   FormRuleSelf,
+  FormSubmissionError,
   NodeStep,
   OrgUnit,
   Organisation,
@@ -5763,4 +5764,131 @@ businessMetricsIntegrationIt(
     }
   },
   { timeout: 60_000 },
+)
+
+it.each(["start", "completion"])(
+  "form onSubmit commits, rolls back and avoids replay writes for %s",
+  async (kind) => {
+    const org = new Organisation({ name: "Submission callback" })
+    const unit = new OrgUnit(org, `submission-${uniqueSuffix()}`, {
+      name: "Submissions",
+      type: "department",
+    })
+    const role = new Role(unit, "employee", { name: "Employee" })
+    const process = new Process(unit, "request", {
+      name: "Request",
+      purpose: "Callback transaction test",
+    })
+    let submissionCalls = 0
+    const onSubmit = ({ value }: { readonly value: string }) => {
+      submissionCalls += 1
+      return Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`INSERT INTO callback_records (value) VALUES (${value})`
+        if (value === "reject")
+          return yield* new FormSubmissionError({
+            field: "value",
+            message: "Rejected",
+          })
+      }).pipe(
+        Effect.catchTag("SqlError", () =>
+          Effect.fail(
+            new FormSubmissionError({ field: "", message: "Write failed" }),
+          ),
+        ),
+      )
+    }
+    const first = new Form(process, "Submit", {
+      role,
+      form: () => ({ value: Schema.String }),
+      ...(kind === "start" ? { onSubmit } : {}),
+    })
+    const flow = process.start(first)
+    const next = new Form(flow, "Confirm", {
+      role,
+      form: () => ({ value: Schema.String }),
+      onSubmit,
+    })
+    flow.next(next).end()
+    const processPath = normalizePath(process.node.path)
+    const startStepPath = normalizePath(first.node.path)
+    const orgUnitPath = normalizePath(unit.node.path)
+    const rolePath = normalizePath(role.node.path)
+    const context = makeContext("employee@example.com", rolePath, orgUnitPath)
+    await runDbEffect(
+      sqliteDbCase,
+      [],
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`CREATE TABLE callback_records (value TEXT NOT NULL)`
+        yield* sqliteDbCase.storeOrganisation(org)
+        yield* sqliteDbCase.ensureProviderUser({
+          email: "employee@example.com",
+          rolePaths: [rolePath],
+          orgUnitPath,
+        })
+        const processId = yield* sqliteDbCase.getProcessIdByPath(processPath)
+        const active =
+          kind === "completion"
+            ? yield* seedActiveTodo(sqliteDbCase, {
+                organisation: org,
+                orgUnitPath,
+                rolePath,
+                processPath,
+                startStepPath,
+                todoStepPath: normalizePath(next.node.path),
+              })
+            : undefined
+        const executionId = `pex-callback-${uniqueSuffix()}`
+        const submit = (value: unknown) =>
+          Effect.gen(function* () {
+            if (active) {
+              yield* completeStep(
+                active.todoId,
+                { value },
+                next,
+                next.submissionEffectSchema,
+                context,
+              )
+            } else {
+              yield* startProcess(
+                processId,
+                processPath,
+                startStepPath,
+                { value },
+                first.submissionEffectSchema,
+                first,
+                context,
+                { executionId },
+              )
+            }
+          })
+        expect((yield* submit(17).pipe(Effect.flip))._tag).toBe(
+          "InputValidationError",
+        )
+        expect(yield* sql`SELECT * FROM callback_records`).toEqual([])
+        expect(submissionCalls).toBe(0)
+        const rejected = yield* submit("reject").pipe(Effect.flip)
+        expect(rejected).toBeInstanceOf(InputValidationError)
+        expect(submissionCalls).toBe(1)
+        expect(yield* sql`SELECT * FROM callback_records`).toEqual([])
+        if (kind === "start")
+          expect(
+            yield* sqliteDbCase.getProcessStatesByProcessId(processId),
+          ).toEqual([])
+        yield* submit("saved")
+        expect(submissionCalls).toBe(2)
+        expect(yield* sql`SELECT * FROM callback_records`).toEqual([
+          { value: "saved" },
+        ])
+        yield* submit("saved")
+        expect(submissionCalls).toBe(2)
+        expect(yield* sql`SELECT * FROM callback_records`).toEqual([
+          { value: "saved" },
+        ])
+      }),
+      true,
+      makeAuthorizationLayer(),
+    )
+  },
 )

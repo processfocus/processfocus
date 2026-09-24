@@ -1845,3 +1845,71 @@ describe("systemSchema listFormMetadata", () => {
     expect(result?.deleteMutationName).toBeNull()
   })
 })
+
+describe("availableLists process-start button", () => {
+  it.each([
+    { configured: true, canView: true, canStart: true, expected: "button" },
+    { configured: true, canView: true, canStart: false, expected: "no button" },
+    { configured: true, canView: false, canStart: true, expected: "no list" },
+    { configured: false, canView: true, canStart: true, expected: "no button" },
+  ])(
+    "$expected when configured=$configured, view=$canView, start=$canStart",
+    async ({ configured, canView, canStart, expected }) => {
+      const org = new Organisation({ name: "Test" })
+      const role = new Role(org, "viewer", { name: "Viewer" })
+      const process = new Process(org, "sign-in", {
+        name: "Sign-in",
+        purpose: "Test",
+      })
+      const form = new Form(process, "Choose child", {
+        name: "Choose child",
+        role,
+        form: () => ({ child: ES.String }),
+      })
+      process.start(form).end()
+      new List(org, "attendance", {
+        name: "Attendance",
+        roles: [role],
+        output: { child: ES.String },
+        query: () => Effect.succeed({ items: [], totalCount: 0 }),
+        ...(configured ? { startProcess: process } : {}),
+      })
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const schema = yield* systemSchema
+          // The resolver map erases its Effect context, as in the metadata adapters above.
+          const resolver = schema.resolvers?.Query?.["availableLists"] as (
+            parent: unknown,
+            args: unknown,
+            context: UserContext,
+          ) => Effect.Effect<unknown, unknown, never>
+          return yield* resolver(undefined, {}, makeContext())
+        }).pipe(
+          Effect.provide(
+            makeLayers(org, {
+              canAccessList: () => Effect.succeed(canView),
+              canCompleteStep: (_principal, resource) => {
+                expect(resource.startsProcess).toBe(true)
+                expect(resource.uid.id).toBe("/sign-in/Choose child")
+                return Effect.succeed(canStart)
+              },
+            }),
+          ),
+        ),
+      )
+      if (expected === "no list") expect(result).toEqual([])
+      else
+        expect(result).toMatchObject([
+          {
+            startProcess:
+              expected === "button"
+                ? {
+                    name: "Sign-in",
+                    startStepPath: "/sign-in/Choose child",
+                  }
+                : null,
+          },
+        ])
+    },
+  )
+})

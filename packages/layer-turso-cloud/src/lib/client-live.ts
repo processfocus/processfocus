@@ -382,25 +382,17 @@ const makeClient = (
         })
       }
 
-      readonly run = Effect.fn("TursoCloudConnection.run")(function* (
-        this: TursoCloudConnectionImpl,
-        sql: string,
-        params: ReadonlyArray<unknown> = [],
-      ) {
-        return yield* this.runWithTokenRefresh(
+      run(sql: string, params: ReadonlyArray<unknown> = []) {
+        return this.runWithTokenRefresh(
           Effect.gen(this, function* () {
             yield* this.ensurePragmas()
             return yield* this.runDirect(sql, params)
           }),
         )
-      })
+      }
 
-      readonly runRaw = Effect.fn("TursoCloudConnection.runRaw")(function* (
-        this: TursoCloudConnectionImpl,
-        sql: string,
-        params: ReadonlyArray<unknown> = [],
-      ) {
-        return yield* this.runWithTokenRefresh(
+      runRaw(sql: string, params: ReadonlyArray<unknown> = []) {
+        return this.runWithTokenRefresh(
           Effect.gen(this, function* () {
             yield* this.ensurePragmas()
             return yield* this.withStatementSdk((session) =>
@@ -408,7 +400,7 @@ const makeClient = (
             )
           }),
         )
-      })
+      }
 
       readonly runBatch = Effect.fn("TursoCloudConnection.runBatch")(function* (
         this: TursoCloudConnectionImpl,
@@ -533,8 +525,9 @@ const makeClient = (
       private readonly beginTransactionBody = Effect.fn(
         "TursoCloudConnection.beginTransaction",
       )(function* (this: TursoCloudConnectionImpl) {
-        // Wrap token-refresh retries inside the named span so attribution
-        // matches run/runRaw (refresh work belongs to this operation).
+        // Token refresh and lock retries are part of this BEGIN, not a later
+        // query. Keep them inside the named span so that latency stays on
+        // beginTransaction instead of the parent job span.
         return yield* this.runWithTokenRefresh(
           Effect.gen(this, function* () {
             yield* this.ensurePragmas()

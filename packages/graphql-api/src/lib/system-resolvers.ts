@@ -154,6 +154,7 @@ import {
 } from "./public-todo-token"
 import { getSchemaAnnotationDeep, getSubmissionFields } from "./resolver-utils"
 import { ExecutionCollectionOps } from "./rxdb/execution"
+import { filterAuthorizedExecutions } from "./rxdb/subscription-filters"
 import {
   hasDelegation,
   isProviderUserSession,
@@ -2072,6 +2073,24 @@ export const systemSchema = Effect.gen(function* () {
             })),
           }
         }),
+      execution: (
+        _parent: unknown,
+        args: { readonly id: string },
+        context: UserContext,
+      ) =>
+        Effect.gen(function* () {
+          const executionOps = yield* ExecutionCollectionOps
+          const [row] = yield* executionOps.getByIds([args.id])
+          if (!row) return null
+
+          const principal = yield* buildStepPrincipal(context)
+          const document = yield* executionOps.mapToGraphql(row)
+          const [authorized] = yield* filterAuthorizedExecutions(
+            [document],
+            principal,
+          )
+          return authorized ?? null
+        }),
       executions: (
         _parent: unknown,
         args: {
@@ -2600,7 +2619,13 @@ export const systemSchema = Effect.gen(function* () {
                     ),
                   )
                   .pipe(Effect.orElseSucceed(() => false)))
+              const startProcesses = list.startProcess
+                ? yield* filterAuthorizedProcessRows(context, [
+                    list.startProcess,
+                  ])
+                : []
               return {
+                startProcess: startProcesses[0] ?? null,
                 canCreate,
                 id: normalizePath(list.node.path),
                 path: normalizePath(list.node.path),
