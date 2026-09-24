@@ -40,8 +40,8 @@ const unpublishedImplementationImport =
 const PUBLIC_INTERNAL_TAG_PREFIX = "processfocus:internal-tag/"
 
 const PLUGIN_CONTRACT_DEPENDENCIES = {
-  processfocus: "0.1.0-next.1",
-  "@processfocus/runtime": "0.1.0-next.1",
+  processfocus: "0.1.0-next.2",
+  "@processfocus/runtime": "0.1.0-next.2",
 } as const
 
 const isPluginPackage = (name: string): boolean =>

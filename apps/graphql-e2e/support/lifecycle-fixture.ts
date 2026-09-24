@@ -22,6 +22,9 @@ export const prepareLifecycleOrganisation = async (
     await appendFile(
       join(org, "cedar/ci.cedar"),
       `
+// Exercise caller-specific execution capabilities without changing demo policy.
+permit(principal == PF::ProviderUser::"finance-manager@example.com", action == PF::Action::"abandon", resource is PF::Step)
+when { resource in PF::Process::"/finance/purchase-request" };
 // Only the disposable acceptance organisation uses these ordinary-work grants.
 permit(principal, action == PF::Action::"view", resource is PF::Execution)
 when { principal in PF::Role::"/Employee" && (resource in PF::Process::"/lifecycle" || resource in PF::Process::"/handled" || resource in PF::Process::"/invalid-schedule") };

@@ -44,6 +44,10 @@ export const availableListsQuery = graphql(`
       name
       detailName
       canCreate
+      startProcess {
+        name
+        startStepPath
+      }
       purpose
       queryName
       outputColumns {

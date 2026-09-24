@@ -29,27 +29,34 @@ export const buildFormContractSchema = async (
   org: Organisation,
 ): Promise<GraphQLSchema> => {
   const require = createRequire(import.meta.url)
-  const base = buildSchema(
-    "scalar JSON\n" +
-      readFileSync(
-        require.resolve("@pf/graphql-schema/system.graphql"),
-        "utf8",
-      ),
+  let schema = buildSchema(
+    readFileSync(require.resolve("@pf/graphql-schema/rxdb.graphql"), "utf8"),
   )
-  const dynamic = parse(
+  const sources = [
+    readFileSync(require.resolve("@pf/graphql-schema/system.graphql"), "utf8"),
     await Effect.runPromise(
       buildDynamicSchema().pipe(Effect.provide(OrganisationProviderTest(org))),
     ),
-  )
-  return extendSchema(base, {
-    ...dynamic,
-    definitions: dynamic.definitions.map((definition) =>
-      definition.kind === Kind.OBJECT_TYPE_DEFINITION &&
-      ["Query", "Mutation"].includes(definition.name.value)
-        ? { ...definition, kind: Kind.OBJECT_TYPE_EXTENSION }
-        : definition,
-    ),
-  })
+  ]
+  for (const source of sources) {
+    const document = parse(source)
+    schema = extendSchema(schema, {
+      ...document,
+      definitions: document.definitions
+        .filter(
+          (definition) =>
+            definition.kind !== Kind.SCALAR_TYPE_DEFINITION ||
+            !schema.getType(definition.name.value),
+        )
+        .map((definition) =>
+          definition.kind === Kind.OBJECT_TYPE_DEFINITION &&
+          ["Query", "Mutation"].includes(definition.name.value)
+            ? { ...definition, kind: Kind.OBJECT_TYPE_EXTENSION }
+            : definition,
+        ),
+    })
+  }
+  return schema
 }
 
 // Presentation annotations and root openness do not change submitted values.

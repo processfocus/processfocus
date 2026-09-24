@@ -296,24 +296,10 @@ const createDeployFetchMock = (options: DeployFetchMockOptions = {}) =>
       )
     }
 
-    if (body.query.includes("DeployExecutionLocation")) {
-      return Response.json({
-        data: {
-          executions: {
-            nodes: [{ id: "exec-1", startedAt: "2026-09-22T00:00:00Z" }],
-            hasNextPage: false,
-          },
-        },
-      })
-    }
-
     if (body.query.includes("DeployExecutionSnapshot")) {
       return Response.json({
         data: {
-          pullExecution: {
-            documents: [executionSnapshot("Running")],
-            checkpoint: null,
-          },
+          execution: executionSnapshot("Running"),
         },
       })
     }
@@ -1144,14 +1130,10 @@ describe("pfcli deploy", () => {
               }
               const response = Response.json({
                 data: {
-                  pullExecution: {
-                    documents: [
-                      timing === "before subscription"
-                        ? terminal
-                        : executionSnapshot("Running"),
-                    ],
-                    checkpoint: null,
-                  },
+                  execution:
+                    timing === "before subscription"
+                      ? terminal
+                      : executionSnapshot("Running"),
                 },
               })
               snapshotRead.resolve()
@@ -1242,10 +1224,7 @@ describe("pfcli deploy", () => {
                 })
               : Response.json({
                   data: {
-                    pullExecution: {
-                      documents: [executionSnapshot("Running")],
-                      checkpoint: null,
-                    },
+                    execution: executionSnapshot("Running"),
                   },
                 })
           }

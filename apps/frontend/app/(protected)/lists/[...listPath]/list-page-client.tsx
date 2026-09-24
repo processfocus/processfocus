@@ -11,6 +11,7 @@ import {
   Search,
   X,
 } from "lucide-react"
+import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   createContext,
@@ -297,6 +298,16 @@ export function ListControlsClient({
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
             {currentList.name}
           </h1>
+          {currentList.startProcess ? (
+            <Button asChild size="sm">
+              <Link
+                href={`/processes/start/${currentList.startProcess.startStepPath.replace(/^\//, "")}`}
+                prefetch={false}
+              >
+                {currentList.startProcess.name}
+              </Link>
+            </Button>
+          ) : null}
           {currentList.canCreate ? (
             <ListCreateButton
               listPath={listPath}

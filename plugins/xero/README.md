@@ -13,7 +13,7 @@ This package is part of the workspace. Add it to your process dependencies:
 ```json
 {
   "dependencies": {
-    "@processfocus/plugin-xero": "0.1.0-next.1"
+    "@processfocus/plugin-xero": "0.1.0-next.2"
   }
 }
 ```

@@ -1,6 +1,6 @@
 {
   "name": "@processfocus/cli",
-  "version": "0.1.0-next.1",
+  "version": "0.1.0-next.2",
   "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",
@@ -21,13 +21,13 @@
   ],
   "dependencies": {
     "@cedar-policy/cedar-wasm": "^4.12.0",
-    "@processfocus/hosting-contract": "0.1.0-next.1",
-    "@processfocus/runtime": "0.1.0-next.1",
+    "@processfocus/hosting-contract": "0.1.0-next.2",
+    "@processfocus/runtime": "0.1.0-next.2",
     "@tursodatabase/database": "0.7.2",
     "@tursodatabase/serverless": "1.4.0",
     "@tursodatabase/sync": "0.7.2",
     "effect": "^3.22.2",
-    "processfocus": "0.1.0-next.1"
+    "processfocus": "0.1.0-next.2"
   },
   "devDependencies": {
     "@effect/cli": "^0.77.1",

@@ -252,6 +252,7 @@ export const recoverPendingExternalCompletionEnqueues = Effect.gen(
 )
 
 interface StartProcessExecutionOptions {
+  readonly onSubmit?: Effect.Effect<void, InputValidationError>
   readonly withoutWaiting?: boolean
   readonly executionId?: string
   readonly enqueueStartSystemStep?: boolean
@@ -1466,6 +1467,8 @@ export const startProcessExecution = (
           options.withoutWaiting ?? false,
         )
 
+        if (options.onSubmit) yield* options.onSubmit
+
         const scheduledFlowId = enqueueStartSystemStep
           ? undefined
           : yield* scheduledFlowOps.insertScheduledFlow(executionId, stepId, {
@@ -1565,6 +1568,33 @@ export const startProcessExecution = (
       timestamp: DateTime.formatIso(requestTime),
     }
   })
+
+/** Runtime boundary: input has been decoded with this form's submission schema. */
+const executeFormSubmission = <
+  TState extends Record<string, unknown>,
+  TSteps extends Record<string, StepMeta>,
+  TInput extends Schema.Struct.Fields,
+  TId extends string,
+  TItem,
+  TIsForEach extends boolean,
+>(
+  step: Form<TState, TSteps, TInput, TId, TItem, TIsForEach>,
+  input: ProcessState,
+): Effect.Effect<void, InputValidationError> => {
+  // Previously built organisation artifacts do not have this optional callback.
+  if (typeof step.executeSubmit !== "function") return Effect.void
+  // The runtime supplies organisation services, as for submissionEffectSchema.
+  return step
+    .executeSubmit(input as Parameters<typeof step.executeSubmit>[0])
+    .pipe(
+      Effect.mapError(
+        (error) =>
+          new InputValidationError({
+            errors: [{ field: error.field, message: error.message }],
+          }),
+      ),
+    ) as Effect.Effect<void, InputValidationError>
+}
 
 /**
  * Starts a process, validating input against schema first.
@@ -1686,6 +1716,7 @@ export const startProcess = <
       validatedInput,
       {
         ...options,
+        onSubmit: executeFormSubmission(step, validatedInput),
         trigger: processStartTriggerForSession(context.jwt?.properties),
         // Upsert still normalizes defensively because public completions and
         // direct callers may not have gone through this embedded-form boundary.
@@ -2066,6 +2097,8 @@ export const completeStep = <
               }
             }
           }
+
+          yield* executeFormSubmission(step, validatedInput)
 
           const scheduledFlowId = todoInfo.barrierScheduledFlowId
             ? todoInfo.barrierScheduledFlowId
