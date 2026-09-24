@@ -193,19 +193,19 @@
     },
     "cli/pfcli": {
       "name": "@processfocus/cli",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "bin": {
         "pfcli": "./dist/main.mjs"
       },
       "dependencies": {
         "@cedar-policy/cedar-wasm": "^4.12.0",
-        "@processfocus/hosting-contract": "0.1.0-next.1",
-        "@processfocus/runtime": "0.1.0-next.1",
+        "@processfocus/hosting-contract": "0.1.0-next.2",
+        "@processfocus/runtime": "0.1.0-next.2",
         "@tursodatabase/database": "0.7.2",
         "@tursodatabase/serverless": "1.4.0",
         "@tursodatabase/sync": "0.7.2",
         "effect": "^3.22.2",
-        "processfocus": "0.1.0-next.1"
+        "processfocus": "0.1.0-next.2"
       },
       "devDependencies": {
         "@effect/cli": "^0.77.1",
@@ -236,7 +236,7 @@
     },
     "cli/pforg": {
       "name": "@processfocus/pforg",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "bin": {
         "pforg": "./dist/main.mjs"
       },
@@ -587,7 +587,7 @@
     },
     "packages/hosting-contract": {
       "name": "@processfocus/hosting-contract",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "effect": "^3.22.2"
       }
@@ -805,7 +805,7 @@
     },
     "packages/runtime": {
       "name": "@processfocus/runtime",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "effect": "^3.22.2"
       }
@@ -819,7 +819,7 @@
     },
     "packages/sdk": {
       "name": "processfocus",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@processfocus/runtime": "workspace:*",
         "constructs": "^10.8.1",
@@ -972,7 +972,7 @@
     },
     "plugins/aws": {
       "name": "@processfocus/plugin-aws-lambda",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@aws-sdk/client-lambda": "^3.1131.0",
         "@pf/process": "workspace:*",
@@ -981,7 +981,7 @@
     },
     "plugins/docker": {
       "name": "@processfocus/plugin-docker",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@pf/process": "workspace:*",
         "@processfocus/runtime": "workspace:*",
@@ -990,7 +990,7 @@
     },
     "plugins/google-drive": {
       "name": "@processfocus/plugin-google-drive",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@googleworkspace/drive-picker-element": "^0.7.3",
         "@pf/form-client-representation": "workspace:*",
@@ -1012,7 +1012,7 @@
     },
     "plugins/posthog": {
       "name": "@processfocus/plugin-posthog",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@pf/frontend-manifest": "workspace:*",
         "@pf/frontend-plugin-host": "workspace:*",
@@ -1033,7 +1033,7 @@
     },
     "plugins/resend": {
       "name": "@processfocus/plugin-resend",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@effect/platform": "^0.97.2",
         "@pf/document-store-service": "workspace:*",
@@ -1045,7 +1045,7 @@
     },
     "plugins/xero": {
       "name": "@processfocus/plugin-xero",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "dependencies": {
         "@effect/platform": "^0.97.2",
         "@pf/process": "workspace:*",
@@ -1054,7 +1054,7 @@
     },
     "runtime/local": {
       "name": "@processfocus/runtime-local",
-      "version": "0.1.0-next.1",
+      "version": "0.1.0-next.2",
       "bin": {
         "pf-runtime-local": "./dist/main.mjs"
       },
@@ -1065,8 +1065,8 @@
         "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
         "@opentelemetry/sdk-metrics": "^2.11.0",
         "@opentelemetry/sdk-trace-base": "^2.11.0",
-        "@processfocus/cli": "0.1.0-next.1",
-        "@processfocus/runtime": "0.1.0-next.1",
+        "@processfocus/cli": "0.1.0-next.2",
+        "@processfocus/runtime": "0.1.0-next.2",
         "@tursodatabase/database": "0.7.2",
         "@tursodatabase/serverless": "1.4.0",
         "@tursodatabase/sync": "0.7.2",

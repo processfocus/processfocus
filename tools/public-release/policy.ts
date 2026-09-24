@@ -16,7 +16,7 @@ export const RELEASE_PACKAGES: readonly string[] = [
   "@processfocus/plugin-xero",
 ]
 
-export const RELEASE_VERSION = "0.1.0-next.1"
+export const RELEASE_VERSION = "0.1.0-next.2"
 export const RELEASE_TAG = "next"
 export const releaseConfiguration = {
   groups: {
