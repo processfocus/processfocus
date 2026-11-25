@@ -30,16 +30,13 @@ const makeWorkspace = (): string => {
   mkdirSync(join(tempDir, "apps/frontend/lib/generated"), { recursive: true })
   mkdirSync(join(tempDir, "apps/frontend/public"), { recursive: true })
   mkdirSync(join(tempDir, "apps/frontend/scripts"), { recursive: true })
-  symlinkSync(
-    join(
-      REPO_ROOT,
-      "apps/frontend/scripts/generate-organisation-plugin-composition.ts",
-    ),
-    join(
-      tempDir,
-      "apps/frontend/scripts/generate-organisation-plugin-composition.ts",
-    ),
-  )
+  for (const generator of [
+    "generate-organisation-plugin-composition.ts",
+    "generate-organisation-form-loaders.ts",
+  ]) {
+    const path = `apps/frontend/scripts/${generator}`
+    symlinkSync(join(REPO_ROOT, path), join(tempDir, path))
+  }
   return tempDir
 }
 
@@ -643,17 +640,10 @@ describe("frontend prepare build inputs", () => {
     )
   })
 
-  test("preserves rule-bearing and rule-free embed definitions", async () => {
+  test("preserves executable embed references and query capabilities", async () => {
     const workspaceRoot = makeWorkspace()
     const orgDir = join(workspaceRoot, "orgs/test-org")
     const sourcePath = join(orgDir, "dist/frontend-manifest.json")
-    const structuredRule = {
-      condition: {
-        _tag: "blank",
-        value: { _tag: "field", path: ["name"] },
-      },
-      effects: [{ target: ["details"], state: { disabled: true } }],
-    }
     const embedEntry = {
       stepPath: "/enrolment/Submit",
       processName: "Enrolment",
@@ -661,15 +651,15 @@ describe("frontend prepare build inputs", () => {
       mutationName: "startEnrolment",
       inputTypeName: "EnrolmentSubmit",
       totalFields: 2,
-      formDefinition: {
-        components: {
-          name: { _tag: "text", field: "name", label: "Name" },
-          details: { _tag: "text", field: "details", label: "Details" },
+      formPath: "/enrolment/Submit",
+      lookups: [
+        {
+          type: "lookup",
+          field: "campus",
+          normalizedField: "campus",
+          dependencies: [],
         },
-        rules: [structuredRule],
-      },
-      defaultValues: { name: "", details: "" },
-      jsonSchema: { type: "object" },
+      ],
       sites: ["https://school.example.com"],
       thankYou: "Thanks",
     }
@@ -680,11 +670,9 @@ describe("frontend prepare build inputs", () => {
           embedEntry,
           {
             ...embedEntry,
-            stepPath: "/enrolment/Rule free",
-            formDefinition: {
-              ...embedEntry.formDefinition,
-              rules: [],
-            },
+            stepPath: "/enrolment/Other",
+            formPath: "/enrolment/Other",
+            lookups: [],
           },
         ],
       },
@@ -707,10 +695,14 @@ describe("frontend prepare build inputs", () => {
     expect(result.exitCode).toBe(0)
     expect(staged).toEqual(sourceManifest)
     expect(
-      parseFrontendManifest(staged).embed.entries.map(
-        (entry) => entry.formDefinition?.rules,
-      ),
-    ).toEqual([[structuredRule], []])
+      parseFrontendManifest(staged).embed.entries.map((entry) => ({
+        formPath: entry.formPath,
+        lookups: entry.lookups,
+      })),
+    ).toEqual([
+      { formPath: embedEntry.formPath, lookups: embedEntry.lookups },
+      { formPath: "/enrolment/Other", lookups: [] },
+    ])
   })
 
   test("rejects an unknown plugin instead of silently omitting it", async () => {

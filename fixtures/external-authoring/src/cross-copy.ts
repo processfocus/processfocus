@@ -4,7 +4,7 @@ import {
   isOrganisation,
   isPoliciesConfig,
 } from "processfocus"
-import { TextField } from "processfocus/forms"
+import { representativeForm } from "./representative-form.js"
 
 const foreign = (await import(
   new URL("../node_modules/processfocus-copy/dist/index.mjs", import.meta.url)
@@ -26,7 +26,11 @@ const process = new foreign.Process(unit, "Representative", {
 })
 const form = new Form(process, "Submit", {
   name: "Submit representative form",
-  form: () => ({ summary: TextField({ label: "Summary" }) }),
+  form: representativeForm,
+  browser: {
+    entrypoint: "src/representative-form.ts",
+    exportName: "representativeForm",
+  },
   role,
 })
 process.start(form).end()

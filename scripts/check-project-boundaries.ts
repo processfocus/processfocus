@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
+import { isBuiltin } from "node:module"
 import { join } from "node:path"
 import type { ProjectGraph, ProjectGraphProjectNode } from "@nx/devkit"
 import { createProjectGraphAsync, workspaceRoot } from "@nx/devkit"
@@ -74,6 +75,38 @@ export const validateProjectGraph = (graph: ProjectGraph): string[] => {
     for (const dependency of dependencies) {
       const target = graph.nodes[dependency.target]
       if (!target) continue
+
+      if (
+        source.name === "@pf/process-execution" &&
+        (target.data.root.startsWith("runtime/") ||
+          target.data.root.startsWith("cloud/") ||
+          [
+            "@pf/graphql-api",
+            "@pf/job-handler",
+            "@pf/sqlite-operations",
+            "@pf/postgres-operations",
+            "@pf/service-drizzle-sqlite",
+            "@pf/service-drizzle-postgres",
+          ].includes(target.name))
+      ) {
+        errors.push(
+          `${source.name} -> ${target.name} reverses execution ownership. Supply persistence and platform implementations at runtime boundaries.`,
+        )
+      }
+
+      if (
+        source.name === "@pf/identity-management" &&
+        [
+          "@pf/auth-api",
+          "@pf/graphql-api",
+          "@pf/graphql-db-operations",
+          "@pf/graphql-schema",
+        ].includes(target.name)
+      ) {
+        errors.push(
+          `${source.name} -> ${target.name} reverses identity-management ownership. Inject narrow persistence contracts; keep transport composition in callers.`,
+        )
+      }
 
       for (const constraint of DEPENDENCY_CONSTRAINTS) {
         if (!(source.data.tags ?? []).includes(constraint.sourceTag)) continue
@@ -490,6 +523,202 @@ export const validateExecutorDescriptorOwnership = (
     )
   })
 
+/** Document and notification contracts have one public owner, even in bundles. */
+export const validateRuntimeContractOwnership = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap((file) => {
+    if (
+      !/^(?:packages|plugins|runtime|cloud|examples|fixtures)\//.test(
+        file.path,
+      ) ||
+      !/\.[cm]?[jt]sx?$/.test(file.path) ||
+      file.path === "packages/runtime/src/lib/document-store.ts" ||
+      file.path === "packages/runtime/src/lib/notification.ts"
+    )
+      return []
+
+    const content = withoutComments(file.content)
+    const declaration =
+      /\b(?:class|interface|type|const)\s+(?:DocumentStoreService|DocumentStoreError|FileNotFoundError|StoredEmailAttachment|EmailMessage|NotificationDeliveryReceipt|NotificationSenderIdentity|NotificationDeliverySendError|EmailSender|NotificationDeliveryConfig)\s*(?:[<={:]|extends\b)/.test(
+        content,
+      )
+    // Also reject renamed service classes that reuse the stable identifiers.
+    const identifier =
+      /["']@pf\/(?:document-store-service\/DocumentStoreService|job-handler\/(?:EmailSender|NotificationDeliveryConfig))["']/.test(
+        content,
+      )
+    return declaration || identifier
+      ? [
+          `${file.path} redeclares a document-store or notification contract. Import it directly from @processfocus/runtime.`,
+        ]
+      : []
+  })
+
+/** Shared identity decisions and credentials must not return to GraphQL packages. */
+export const validateIdentityManagementOwnership = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap((file) => {
+    if (
+      !/^packages\/graphql-(?:db-operations|schema)\/src\/.*\.ts$/.test(
+        file.path,
+      )
+    )
+      return []
+    const content = withoutComments(file.content)
+    const declaresBehavior =
+      /\b(?:const|function|class)\s+(?:grantRoleToProviderUser|issueRegistrationLink(?:ForEmail)?|registrationLinkExpiryDate|mapRegistrationLinkCryptoError|generateRegistrationLinkMaterial|hashRegistrationLinkToken|decryptRegistrationLinkToken|deriveRegistrationLinkKey|registrationLinkAad|buildRegistrationLinkUrl|RegistrationLinkCryptoError)\b/.test(
+        content,
+      )
+    const reexportsBehavior =
+      /export\s+(?:\*|\{[^}]*\})\s+from\s+["'][^"']*(?:identity-management(?:\/credentials)?|grant-role|registration-link(?:-token)?)["']/.test(
+        content,
+      )
+    return declaresBehavior || reexportsBehavior
+      ? [
+          `${file.path} owns or re-exports shared identity behavior. Import operations from @pf/identity-management and token helpers from its /credentials entry point at the caller.`,
+        ]
+      : []
+  })
+
+/** Endpoint discovery and portable realtime lifecycle have separate owners. */
+export const validateRealtimeOwnership = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap((file) => {
+    if (
+      !/^packages\/(?:frontend-endpoints|realtime-client)\/src\/.*\.ts$/.test(
+        file.path,
+      )
+    )
+      return []
+    const content = withoutComments(file.content)
+    if (file.path.startsWith("packages/frontend-endpoints/")) {
+      return /\b(?:AppSyncEventsClient|AppSyncEventsClientConfig|SubscriptionPresenceLease)\b|["'][^"']*(?:realtime-client|appsync-client|subscription-presence)[^"']*["']/.test(
+        content,
+      )
+        ? [
+            `${file.path} owns or re-exports realtime behavior. Import @pf/realtime-client directly at the caller.`,
+          ]
+        : []
+    }
+    const imports = [
+      ...content.matchAll(
+        /(?:from\s*|import\s*\(?\s*|require\s*\(\s*)["']([^"']+)["']/g,
+      ),
+    ]
+    return imports.flatMap((match) => {
+      const specifier = match[1] ?? ""
+      return isBuiltin(specifier) ||
+        /^(?:@aws-sdk\/|aws-sdk(?:\/|$)|react(?:\/|$)|@pf\/(?:frontend-endpoints|project-accounting|graphql-api|auth-api|runtime-aws|cloud-org)(?:\/|$)|@processfocus\/runtime(?:-local)?(?:\/|$))|(?:^|\/)endpoint(?:\.|$)|(?:^|\/)(?:cloud|examples|runtime)\//.test(
+          specifier,
+        )
+        ? [
+            `${file.path} imports ${specifier}. Realtime clients receive endpoints, credentials and callbacks from callers; keep Node, framework and application implementations outside this browser-safe owner.`,
+          ]
+        : []
+    })
+  })
+
+/** Forms and rules execute from shared schemas; serialized translators are retired. */
+const validateExecutableForms = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap((file) => {
+    if (
+      !/^(?:apps|cli|packages|plugins|runtime|cloud|examples|fixtures)\//.test(
+        file.path,
+      ) ||
+      !/\.[cm]?[jt]sx?$/.test(file.path)
+    )
+      return []
+    const content = withoutComments(file.content)
+    return /(?:from\s*|import\s*\(|require\s*\()["'][^"']*(?:@pf\/form-(?:rule|client-representation)|\/form-(?:rule|client-representation)\/)[^"']*["']|\b(?:interface|type)\s+(?:FormRuleExpression|ClientFormDefinition)\b|\bclientFormDefinition(?:WithState)?\s*\(/.test(
+      content,
+    )
+      ? [
+          `${file.path} reintroduces serialized forms or rules. Use shared executable schemas, @pf/form-submission-schema and request-local presentation.`,
+        ]
+      : []
+  })
+
+/** Accounting integration stays outside authoring, queues and AWS utilities. */
+export const validateAccountingOwnership = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap((file) => {
+    if (
+      !/^(?:packages|plugins|runtime|cloud|examples|fixtures)\//.test(
+        file.path,
+      ) ||
+      !/\.[cm]?[jt]sx?$/.test(file.path)
+    )
+      return []
+    const content = withoutComments(file.content)
+    const errors: string[] = []
+    if (
+      /(?:from\s*|import\s*\(|require\s*\()["']@pf\/queue-service(?:\/test)?["']/.test(
+        content,
+      )
+    ) {
+      errors.push(
+        `${file.path} imports the retired queue facade. Import queues from @processfocus/runtime and accounting from @pf/project-accounting.`,
+      )
+    }
+    for (const [owner, declarations, identifiers] of [
+      [
+        "packages/project-accounting/",
+        /\b(?:class|interface|type|const)\s+(?:ProjectAccountingChange|ProjectAccountingEvents|ProjectAccountingVisibility|PROJECT_ACCOUNTING_QUEUE|ProjectBalanceAccess|makeProjectBalanceAdmission)\s*(?:[<={:]|extends\b)/,
+        /["']@pf\/queue-service\/ProjectAccounting(?:Events|Visibility)["']/,
+      ],
+      [
+        "cloud/accounting/",
+        /\b(?:class|interface|type|const)\s+(?:UsageCostService|UsageCostServiceApi|UsageCostError|UsageCostSource|RecordManualUsageCostInput|UpsertImportedUsageCostInput|ImportedUsageCostUpsertResult|AWS_COST_EXPLORER_COST_SOURCE|DEPLOY_CODEBUILD_COST_SOURCE|TURSO_USAGE_COST_SOURCE)\s*(?:[<={:]|extends\b)/,
+        /["']@pf\/process\/UsageCostService["']/,
+      ],
+    ] as const) {
+      if (
+        !file.path.startsWith(owner) &&
+        (declarations.test(content) || identifiers.test(content))
+      ) {
+        errors.push(
+          `${file.path} redeclares accounting integration owned by ${owner}. Import its canonical contract instead.`,
+        )
+      }
+    }
+    if (
+      /^packages\/(?:process|runtime|aws-common)\/src\//.test(file.path) &&
+      /["']@pf\/(?:project-accounting|cloud-accounting)(?:\/[^"']*)?["']/.test(
+        content,
+      )
+    ) {
+      errors.push(
+        `${file.path} couples a generic module to hosted accounting. Compose accounting in the consuming adapter.`,
+      )
+    }
+    return errors
+  })
+
+/** graphql-schema is SDL/contracts/client-safe errors, never credential implementation. */
+export const validateGraphqlSchemaCredentialOwnership = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap((file) => {
+    if (!/^packages\/graphql-schema\/src\/.*\.[cm]?[jt]sx?$/.test(file.path))
+      return []
+    const content = withoutComments(file.content)
+    const credentialImplementation =
+      /["'](?:node:)?crypto["']|\bcrypto\s*\.\s*(?:subtle|getRandomValues)|\b(?:PUBLIC_TODO_TOKEN_SECRET|INVITATION_REGISTRATION_ENCRYPTION_KEY)\b|@pf\/(?:public-completion|identity-management)(?:\/credentials)?["'/]|(?:public-todo|registration-link)-token["']/.test(
+        content,
+      )
+    return credentialImplementation
+      ? [
+          `${file.path} contains credential crypto, secret configuration or a credential dependency. Keep graphql-schema limited to SDL, generated contracts and client-safe errors; import credentials directly from their domain owner at the caller.`,
+        ]
+      : []
+  })
+
 const repositoryFiles = (
   include: (path: string) => boolean = isNonGraphDependencyFile,
 ): ReadonlyArray<ReferenceFile> => {
@@ -512,6 +741,42 @@ const repositoryFiles = (
       content: readFileSync(join(workspaceRoot, path), "utf8"),
     }))
 }
+
+const validateExecutionOwnership = (
+  files: ReadonlyArray<ReferenceFile>,
+): string[] =>
+  files.flatMap(({ path, content }) => {
+    const source = withoutComments(content)
+    if (path.startsWith("packages/process-execution/src/")) {
+      return /["'](?:graphql|graphql-yoga|@pf\/graphql-schema(?:\/[^"']*)?)["']/.test(
+        source,
+      ) &&
+        /["'](?:graphql|graphql-yoga|@pf\/graphql-schema(?:\/(?!errors["'])[^"']*)?)["']/.test(
+          source,
+        )
+        ? [
+            `${path}: execution must use domain errors, not GraphQL transport or generated resolver contracts.`,
+          ]
+        : []
+    }
+    if (/(?:spec|test)\.[cm]?[jt]sx?$/.test(path)) return []
+    if (
+      /(?:from\s*|import\s*\()["'][^"']*process-execution\/src\//.test(source)
+    )
+      return [
+        `${path}: import execution operations through @pf/process-execution entry points.`,
+      ]
+    if (
+      path.startsWith("packages/process-test-runner/src/") &&
+      /@pf\/graphql-api|job-handler\/.*(?:flow-execution|system-step-execution)/.test(
+        source,
+      )
+    )
+      return [
+        `${path}: process-test-runner must call execution operations directly.`,
+      ]
+    return []
+  })
 
 export const validateOrganisationPluginModel = (
   files: ReadonlyArray<ReferenceFile>,
@@ -542,6 +807,29 @@ export const validatePublicationAllowlistUniqueness = (
 export const validateInventory = (graph: ProjectGraph): string[] => {
   const errors: string[] = []
   const files = repositoryFiles()
+  errors.push(
+    ...validateExecutionOwnership(
+      repositoryFiles((path) => /\.[cm]?[jt]sx?$/.test(path)),
+    ),
+  )
+  errors.push(...validateGraphqlSchemaCredentialOwnership(files))
+  errors.push(...validateRealtimeOwnership(files))
+  errors.push(...validateExecutableForms(files))
+  errors.push(
+    ...validateIdentityManagementOwnership(
+      repositoryFiles((path) => path.endsWith(".ts")),
+    ),
+  )
+  errors.push(
+    ...validateAccountingOwnership(
+      repositoryFiles((path) => /\.[cm]?[jt]sx?$/.test(path)),
+    ),
+  )
+  errors.push(
+    ...validateRuntimeContractOwnership(
+      repositoryFiles((path) => /\.[cm]?[jt]sx?$/.test(path)),
+    ),
+  )
   errors.push(
     ...validateOrganisationPluginModel(
       repositoryFiles(

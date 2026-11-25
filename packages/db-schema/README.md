@@ -1,8 +1,10 @@
-# About
+# Database schema
 
-The data model which stores a single organisation, its processes,
-steps, and the flow between them.
+The shared persistence model for organisations, process definitions, executions,
+and related runtime data.
 
-We derive the database schema from this such as:
-- `packages/drizzle-sqlite/src/lib/db-schema.ts`
-- `packages/drizzle-postgres/src/lib/db-schema.ts`
+The source is [`xplain/schema.ddl`](./xplain/schema.ddl). SQLite and PostgreSQL
+Drizzle schemas are generated from it.
+
+See [`@pf/xplain-ddl`](../xplain-ddl/README.md) for an introduction to the schema
+language.

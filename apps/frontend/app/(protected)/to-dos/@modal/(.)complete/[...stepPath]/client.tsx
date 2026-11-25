@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation"
 import { Suspense, useCallback } from "react"
-import type { JsonSchemaRoot } from "@pf/form"
 import { Button } from "@pf/shadcn-components"
 import {
   CompleteTodoForm,
@@ -20,6 +19,9 @@ interface CompleteTodoModalClientProps {
   stepName: string
 }
 
+// Loading, error and loaded states must agree before async evidence arrives.
+const wideDialogClassName = "sm:max-w-[min(90rem,calc(100%-2rem))]"
+
 function CompleteTodoModalClientInner({
   todoId,
   stepPath,
@@ -32,7 +34,6 @@ function CompleteTodoModalClientInner({
 
   const defaultValues =
     (formMetadata?.defaultValues as Record<string, unknown> | null) ?? null
-  const jsonSchema = (formMetadata?.jsonSchema as JsonSchemaRoot | null) ?? null
 
   const handleClose = useCallback(() => {
     router.back()
@@ -44,7 +45,11 @@ function CompleteTodoModalClientInner({
   if (isLoading) {
     return (
       <Dialog open={true} onOpenChange={(open) => !open && handleClose()}>
-        <FormDialogContent title={stepName} description="Loading...">
+        <FormDialogContent
+          className={wideDialogClassName}
+          title={stepName}
+          description="Loading..."
+        >
           <FormSkeleton />
         </FormDialogContent>
       </Dialog>
@@ -54,7 +59,11 @@ function CompleteTodoModalClientInner({
   if (error || !formMetadata) {
     return (
       <Dialog open={true} onOpenChange={(open) => !open && handleClose()}>
-        <FormDialogContent title="Error" description="Unable to load form">
+        <FormDialogContent
+          className={wideDialogClassName}
+          title="Error"
+          description="Unable to load form"
+        >
           <div className="space-y-4">
             <p className="text-sm text-rose-600 dark:text-rose-400">
               {getDisplayErrorMessage(
@@ -73,15 +82,19 @@ function CompleteTodoModalClientInner({
 
   return (
     <Dialog open={true} onOpenChange={(open) => !open && handleClose()}>
-      <FormDialogContent title={displayStepName} description={processName}>
+      <FormDialogContent
+        className={wideDialogClassName}
+        title={displayStepName}
+        description={processName}
+      >
         <CompleteTodoForm
           todoId={todoId}
           stepPath={stepPath}
           inputTypeName={formMetadata.inputTypeName}
           completeMutationName={formMetadata.completeMutationName}
           defaultValues={defaultValues}
-          formDefinition={formMetadata.formDefinition}
-          jsonSchema={jsonSchema}
+          requestData={formMetadata.requestData}
+          pluginConfiguration={formMetadata.pluginConfiguration}
           onClose={handleClose}
         />
       </FormDialogContent>
@@ -121,7 +134,11 @@ export default function CompleteTodoModalClient(
     <EffectErrorBoundary
       fallback={(error) => (
         <Dialog open={true} onOpenChange={(open) => !open && handleClose()}>
-          <FormDialogContent title="Error" description="Unable to load form">
+          <FormDialogContent
+            className={wideDialogClassName}
+            title="Error"
+            description="Unable to load form"
+          >
             <FormErrorFallback error={error} onClose={handleClose} />
           </FormDialogContent>
         </Dialog>
@@ -130,7 +147,11 @@ export default function CompleteTodoModalClient(
       <Suspense
         fallback={
           <Dialog open={true} onOpenChange={(open) => !open && handleClose()}>
-            <FormDialogContent title={props.stepName} description="Loading...">
+            <FormDialogContent
+              className={wideDialogClassName}
+              title={props.stepName}
+              description="Loading..."
+            >
               <FormSkeleton />
             </FormDialogContent>
           </Dialog>

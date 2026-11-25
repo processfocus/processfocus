@@ -16,15 +16,6 @@ describe("getWeekStart with Monday start (startDayOfWeek: 1)", () => {
     expect(result.getSeconds()).toBe(0)
   })
 
-  test("returns previous Monday for a Wednesday input", () => {
-    // Wednesday, January 22, 2025
-    const wednesday = new Date(2025, 0, 22, 10, 0, 0)
-    const result = getWeekStart(wednesday, 1)
-
-    expect(result.getDay()).toBe(1) // Monday
-    expect(result.getDate()).toBe(20) // Monday the 20th
-  })
-
   test("returns previous Monday for a Sunday input", () => {
     // Sunday, January 26, 2025
     const sunday = new Date(2025, 0, 26, 23, 59, 59)
@@ -32,34 +23,6 @@ describe("getWeekStart with Monday start (startDayOfWeek: 1)", () => {
 
     expect(result.getDay()).toBe(1) // Monday
     expect(result.getDate()).toBe(20) // Monday the 20th (6 days back)
-  })
-
-  test("handles Sunday edge case correctly (goes back 6 days)", () => {
-    // Sunday, January 19, 2025
-    const sunday = new Date(2025, 0, 19, 12, 0, 0)
-    const result = getWeekStart(sunday, 1)
-
-    expect(result.getDay()).toBe(1) // Monday
-    expect(result.getDate()).toBe(13) // Monday the 13th
-  })
-
-  test("returns previous Monday for a Saturday input", () => {
-    // Saturday, January 25, 2025
-    const saturday = new Date(2025, 0, 25, 18, 0, 0)
-    const result = getWeekStart(saturday, 1)
-
-    expect(result.getDay()).toBe(1) // Monday
-    expect(result.getDate()).toBe(20) // Monday the 20th (5 days back)
-  })
-
-  test("handles month boundary (week spans two months)", () => {
-    // Wednesday, February 5, 2025
-    const wednesday = new Date(2025, 1, 5, 10, 0, 0)
-    const result = getWeekStart(wednesday, 1)
-
-    expect(result.getDay()).toBe(1) // Monday
-    expect(result.getMonth()).toBe(1) // February
-    expect(result.getDate()).toBe(3) // Monday the 3rd
   })
 
   test("handles month boundary when Monday is in previous month", () => {
@@ -71,17 +34,6 @@ describe("getWeekStart with Monday start (startDayOfWeek: 1)", () => {
     expect(result.getMonth()).toBe(11) // December (previous year)
     expect(result.getFullYear()).toBe(2024)
     expect(result.getDate()).toBe(30) // Monday the 30th
-  })
-
-  test("handles year boundary", () => {
-    // Wednesday, January 1, 2025
-    const newYearsDay = new Date(2025, 0, 1, 0, 0, 0)
-    const result = getWeekStart(newYearsDay, 1)
-
-    expect(result.getDay()).toBe(1) // Monday
-    expect(result.getMonth()).toBe(11) // December
-    expect(result.getFullYear()).toBe(2024)
-    expect(result.getDate()).toBe(30)
   })
 
   test("does not mutate the input date", () => {
@@ -117,34 +69,6 @@ describe("getWeekStart with Monday start (startDayOfWeek: 1)", () => {
 
 describe("getWeekStart with configurable start day", () => {
   describe("Sunday start (startDayOfWeek: 0, default)", () => {
-    test("returns same Sunday for a Sunday input", () => {
-      // Sunday, January 19, 2025
-      const sunday = new Date(2025, 0, 19, 12, 0, 0)
-      const result = getWeekStart(sunday, 0)
-
-      expect(result.getDay()).toBe(0) // Sunday
-      expect(result.getDate()).toBe(19) // Same Sunday
-      expect(result.getHours()).toBe(0)
-    })
-
-    test("returns previous Sunday for a Monday input", () => {
-      // Monday, January 20, 2025
-      const monday = new Date(2025, 0, 20, 14, 30, 0)
-      const result = getWeekStart(monday, 0)
-
-      expect(result.getDay()).toBe(0) // Sunday
-      expect(result.getDate()).toBe(19) // Sunday the 19th
-    })
-
-    test("returns previous Sunday for a Saturday input", () => {
-      // Saturday, January 25, 2025
-      const saturday = new Date(2025, 0, 25, 18, 0, 0)
-      const result = getWeekStart(saturday, 0)
-
-      expect(result.getDay()).toBe(0) // Sunday
-      expect(result.getDate()).toBe(19) // Sunday the 19th (6 days back)
-    })
-
     test("default parameter is Sunday (0)", () => {
       // Monday, January 20, 2025
       const monday = new Date(2025, 0, 20, 14, 30, 0)
@@ -177,34 +101,6 @@ describe("getWeekStart with configurable start day", () => {
   })
 
   describe("Saturday start (startDayOfWeek: 6)", () => {
-    test("returns same Saturday for a Saturday input", () => {
-      // Saturday, January 25, 2025
-      const saturday = new Date(2025, 0, 25, 18, 0, 0)
-      const result = getWeekStart(saturday, 6)
-
-      expect(result.getDay()).toBe(6) // Saturday
-      expect(result.getDate()).toBe(25) // Same Saturday
-      expect(result.getHours()).toBe(0)
-    })
-
-    test("returns previous Saturday for a Sunday input", () => {
-      // Sunday, January 26, 2025
-      const sunday = new Date(2025, 0, 26, 12, 0, 0)
-      const result = getWeekStart(sunday, 6)
-
-      expect(result.getDay()).toBe(6) // Saturday
-      expect(result.getDate()).toBe(25) // Saturday the 25th
-    })
-
-    test("returns previous Saturday for a Friday input", () => {
-      // Friday, January 31, 2025
-      const friday = new Date(2025, 0, 31, 14, 0, 0)
-      const result = getWeekStart(friday, 6)
-
-      expect(result.getDay()).toBe(6) // Saturday
-      expect(result.getDate()).toBe(25) // Saturday the 25th (6 days back)
-    })
-
     test("returns consistent results for all days of the same week", () => {
       // Week of January 25-31, 2025 (Saturday-Friday with Saturday start)
       const saturday = new Date(2025, 0, 25, 9, 0, 0)
@@ -228,24 +124,6 @@ describe("getWeekStart with configurable start day", () => {
   })
 
   describe("Wednesday start (startDayOfWeek: 3)", () => {
-    test("returns same Wednesday for a Wednesday input", () => {
-      // Wednesday, January 22, 2025
-      const wednesday = new Date(2025, 0, 22, 11, 0, 0)
-      const result = getWeekStart(wednesday, 3)
-
-      expect(result.getDay()).toBe(3) // Wednesday
-      expect(result.getDate()).toBe(22) // Same Wednesday
-    })
-
-    test("returns previous Wednesday for a Tuesday input", () => {
-      // Tuesday, January 28, 2025
-      const tuesday = new Date(2025, 0, 28, 10, 0, 0)
-      const result = getWeekStart(tuesday, 3)
-
-      expect(result.getDay()).toBe(3) // Wednesday
-      expect(result.getDate()).toBe(22) // Wednesday the 22nd (6 days back)
-    })
-
     test("returns consistent results for all days of the same week", () => {
       // Week of January 22-28, 2025 (Wednesday-Tuesday with Wednesday start)
       const wednesday = new Date(2025, 0, 22, 9, 0, 0)

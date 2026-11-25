@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process"
 import { cpSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
-import { NodeContext } from "@effect/platform-node"
+import { NodeServices } from "@effect/platform-node"
 import { Effect } from "effect"
 import { runBuild } from "./commands/build"
 import { runImport } from "./commands/import"
@@ -26,7 +26,7 @@ const usage = `Usage:
 
 const runWithNodeContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
-    effect.pipe(Effect.provide(NodeContext.layer)) as Effect.Effect<A, E>,
+    effect.pipe(Effect.provide(NodeServices.layer)) as Effect.Effect<A, E>,
   )
 
 const parseArgs = (argv: string[]) => {

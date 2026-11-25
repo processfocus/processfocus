@@ -23,8 +23,9 @@ export const formEntry = <TInput extends Schema.Struct.Fields>(
     // biome-ignore lint/suspicious/noExplicitAny: Form generics erased at runtime
     any,
     TInput,
-    string>,
-  data: { [K in keyof TInput]: Schema.Schema.Type<TInput[K]> },
+    string
+  >,
+  data: { [K in keyof TInput]: TInput[K]["Type"] },
 ): FormEntry => ({
   stepPath: form.node.path,
   data: data as Record<string, unknown>,

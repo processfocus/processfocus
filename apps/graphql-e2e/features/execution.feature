@@ -10,7 +10,7 @@ Feature: Execution Timeline
   Scenario: Pull execution shows no duplicate steps for expensive purchase request
     # Start expensive purchase request which goes through manager -> procurement approval
     Given I am authenticated with the "/Employee" role
-    When I start a purchase request for item "Server" with value "5000"
+    When I start a purchase request for item "Server {purchase}" with value "5000"
     And I wait for flow to advance
 
     # Complete manager approval

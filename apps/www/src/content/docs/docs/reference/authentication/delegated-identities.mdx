@@ -1,0 +1,54 @@
+---
+title: Delegated identities
+description: How an agent signs in and acts on behalf of an existing user.
+---
+
+A delegation lets an agent act on behalf of an existing user without going
+through that user's interactive sign-in. Unlike a [system
+identity](/docs/reference/authentication/system-identities/), a delegation is
+linked to a user. It still has its own identity, so Process Focus can record
+which actions the delegation performed on the user's behalf.
+
+Unlike an agent using your interactive session, a delegation identifies both
+the agent and the user on whose behalf it acts.
+
+## Enable secret sign-in in code
+
+Set `delegatedAccess: true` in your organisation's existing
+`AuthenticationConfig`, alongside your sign-in provider settings:
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+
+new AuthenticationConfig(org, "auth", {
+  delegatedAccess: true,
+  // Keep your existing identityProviders and/or passkey settings here.
+})
+```
+
+Delegation works whether the user signs in with [SSO](/docs/reference/authentication/sso/)
+or a [passkey](/docs/reference/authentication/passkeys/). The agent signs in
+with the delegation secret, not the user's SSO credentials or passkey.
+
+Enabling `delegatedAccess` only adds a **Log in with a secret** action
+on the sign-in page. It does not grant any permission. Permissions are
+still defined in Cedar, see [Delegated
+permissions](/docs/reference/authorisation/delegated-permissions/).
+
+Note that setting the property back to `false` hides the option but doesn't revoke
+existing secrets.
+
+## Create and use a delegation secret
+
+1. In the Dashboard, open your profile menu and choose **Act on behalf**.
+2. If you have permission to issue a secret, name the delegation token and
+   choose a secret lifetime of 1, 7, or 14 days. Copy the secret when it's
+   shown; you can't reveal it again.
+3. Use **Log in with a secret** on the sign-in page for the organisation
+   environment that issued the secret. The profile shows the delegation token
+   name, the user it represents, and when access expires.
+
+A delegation token is the named record; its secret is the credential used to
+sign in. Replacing a secret keeps the delegation's identity but invalidates
+the previous secret. Keep the secret private: anyone who has it can sign in
+as the delegation while it is valid.

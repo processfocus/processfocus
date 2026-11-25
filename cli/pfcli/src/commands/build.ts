@@ -13,13 +13,12 @@ import {
 import { tmpdir } from "node:os"
 import * as path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { FileSystem } from "@effect/platform"
 import {
   ARTIFACT_INVENTORY_FILENAME,
   ARTIFACT_INVENTORY_FORMAT,
   ARTIFACT_INVENTORY_VERSION,
 } from "@processfocus/runtime"
-import { Console, Effect } from "effect"
+import { Console, Effect, FileSystem } from "effect"
 import { extractPolicyFiles, extractSchemaFiles } from "@pf/auth-config"
 import {
   BROWSER_PLUGIN_ARTIFACT_MANIFEST_FILE,
@@ -45,22 +44,10 @@ import {
 import { BuildError, GraphqlSchemaError, PolicyFileError } from "../errors"
 import { CLI_PRODUCER } from "../producer"
 import { validateFlows } from "../utils/validate-flows"
+import { buildBrowserForms } from "./build-browser-forms"
 
 declare const PFCLI_DISTRIBUTION_BUILD: boolean
 
-// These runtime modules have target-resolved assets or runtime-specific
-// implementations. Keep them external so deploy artifacts resolve them from
-// the organisation dependencies instead of baking in build-machine paths.
-// @tursodatabase/serverless is intentionally NOT external: the AWS Lambda
-// Docker images do not install it, so it must be bundled into org.js.
-// @tursodatabase/database and @tursodatabase/sync have native binaries and
-// cannot be bundled. They must only be dynamically imported in bundle code
-// so AWS Lambda (which does not install them) never resolves them at startup.
-const BUNDLE_EXTERNAL_MODULES = [
-  "@cedar-policy/cedar-wasm",
-  "@tursodatabase/database",
-  "@tursodatabase/sync",
-]
 const LEGACY_FRONTEND_MANIFEST_FILES = [
   "embed-manifest.json",
   "frontend-plugin-manifest.json",
@@ -77,6 +64,10 @@ const BROWSER_PLUGIN_BUNDLE_DIRECTORY = "browser-plugins"
 const BROWSER_PLUGIN_BUILD_TIMEOUT_MS = 90_000
 const BROWSER_PLUGIN_VALIDATION_TIMEOUT_MS = 30_000
 const BROWSER_PLUGIN_HOST_EXTERNALS = [
+  "effect",
+  "effect/*",
+  "@pf/form-schema",
+  "@pf/form-submission-schema",
   "next/*",
   "react",
   "react/*",
@@ -505,13 +496,11 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
         : new URL("./bundled-graphql-schema.mjs", import.meta.url),
     )
 
-    // Resolve absolute paths
     const absoluteOrgPath = path.resolve(process.cwd(), orgPath)
     const absoluteOutputDir = path.resolve(absoluteOrgPath, outputDir)
     yield* Console.log(`Building organisation from: ${absoluteOrgPath}`)
     yield* Console.log(`Output directory: ${absoluteOutputDir}`)
 
-    // Step 1: Ensure output directory exists
     yield* Console.log("\n[1/6] Preparing output directory...")
     yield* fs.makeDirectory(absoluteOutputDir, { recursive: true })
     yield* Effect.sync(() => {
@@ -541,7 +530,6 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
       })
     })
 
-    // Step 2: Bundle organisation
     yield* Console.log("\n[2/6] Bundling organisation...")
     const indexPath = path.join(absoluteOrgPath, "src/index.ts")
     const sourcePath = indexPath
@@ -551,7 +539,6 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
       `.pfcli-build-${randomUUID()}`,
     )
 
-    // Verify source exists
     const sourceExists = yield* fs.exists(sourcePath)
     if (!sourceExists) {
       return yield* new BuildError({
@@ -583,24 +570,15 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
       ),
     )
 
-    // Run bun build
-    // Note: --outfile doesn't work reliably with bun, use --outdir + --entry-naming instead
+    const bundleOrganisationPath = fileURLToPath(
+      typeof PFCLI_DISTRIBUTION_BUILD === "undefined"
+        ? new URL("../bundle-organisation-main.ts", import.meta.url)
+        : new URL("./bundle-organisation.mjs", import.meta.url),
+    )
     const bunBuildArgs = [
-      "build",
+      bundleOrganisationPath,
       generatedBundleEntryPath,
-      "--outdir",
       absoluteOutputDir,
-      "--entry-naming",
-      "org.js",
-      "--minify",
-      "--target",
-      "node",
-      "--conditions",
-      "bun",
-      ...BUNDLE_EXTERNAL_MODULES.flatMap((moduleName) => [
-        "--external",
-        moduleName,
-      ]),
     ]
     const BUN_BUILD_TIMEOUT_MS = 90_000
     const bunBuild = yield* Effect.try({
@@ -667,7 +645,6 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
 
     yield* Console.log(`✅ Bundled: ${bundledPath}`)
 
-    // Step 3: Generate deploy manifest
     yield* Console.log(
       `\n[3/6] Generating deploy v${ORGANISATION_DEPLOY_MANIFEST_VERSION} manifest...`,
     )
@@ -701,7 +678,6 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
     const customAwsRuntimeConfig = orgModule.CustomAwsRuntimeConfig
     const customGraphqlDir = path.join(absoluteOrgPath, "graphql")
 
-    // Validate all process flows
     yield* validateFlows(org).pipe(
       Effect.mapError(
         (error) =>
@@ -739,7 +715,6 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
 
     yield* Console.log(`✅ Generated: ${deployManifestPath}`)
 
-    // Step 4: Generate frontend manifest and copy adjacent public assets
     yield* Console.log(
       `\n[4/6] Generating frontend v${ORGANISATION_FRONTEND_MANIFEST_VERSION} manifest...`,
     )
@@ -787,13 +762,19 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
     })
 
     const browserPluginManifest = yield* Effect.try({
-      try: () =>
-        buildBrowserPluginArtifacts({
+      try: () => ({
+        ...buildBrowserPluginArtifacts({
           org,
           orgPath: absoluteOrgPath,
           outputDir: absoluteOutputDir,
           frontendManifest,
         }),
+        forms: buildBrowserForms({
+          org,
+          orgPath: absoluteOrgPath,
+          outputDir: absoluteOutputDir,
+        }),
+      }),
       catch: (error) =>
         new BuildError({
           message:
@@ -1002,7 +983,6 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
     yield* fs.rename(schemaTmpPath, schemaPath)
     yield* Console.log(`✅ Generated: ${schemaPath}`)
 
-    // Step 6: Copy Cedar policies
     yield* Console.log("\n[6/6] Copying Cedar policies...")
 
     const cedarOutputDir = path.join(absoluteOutputDir, "cedar")
@@ -1163,6 +1143,12 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
               ),
             ),
           },
+          ...(browserPluginManifest.forms ?? []).map((form) => ({
+            format: "processfocus/browser-form-bundle",
+            version: form.hostInterfaceVersion,
+            path: form.path,
+            sha256: form.sha256,
+          })),
           ...browserPluginManifest.plugins.flatMap((plugin) => [
             {
               format: BROWSER_PLUGIN_BUNDLE_FORMAT,

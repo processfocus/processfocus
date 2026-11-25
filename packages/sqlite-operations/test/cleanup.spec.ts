@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
 import { CleanupOperations } from "@pf/graphql-db-operations"
 import {
@@ -14,12 +14,12 @@ describe("cleanup operations", () => {
     DatabaseTest,
   )
 
-  type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+  type TestRequirements = Layer.Success<typeof TestLayer>
 
   const runTest = <A, E>(test: Effect.Effect<A, E, TestRequirements>) =>
     Effect.runPromise(Effect.provide(test, TestLayer))
 
-  it("deletes public completion invitation attempts before todos", () =>
+  it("cleans up todos with invitation attempts and task deadlines", () =>
     runTest(
       Effect.gen(function* () {
         const db = yield* TypedSqliteDrizzle
@@ -79,6 +79,13 @@ describe("cleanup operations", () => {
           email: "external@example.com",
         })
 
+        yield* db.insert(schema.taskDeadline).values({
+          ownerToDoId: "todo-cleanup",
+          flowId: "flow-cleanup",
+          deadlineName: "reminder",
+          scheduledAt: yield* DateTime.now,
+        })
+
         const cleanupOps = yield* CleanupOperations
         const result = yield* cleanupOps.cleanupExecutions()
 
@@ -87,6 +94,7 @@ describe("cleanup operations", () => {
           yield* db.select().from(schema.publicCompletionInvitationAttempt),
         ).toEqual([])
         expect(yield* db.select().from(schema.toDo)).toEqual([])
+        expect(yield* db.select().from(schema.taskDeadline)).toEqual([])
       }),
     ))
 })

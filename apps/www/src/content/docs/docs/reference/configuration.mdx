@@ -1,0 +1,94 @@
+---
+title: Configuration
+description: Load required configuration with Effect and configure your organisation.
+---
+
+Some Process Focus constructs require configuration, in particular
+knowledge of secrets. Secrets do not belong in code, but need to come
+from the outside. How and where secrets are stored depends on the
+runtime.
+
+Process Focus uses Effect's `Config` API to support runtime-specific
+sources of secrets. To do that effectively, we need to define
+our organisation in a particular way. Export a `configureOrg` Effect
+from your organisation module to read those values before creating the
+constructs that need them (if you use `pfcli init` you will get source
+code that does exactly this).
+
+## Example
+
+This example reads the credentials for a Google identity provider:
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const configureOrg = Effect.gen(function* () {
+  const googleClientId = yield* Config.String("GOOGLE_CLIENT_ID")
+  const googleClientSecret = yield* Config.String("GOOGLE_CLIENT_SECRET")
+
+  new AuthenticationConfig(org, "auth", {
+    identityProviders: {
+      google: {
+        clientID: googleClientId,
+        clientSecret: googleClientSecret,
+        scopes: ["openid", "email", "profile"],
+      },
+    },
+  })
+
+  return org
+})
+```
+
+`Config.String("GOOGLE_CLIENT_ID")` describes a required string value. It does
+not read the value immediately. Inside `Effect.gen`, `yield*` loads the value
+from the active configuration provider and gives you a `string` to pass to
+the construct.
+
+`Effect.gen` lets you read configuration in sequence and use the results in
+ordinary TypeScript code. Return the configured organisation at the end.
+
+## When configuration runs
+
+Exporting `configureOrg` defines the work; it does not execute it. Process
+Focus executes the Effect when loading the configured organisation. For
+example, organisation import uses `configureOrg` when it is exported and
+supplies a configuration provider that reads environment variables.
+
+Keep constructs that depend on configuration inside `configureOrg`, after
+the required values have been read.
+
+## Missing values
+
+If a required key is missing, reading it fails with a configuration error
+identifying the key. Execution stops before reaching the constructs that
+follow the failed read. This is an error, rather than a warning: the
+organisation cannot finish configuring without its required values.
+
+## Defaults
+
+For a setting with a meaningful fallback, use `Config.withDefault`:
+
+```typescript
+const supportEmail = yield* Config.String("SUPPORT_EMAIL").pipe(
+  Config.withDefault("support@example.com"),
+)
+```
+
+Place this read inside `Effect.gen`, like the required values above. If the
+key is missing, the fallback is used. Keep credentials required so missing
+secrets fail configuration instead of silently using a placeholder.
+
+See [Google single sign-on](/docs/reference/authentication/sso/google/) for
+the Google Workspace configuration options.
+
+## Configuration in the Process Focus Cloud
+
+The Process Focus cloud runtime lets you specify configuration values
+for each stage—for example, different values for staging and production.
+See [Cloud configuration](/docs/cloud/configuration/) for commands to set
+values and secrets.

@@ -5,13 +5,15 @@ import {
   makeDatabaseConfigLayer,
   resolveDatabasePath,
 } from "@pf/db-info"
+import { readFrontendPort } from "@pf/frontend-endpoints/port-files"
+import { SettingsQueries } from "@pf/graphql-db-operations"
 import {
   ACTIVE_REGISTRATION_LINK_EXISTS_MESSAGE,
   ACTIVE_REGISTRATION_LINK_REQUIRES_ROTATE_MESSAGE,
-  DEVELOPMENT_INVITATION_REGISTRATION_SECRET,
   IMMUTABLE_INVITATION_MESSAGE,
   issueRegistrationLinkForEmail,
-} from "@pf/graphql-db-operations"
+} from "@pf/identity-management"
+import { DEVELOPMENT_INVITATION_REGISTRATION_SECRET } from "@pf/identity-management/credentials"
 import { TypedSqliteDrizzleLayer } from "@pf/service-drizzle-sqlite"
 import {
   SqliteAuthenticationDatabaseLive,
@@ -20,6 +22,7 @@ import {
 } from "@pf/sqlite-operations"
 import { graphqlRequestWithCredentials } from "../utils/graphql-client"
 import { makePfcliSqlClientLayer } from "../utils/local-database-layer"
+import { validateUrlOption } from "../utils/operator-inputs"
 import { ensureKnownEnvironmentName } from "../utils/remote-name-validation"
 
 class InvitationRegistrationLinkDbPathError extends Data.TaggedError(
@@ -134,7 +137,10 @@ export const resolveLocalRegistrationLinkFrontendOrigin = (): string => {
     process.env["BASE_URL"] ??
     process.env["NEXT_PUBLIC_FRONTEND_URL"]
 
-  return (configured || "http://localhost:3000").replace(/\/$/, "")
+  return (configured || `http://localhost:${readFrontendPort()}`).replace(
+    /\/$/,
+    "",
+  )
 }
 
 const resolveLocalRegistrationLinkEncryptionSecret = (): string | undefined => {
@@ -151,11 +157,18 @@ const resolveLocalRegistrationLinkEncryptionSecret = (): string | undefined => {
 
 const generateRegistrationLinkLocal = (options: {
   readonly orgPath?: string | undefined
+  readonly databasePath?: string | undefined
+  readonly frontendUrl?: string | undefined
   readonly email: string
   readonly rotate: boolean
 }) =>
   Effect.gen(function* () {
-    const databasePath = resolveDatabasePath(options.orgPath)
+    const frontendOrigin =
+      options.frontendUrl === undefined
+        ? resolveLocalRegistrationLinkFrontendOrigin()
+        : yield* validateUrlOption(options.frontendUrl, "--frontend-url", true)
+    const databasePath =
+      options.databasePath ?? resolveDatabasePath(options.orgPath)
     if (!databasePath) {
       return yield* new InvitationRegistrationLinkDbPathError({
         message: DATABASE_PATH_NOT_CONFIGURED,
@@ -174,16 +187,18 @@ const generateRegistrationLinkLocal = (options: {
     )
 
     const secret = resolveLocalRegistrationLinkEncryptionSecret()
-    const result = yield* issueRegistrationLinkForEmail({
-      email: options.email,
-      rotate: options.rotate,
-      actor: "SYSTEM",
-      organisationScope: resolveLocalRegistrationLinkOrganisationScope(
-        options.orgPath,
-      ),
-      frontendOrigin: resolveLocalRegistrationLinkFrontendOrigin(),
-      ...(secret === undefined ? {} : { secret }),
-    }).pipe(
+    const result = yield* Effect.flatMap(SettingsQueries, (queries) =>
+      issueRegistrationLinkForEmail(queries, {
+        email: options.email,
+        rotate: options.rotate,
+        actor: "SYSTEM",
+        organisationScope: resolveLocalRegistrationLinkOrganisationScope(
+          options.orgPath,
+        ),
+        frontendOrigin,
+        ...(secret === undefined ? {} : { secret }),
+      }),
+    ).pipe(
       Effect.flatMap((result) =>
         !result.ok &&
         options.rotate &&
@@ -191,7 +206,7 @@ const generateRegistrationLinkLocal = (options: {
           ? issuePasskeyRecoveryLink({
               email: options.email,
               actor: "SYSTEM",
-              frontendOrigin: resolveLocalRegistrationLinkFrontendOrigin(),
+              frontendOrigin,
             })
           : Effect.succeed(result),
       ),
@@ -248,6 +263,8 @@ const generateRegistrationLinkRemote = (options: {
 
 type InvitationRegistrationLinkOptions = {
   readonly orgPath?: string | undefined
+  readonly databasePath?: string | undefined
+  readonly frontendUrl?: string | undefined
   readonly projectId?: string | undefined
   readonly environmentId?: string | undefined
   readonly email?: string | undefined
@@ -258,6 +275,8 @@ type InvitationRegistrationLinkMode =
   | {
       readonly kind: "local"
       readonly orgPath?: string | undefined
+      readonly databasePath?: string | undefined
+      readonly frontendUrl?: string | undefined
       readonly email: string
       readonly rotate: boolean
     }
@@ -284,6 +303,15 @@ const resolveRegistrationLinkMode = (
     }
 
     if (projectId && environmentId) {
+      if (
+        options.frontendUrl !== undefined ||
+        options.databasePath !== undefined
+      ) {
+        return yield* new InvitationRegistrationLinkModeError({
+          message:
+            "--frontend-url and --database-path apply only to local mode. Remove them when using --project/--env.",
+        })
+      }
       if (options.orgPath) {
         return yield* new InvitationRegistrationLinkModeError({
           message:
@@ -313,6 +341,8 @@ Remote example: pfcli invitation registration-link --project <project-number> --
     return {
       kind: "local",
       orgPath: options.orgPath,
+      databasePath: options.databasePath,
+      frontendUrl: options.frontendUrl,
       email: options.email,
       rotate: options.rotate,
     }
@@ -355,7 +385,7 @@ export const runInvitationRegistrationLink = (
       InvitationRegistrationLinkDatabaseError: reportCommandError,
       CliError: reportCommandError,
     }),
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.gen(function* () {
         yield* Console.error("\n❌ Registration link failed unexpectedly.")
         yield* Effect.sync(() => {

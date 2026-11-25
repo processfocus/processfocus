@@ -1,11 +1,11 @@
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import * as Statement from "effect/sql/Statement"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   ScheduledFlowOperations,
   StepCompletionOperations,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { RequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
@@ -14,21 +14,18 @@ import { SqliteScheduledFlowOperationsLive } from "../src/lib/scheduled-flow"
 import { SqliteStepCompletionOperationsLive } from "../src/lib/step-completion"
 import { describe, expect, it } from "bun:test"
 
-const originalTime = DateTime.unsafeMake("2026-08-08T08:00:00.000Z")
-const requestTime = DateTime.unsafeMake("2026-08-08T09:00:00.000Z")
+const originalTime = DateTime.makeUnsafe("2026-08-08T08:00:00.000Z")
+const requestTime = DateTime.makeUnsafe("2026-08-08T09:00:00.000Z")
 
 const TestLayer = Layer.provideMerge(
   Layer.mergeAll(
     SqliteStepCompletionOperationsLive,
     SqliteScheduledFlowOperationsLive,
-    Layer.succeed(RequestTime, FiberRef.unsafeMake(requestTime)),
-    Layer.succeed(
-      UserDetails,
-      FiberRef.unsafeMake<UserDetailsValue>({
-        by: "completion-test@example.com",
-        id: "completion-test@example.com",
-      }),
-    ),
+    Layer.succeed(RequestTime, requestTime),
+    Layer.succeed(UserDetails, {
+      by: "completion-test@example.com",
+      id: "completion-test@example.com",
+    }),
   ),
   DatabaseTest,
 )
@@ -125,7 +122,7 @@ describe("idempotent step completion operations", () => {
         const ids = yield* seedCompletion("cas")
         const snapshot = yield* operations.getProcessStateByTodoId(ids.todo)
         if (!snapshot) {
-          return yield* Effect.dieMessage("Missing process state snapshot")
+          return yield* Effect.die("Missing process state snapshot")
         }
 
         const updated = yield* operations.updateProcessStateIfUnchanged(
@@ -205,7 +202,7 @@ describe("idempotent step completion operations", () => {
         const ids = yield* seedCompletion("append-cas")
         const snapshot = yield* operations.getProcessStateByTodoId(ids.todo)
         if (!snapshot) {
-          return yield* Effect.dieMessage("Missing process state snapshot")
+          return yield* Effect.die("Missing process state snapshot")
         }
 
         const appended =
@@ -267,5 +264,133 @@ describe("idempotent step completion operations", () => {
     expect(result.first).toBe("sf-stable-completion-handoff")
     expect(result.second).toBe(result.first)
     expect(result.rows).toEqual([{ id: result.first }])
+  })
+  it("batches completed-step attribution without mixing executions", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* TypedSqliteDrizzle
+        const operations = yield* StepCompletionOperations
+        const first = yield* seedCompletion("batch-first")
+        const second = yield* seedCompletion("batch-second")
+        const empty = yield* seedCompletion("batch-empty")
+        yield* db.insert(schema.user).values([
+          {
+            id: "batch-human",
+            sub: "human@example.test",
+            provider: "test",
+            createdAt: originalTime,
+          },
+          {
+            id: "batch-system",
+            sub: "system@example.test",
+            provider: "test",
+            createdAt: originalTime,
+          },
+        ])
+        yield* db.insert(schema.providerUser).values({
+          id: "pvu-batch",
+          userId: "batch-human",
+          email: "human@example.test",
+          name: "Human Name",
+          firstName: "Human",
+          lastName: "Name",
+          picture: "avatar",
+          locale: "en",
+          orgUnitId: first.orgUnit,
+        })
+        yield* db
+          .update(schema.processState)
+          .set({ startedByUserId: "batch-human" })
+          .where(eq(schema.processState.id, first.processState))
+        yield* db
+          .update(schema.processState)
+          .set({ startedByUserId: "batch-system" })
+          .where(eq(schema.processState.id, second.processState))
+        yield* operations.completeToDo(first.todo, "batch-system", null)
+        yield* operations.completeToDo(second.todo, "batch-human", null)
+        // Deleted work without a completer and active work with one are not completed steps.
+        yield* db.insert(schema.toDo).values([
+          {
+            id: "batch-deleted",
+            processExecutionId: first.execution,
+            flowId: first.flow,
+            _deleted: true,
+          },
+          {
+            id: "batch-active",
+            processExecutionId: first.execution,
+            flowId: first.flow,
+            completedByUserId: "batch-human",
+          },
+        ])
+
+        let statements = 0
+        const observe = (statement: Statement.Statement<unknown>) =>
+          Effect.sync(() => {
+            statements++
+            return statement
+          })
+        const noIds = yield* operations
+          .getCompletedStepsForExecutions([])
+          .pipe(Effect.provideService(Statement.CurrentTransformer, observe))
+        expect(noIds.size).toBe(0)
+        expect(statements).toBe(0)
+        const result = yield* operations
+          .getCompletedStepsForExecutions([
+            second.execution,
+            first.execution,
+            first.execution,
+            empty.execution,
+            "missing",
+          ])
+          .pipe(Effect.provideService(Statement.CurrentTransformer, observe))
+        expect(statements).toBe(2)
+        expect(result.size).toBe(4)
+        expect(result.get(empty.execution)).toEqual([])
+        expect(result.get("missing")).toEqual([])
+        const expectedStep = (
+          stepPath: string,
+          human: boolean,
+          completedAt: DateTime.Utc,
+        ) => ({
+          stepPath,
+          userId: human ? "batch-human" : "batch-system",
+          userSub: human ? "human@example.test" : "system@example.test",
+          providerUserId: human ? "pvu-batch" : "batch-system",
+          providerUserName: human ? "Human Name" : "system@example.test",
+          providerUserFirstName: human ? "Human" : "system@example.test",
+          providerUserLastName: human ? "Name" : "",
+          providerUserEmail: human
+            ? "human@example.test"
+            : "system@example.test",
+          providerUserPicture: human ? "avatar" : "",
+          completedAt,
+        })
+        expect(result.get(first.execution)).toEqual([
+          expectedStep(
+            "organisation-batch-first/process/source",
+            true,
+            originalTime,
+          ),
+          expectedStep(
+            "organisation-batch-first/process/target",
+            false,
+            requestTime,
+          ),
+        ])
+        expect(result.get(second.execution)).toEqual([
+          expectedStep(
+            "organisation-batch-second/process/source",
+            false,
+            originalTime,
+          ),
+          expectedStep(
+            "organisation-batch-second/process/target",
+            true,
+            requestTime,
+          ),
+        ])
+      }).pipe(Effect.provide(TestLayer)),
+    )
   })
 })

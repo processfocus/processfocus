@@ -1,10 +1,10 @@
-import { SqlClient } from "@effect/sql"
 import {
   QueueService,
   SERVER_PLUGIN_HOST_INTERFACE_VERSION,
   WebhookCallbackHost,
 } from "@processfocus/runtime"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   BusinessCalendarQueries,
   FlowExecutionOperations,
@@ -28,11 +28,8 @@ const TestLayer = Layer.mergeAll(
   Layer.mock(BusinessCalendarQueries, {}),
   Layer.mock(QueueService, {}),
   Layer.mock(SqlClient.SqlClient, {}),
-  Layer.succeed(
-    RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake("2026-09-02T00:00:00Z")),
-  ),
-  Layer.succeed(UserDetails, FiberRef.unsafeMake({ by: "SYSTEM", id: null })),
+  Layer.succeed(RequestTime, DateTime.makeUnsafe("2026-09-02T00:00:00Z")),
+  Layer.succeed(UserDetails, { by: "SYSTEM", id: null }),
   Layer.succeed(OrganisationProvider, {
     organisation: new Organisation({ name: "Webhook test" }),
     orgPath: "/tmp/webhook-test",

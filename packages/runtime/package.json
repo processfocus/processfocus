@@ -13,6 +13,12 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
+    "./walker-plugin": {
+      "types": "./dist/lib/walker-plugin.d.ts",
+      "bun": "./src/lib/walker-plugin.ts",
+      "import": "./dist/lib/walker-plugin.js",
+      "default": "./dist/lib/walker-plugin.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
@@ -27,7 +33,7 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "publishConfig": {
     "access": "public",

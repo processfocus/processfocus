@@ -12,6 +12,8 @@
     "pfcli": "./dist/main.mjs"
   },
   "exports": {
+    "./command-reference.md": "./dist/command-reference.md",
+    "./pfcli.usage.kdl": "./dist/pfcli.usage.kdl",
     "./package.json": "./package.json"
   },
   "files": [
@@ -20,40 +22,42 @@
     "LICENSE.md"
   ],
   "dependencies": {
-    "@cedar-policy/cedar-wasm": "^4.12.0",
+    "@cedar-policy/cedar-wasm": "^4.14.0",
     "@processfocus/hosting-contract": "0.1.0-next.2",
     "@processfocus/runtime": "0.1.0-next.2",
-    "@tursodatabase/database": "0.7.2",
-    "@tursodatabase/serverless": "1.4.0",
-    "@tursodatabase/sync": "0.7.2",
-    "effect": "^3.22.2",
+    "@tursodatabase/database": "0.8.3",
+    "@tursodatabase/serverless": "1.4.1",
+    "@tursodatabase/sync": "0.8.3",
+    "effect": "4.1.4",
     "processfocus": "0.1.0-next.2"
   },
   "devDependencies": {
-    "@effect/cli": "^0.77.1",
-    "@effect/platform": "^0.97.2",
-    "@effect/platform-node": "^0.108.2",
-    "@effect/sql": "^0.52.1",
+    "@effect/platform-node": "4.1.4",
+    "@pf/audit": "workspace:*",
     "@pf/auth-api": "workspace:*",
     "@pf/auth-config": "workspace:*",
-    "@pf/auth-local-cedar": "workspace:*",
     "@pf/auth-policy": "workspace:*",
     "@pf/auth-session": "workspace:*",
     "@pf/db-info": "workspace:*",
+    "@pf/delegation": "workspace:*",
     "@pf/drizzle-sqlite": "workspace:*",
+    "@pf/form-schema": "workspace:*",
     "@pf/frontend-endpoints": "workspace:*",
     "@pf/graphql-db-operations": "workspace:*",
+    "@pf/identity-management": "workspace:*",
     "@pf/layer-turso-cloud": "workspace:*",
     "@pf/layer-turso-local": "workspace:*",
     "@pf/openauth": "workspace:*",
     "@pf/org-to-db": "workspace:*",
     "@pf/org-to-graphql-schema": "workspace:*",
     "@pf/process": "workspace:*",
+    "@pf/realtime-client": "workspace:*",
     "@pf/request-time": "workspace:*",
     "@pf/service-drizzle-sqlite": "workspace:*",
     "@pf/sqlite-operations": "workspace:*",
     "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2",
+    "usage-spec-effect": "1.0.0"
   },
   "publishConfig": {
     "access": "public",

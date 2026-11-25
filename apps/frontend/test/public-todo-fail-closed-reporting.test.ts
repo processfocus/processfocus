@@ -1,8 +1,9 @@
+import { Schema } from "effect"
 import { JSDOM } from "jsdom"
 import { act, createElement } from "react"
 import { type Root, createRoot } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import { FormComponentType } from "@pf/form-client-representation/types"
+import { FormFileInput, FormProviderUserInput } from "@pf/form-schema"
 import { PublicTodoClient } from "../app/public/form/[token]/public-todo-client"
 import { FrontendClientPluginProvider } from "../components/frontend-client-plugin-provider"
 import {
@@ -11,9 +12,17 @@ import {
 } from "../lib/frontend-client-plugin-registry"
 import type { FrontendManifestAnalyticsPlugin } from "../lib/frontend-manifest"
 
-vi.mock("@/lib/public-todo-form-runtime", () => ({
-  dynamicForm: vi.fn(() => "Submit"),
-  LookupProvider: ({ children }: { readonly children: unknown }) => children,
+const fileSchema = Promise.resolve(
+  Schema.Struct({ document: Schema.String.annotate({ [FormFileInput]: {} }) }),
+)
+const providerSchema = Promise.resolve(
+  Schema.Struct({
+    assignee: Schema.String.annotate({ [FormProviderUserInput]: {} }),
+  }),
+)
+vi.mock("@/lib/frontend-form-loaders", () => ({
+  loadBrowserFormDefinition: (path: string) =>
+    path === "/assignee" ? providerSchema : fileSchema,
 }))
 
 const analyticsPlugin: FrontendManifestAnalyticsPlugin = {
@@ -30,20 +39,8 @@ const unsupportedPublicTodo = {
     processName: "Enrolment",
     publicFormDescription:
       "Private Recipient should visit https://example.com/public/form/secret-capability-token",
-    formDefinitionStatus: "parsed",
-    formDefinition: {
-      components: {
-        document: {
-          _tag: FormComponentType.File,
-          field: "document",
-          label: "Document",
-          documentStore: "documents",
-        },
-      },
-      rules: [],
-    },
+    requestData: { presentation: {}, originalValues: {}, inaccessible: [] },
     defaultValues: { studentName: "Private Form Value" },
-    jsonSchema: {},
   },
 } as const
 
@@ -179,16 +176,7 @@ describe("public todo fail-closed reporting", () => {
       ...unsupportedPublicTodo,
       formMetadata: {
         ...unsupportedPublicTodo.formMetadata,
-        formDefinition: {
-          components: {
-            assignee: {
-              _tag: FormComponentType.ProviderUser,
-              field: "assignee",
-              label: "Assignee",
-            },
-          },
-          rules: [],
-        },
+        stepPath: "/assignee",
       },
     }
 
@@ -206,71 +194,6 @@ describe("public todo fail-closed reporting", () => {
     expect(container.textContent).toContain(
       "This public form contains unsupported fields (file). Contact the sender for another way to complete it.",
     )
-  })
-
-  test("identifies malformed metadata without reporting its contents", async () => {
-    const captured: Array<Record<string, unknown> | undefined> = []
-    registerFrontendClientPlugin({
-      type: analyticsPlugin.type,
-      render: () => null,
-      captureClientException(_config, _error, properties) {
-        captured.push(properties)
-      },
-    })
-
-    await renderPublicTodo([analyticsPlugin], {
-      ...unsupportedPublicTodo,
-      formMetadata: {
-        ...unsupportedPublicTodo.formMetadata,
-        formDefinitionStatus: "malformed",
-        formDefinition: null,
-      },
-    })
-
-    expect(captured).toEqual([
-      {
-        public_form_action: "fail-closed",
-        public_form_failure_reason: "malformed_client_form_metadata",
-        public_form_process_name: "Enrolment",
-        public_form_step_path: "/enrolment/Upload documents",
-        public_form_todo_id: "todo-1",
-        public_form_unsupported_component_types: ["unknown"],
-      },
-    ])
-    expect(JSON.stringify(captured)).not.toContain("secret metadata contents")
-    expect(container.textContent).toContain("This form cannot be opened here")
-    expect(container.textContent).toContain(
-      "This public form contains unsupported fields (unknown). Contact the sender for another way to complete it.",
-    )
-  })
-
-  test("reports malformed structured metadata without exposing its contents", async () => {
-    const captured: Array<Record<string, unknown> | undefined> = []
-    registerFrontendClientPlugin({
-      type: analyticsPlugin.type,
-      render: () => null,
-      captureClientException(_config, _error, properties) {
-        captured.push(properties)
-      },
-    })
-
-    await renderPublicTodo([analyticsPlugin], {
-      ...unsupportedPublicTodo,
-      formMetadata: {
-        ...unsupportedPublicTodo.formMetadata,
-        formDefinitionStatus: "malformed",
-        formDefinition: null,
-      },
-    })
-
-    expect(captured).toEqual([
-      expect.objectContaining({
-        public_form_failure_reason: "malformed_client_form_metadata",
-        public_form_unsupported_component_types: ["unknown"],
-      }),
-    ])
-    expect(JSON.stringify(captured)).not.toContain("secret-capability-token")
-    expect(container.textContent).toContain("This form cannot be opened here")
   })
 
   test("isolates plugin failures from the friendly state", async () => {

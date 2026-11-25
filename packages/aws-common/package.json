@@ -12,19 +12,33 @@
       "default": "./src/index.ts"
     },
     "./package.json": "./package.json",
+    "./cdn-provider-contract": {
+      "types": "./src/lib/cdn-provider-contract.ts",
+      "import": "./src/lib/cdn-provider-contract.ts",
+      "default": "./src/lib/cdn-provider-contract.ts"
+    },
+    "./project-deployment-policy": {
+      "types": "./src/lib/project-deployment-policy.ts",
+      "import": "./src/lib/project-deployment-policy.ts",
+      "default": "./src/lib/project-deployment-policy.ts"
+    },
     "./trace-context": {
       "types": "./src/lib/trace-context.ts",
       "import": "./src/lib/trace-context.ts",
       "default": "./src/lib/trace-context.ts"
+    },
+    "./turso-database-name": {
+      "types": "./src/lib/turso-database-name.ts",
+      "import": "./src/lib/turso-database-name.ts",
+      "default": "./src/lib/turso-database-name.ts"
     }
   },
   "dependencies": {
-    "@aws-sdk/client-acm": "^3.1131.0",
-    "@effect/opentelemetry": "^0.64.1",
-    "@effect/platform": "^0.97.2",
-    "@opentelemetry/api": "^1.9.1",
-    "@opentelemetry/core": "2.11.0",
-    "effect": "^3.22.2"
+    "@aws-sdk/client-acm": "^3.1169.0",
+    "@effect/opentelemetry": "4.1.4",
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/core": "2.12.0",
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

@@ -1,8 +1,23 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { dashboardOrganisationInputs } from "./dashboard-build"
+import {
+  dashboardEnvironment,
+  dashboardOrganisationInputs,
+} from "./dashboard-build"
 import { expect, test } from "bun:test"
+
+test("production-built local Dashboard retains local identity and selected metadata", () => {
+  const env = dashboardEnvironment({
+    PF_RUNTIME_MODE: "deployed",
+    PF_STAGE: "production",
+    PF_ENV: "dev",
+  })
+  expect(env["NODE_ENV"]).toBe("production")
+  expect(env["PF_RUNTIME_MODE"]).toBe("local")
+  expect(env["PF_STAGE"]).toBe("production")
+  expect(env["PF_ENV"]).toBe("dev")
+})
 
 test("tracks Dashboard artifact and login changes without invalidating backend-only edits", async () => {
   const root = mkdtempSync(join(tmpdir(), "dashboard-inputs-"))

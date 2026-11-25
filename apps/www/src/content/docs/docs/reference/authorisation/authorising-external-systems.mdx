@@ -1,0 +1,30 @@
+---
+title: Authorising external systems
+description: Authorisation for external systems.
+---
+
+See [System identities](/docs/reference/authentication/system-identities/) to
+set up authentication for an external system. Cedar policies grant access to
+the resulting service account. If the system authenticates as the same
+service account, the policy stays the same regardless of how it authenticates.
+
+For example, suppose a website backend submits orders to a process. Give it a
+service-account identity named `web-order`, rather than using a person's
+credentials. In Cedar, that identity is `PF::ServiceAccount::"web-order"`.
+
+## Grant access with Cedar
+
+Suppose the order process exposes the GraphQL mutation `startNewOrder` and
+starts with the step `/new-order/Capture order`. This policy permits the
+website to start the process:
+
+```cedar
+permit (
+    principal == PF::ServiceAccount::"web-order",
+    action == PF::Action::"complete",
+    resource == PF::Step::"/new-order/Capture order"
+)
+when {
+    resource.startsProcess
+};
+```

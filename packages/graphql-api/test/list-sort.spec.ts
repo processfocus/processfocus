@@ -1,5 +1,5 @@
-import { FileSystem } from "@effect/platform"
-import { DateTime, Effect, Either, Layer, Schema } from "effect"
+import type { Context } from "effect"
+import { DateTime, Effect, FileSystem, Layer, Result, Schema } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
 import { ProcessQueries } from "@pf/graphql-db-operations"
 import { InputValidationError } from "@pf/graphql-schema"
@@ -18,7 +18,7 @@ import type { UserContext } from "../src/lib/types"
 import { describe, expect, it } from "bun:test"
 
 const makeContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "current@example.com",
     id: "current@example.com",
@@ -42,17 +42,18 @@ const makeContext = (): UserContext => ({
   userId: "current@example.com",
 })
 
-const makeAuthorizationService = (): AuthorizationService["Type"] => ({
+const makeAuthorizationService = (): Context.Service.Shape<
+  typeof AuthorizationService
+> => ({
   canIssueDelegationSecret: () => Effect.succeed(false),
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(false),
+  policyVersion: Effect.succeed("test-policy"),
   canCompleteStep: () => Effect.succeed(false),
-  canCompleteTodo: () => Effect.succeed(false),
+  canViewEmbeddedForm: () => Effect.succeed(false),
   canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-  canCompletePublicTodo: () => Effect.succeed(false),
   canRequestRole: () => Effect.succeed(false),
-  canRequestProviderUserPermissions: () => Effect.succeed(false),
   canActOnBehalfOf: () => Effect.succeed(false),
   canViewExecution: () => Effect.succeed(false),
   canRestartExecution: () => Effect.succeed(false),
@@ -79,7 +80,7 @@ const makeLayer = (org: Organisation) =>
     Layer.succeed(DynamicSchemaConfig, { schemaPath: "/tmp/org.graphql" }),
     Layer.succeed(ProcessQueries, {
       queryAllProcesses: Effect.succeed([]),
-    } as unknown as ProcessQueries["Type"]),
+    } as unknown as Context.Service.Shape<typeof ProcessQueries>),
     Layer.succeed(AuthorizationService, makeAuthorizationService()),
     Layer.succeed(OrganisationProvider, {
       organisation: org,
@@ -95,14 +96,17 @@ interface ListResolverArgs {
   readonly sort?: { readonly field: string; readonly direction: "ASC" | "DESC" }
 }
 
-const resolveEmployees = (org: Organisation, args: ListResolverArgs) =>
+const resolveEmployees = (
+  org: Organisation,
+  args: ListResolverArgs | { id: string },
+  queryName = "listEmployees",
+) =>
   Effect.gen(function* () {
     const schema = yield* dynamicSchema
-    const resolver = (schema.resolvers?.Query?.["listEmployees"] ??
-      (() =>
-        Effect.dieMessage("Missing listEmployees resolver"))) as unknown as (
+    const resolver = (schema.resolvers?.Query?.[queryName] ??
+      (() => Effect.die("Missing listEmployees resolver"))) as unknown as (
       parent: unknown,
-      args: ListResolverArgs,
+      args: ListResolverArgs | { id: string },
       context: UserContext,
     ) => Effect.Effect<unknown, unknown, never>
 
@@ -110,6 +114,79 @@ const resolveEmployees = (org: Organisation, args: ListResolverArgs) =>
   }).pipe(Effect.provide(makeLayer(org)))
 
 describe("dynamic list sort resolver", () => {
+  it("presents stored actors without changing the query rows", async () => {
+    const org = new Organisation({ name: "test-org" })
+    const role = new Role(org, "viewer")
+    const by =
+      'pf:delegation:{"version":1,"ownerUserId":"owner","ownerEmail":"owner@example.com","delegationId":"old","generationId":"expired","name":"agent"}'
+    const actors = [
+      by,
+      "human@example.com",
+      "SYSTEM",
+      "pf:delegation:{broken",
+      by.replace('"version":1', '"version":2'),
+    ]
+    const items = actors.map((actor, index) => ({
+      id: String(index),
+      signedInBy: actor,
+      keyType: "pf:delegation:spare",
+    }))
+    new List(org, "employees", {
+      name: "Employees",
+      roles: [role],
+      output: {
+        id: Schema.String,
+        signedInBy: Schema.String,
+        keyType: Schema.String,
+      },
+      query: () => Effect.succeed({ items, totalCount: items.length }),
+      form: () => ({
+        keyType: Schema.String,
+        history: Schema.Array(
+          Schema.Struct({
+            changedBy: Schema.String,
+            historyNote: Schema.String,
+          }),
+        ),
+      }),
+      itemQuery: () =>
+        Effect.succeed({
+          keyType: "pf:delegation:spare",
+          history: actors.map((changedBy) => ({ changedBy, historyNote: by })),
+        }),
+    })
+    const result = await Effect.runPromise(
+      resolveEmployees(org, { page: 1, limit: 20 }),
+    )
+    expect(result).toMatchObject({
+      items: [
+        {
+          signedInBy: "owner@example.com/agent",
+          keyType: "pf:delegation:spare",
+        },
+        { signedInBy: "human@example.com" },
+        { signedInBy: "SYSTEM" },
+        { signedInBy: "" },
+        { signedInBy: "" },
+      ],
+    })
+    expect(items[0]?.signedInBy).toBe(by)
+    expect(
+      await Effect.runPromise(
+        resolveEmployees(org, { id: "0" }, "listItemEmployees"),
+      ),
+    ).toEqual({
+      keyType: "pf:delegation:spare",
+      history: [
+        { changedBy: "owner@example.com/agent", historyNote: by },
+        { changedBy: "human@example.com", historyNote: by },
+        { changedBy: "SYSTEM", historyNote: by },
+        { changedBy: "", historyNote: by },
+        { changedBy: "", historyNote: by },
+      ],
+    })
+  })
+
   it("preserves existing query context when sort input is omitted", async () => {
     const org = new Organisation({ name: "test-org" })
     const role = new Role(org, "viewer")
@@ -182,7 +259,7 @@ describe("dynamic list sort resolver", () => {
       roles: [role],
       output: {
         id: Schema.String,
-        internalOrder: Schema.String.annotations({
+        internalOrder: Schema.String.annotate({
           [ListVisibleInList]: false,
           [ListSortable]: true,
         }),
@@ -217,7 +294,7 @@ describe("dynamic list sort resolver", () => {
       roles: [role],
       output: {
         id: Schema.String,
-        hiddenCode: Schema.String.annotations({
+        hiddenCode: Schema.String.annotate({
           [ListVisibleInList]: false,
         }),
       },
@@ -228,7 +305,7 @@ describe("dynamic list sort resolver", () => {
     })
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         resolveEmployees(org, {
           page: 1,
           limit: 20,
@@ -237,9 +314,9 @@ describe("dynamic list sort resolver", () => {
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      const error = result.left
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      const error = result.failure
       expect(error).toBeInstanceOf(InputValidationError)
       if (error instanceof InputValidationError) {
         expect(error.message).toContain("sort.field")

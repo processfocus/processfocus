@@ -32,6 +32,14 @@ import { type IStepScope, Step, type StepProps } from "./step"
 export type AuthorTaggedError = {
   readonly _tag: string
   readonly retryable?: boolean
+  /**
+   * Set only for a terminal, confirmed rejection of the external write using
+   * CurrentStepJobContext.externalWriteAttemptId. Never set for ambiguous
+   * outcomes (timeouts, lost responses or malformed success). Todo-backed
+   * workers reserve the next durable identity with the failure; manual restart
+   * uses it. Other operations in the step must retain their original keys.
+   */
+  readonly externalWriteRejected?: boolean
 }
 
 /**
@@ -106,6 +114,8 @@ export type StepResult =
 export interface StepJobContext {
   readonly todoId: string
   readonly stepPath: string
+  /** Durable replacement identity after a confirmed rejected external write. */
+  readonly externalWriteAttemptId?: string
 }
 
 /**
@@ -113,9 +123,10 @@ export interface StepJobContext {
  * Use this from NodeStep `execute` callbacks that need the Todo identity
  * for replay-safe side effects.
  */
-export class CurrentStepJobContext extends Context.Tag(
-  "@pf/process/CurrentStepJobContext",
-)<CurrentStepJobContext, StepJobContext>() {}
+export class CurrentStepJobContext extends Context.Service<
+  CurrentStepJobContext,
+  StepJobContext
+>()("@pf/process/CurrentStepJobContext") {}
 
 /**
  * Configuration for forEach (multi-instance) steps.
@@ -390,7 +401,7 @@ export abstract class SystemStep<
     ForEachStepRequiresItemsError | AuthorTaggedError,
     unknown
   > {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const input = yield* this.input(state, ctx)
       return yield* this.execute(input)
     })

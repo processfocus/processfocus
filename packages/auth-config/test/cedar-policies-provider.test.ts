@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { Cause, Effect, Exit, Layer, Option } from "effect"
+import { Cause, ConfigProvider, Effect, Exit, Layer, Option } from "effect"
 import { Organisation, OrganisationProviderTest } from "@pf/process"
 import {
   CedarPoliciesDirNotFoundError,
@@ -109,7 +109,10 @@ describe("StaticCedarPoliciesProvider", () => {
 
     try {
       const result = await Effect.runPromise(
-        CedarPoliciesProvider.pipe(Effect.provide(StaticCedarPoliciesProvider)),
+        CedarPoliciesProvider.pipe(
+          Effect.provide(StaticCedarPoliciesProvider),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+        ),
       )
 
       expect(result.policyPaths).toEqual([path.join(tempDir, "policy.cedar")])
@@ -133,7 +136,10 @@ describe("StaticCedarPoliciesProvider", () => {
 
     try {
       const result = await Effect.runPromise(
-        CedarPoliciesProvider.pipe(Effect.provide(StaticCedarPoliciesProvider)),
+        CedarPoliciesProvider.pipe(
+          Effect.provide(StaticCedarPoliciesProvider),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+        ),
       )
 
       expect(result.policyPaths).toHaveLength(2)
@@ -163,7 +169,10 @@ describe("StaticCedarPoliciesProvider", () => {
 
     try {
       const result = await Effect.runPromise(
-        CedarPoliciesProvider.pipe(Effect.provide(StaticCedarPoliciesProvider)),
+        CedarPoliciesProvider.pipe(
+          Effect.provide(StaticCedarPoliciesProvider),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+        ),
       )
 
       expect(result.schemaPaths).toHaveLength(2)
@@ -191,7 +200,10 @@ describe("StaticCedarPoliciesProvider", () => {
 
     try {
       const result = await Effect.runPromise(
-        CedarPoliciesProvider.pipe(Effect.provide(StaticCedarPoliciesProvider)),
+        CedarPoliciesProvider.pipe(
+          Effect.provide(StaticCedarPoliciesProvider),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+        ),
       )
 
       expect(result.policyPaths).toEqual([])
@@ -212,12 +224,15 @@ describe("StaticCedarPoliciesProvider", () => {
 
     try {
       const exit = await Effect.runPromiseExit(
-        CedarPoliciesProvider.pipe(Effect.provide(StaticCedarPoliciesProvider)),
+        CedarPoliciesProvider.pipe(
+          Effect.provide(StaticCedarPoliciesProvider),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+        ),
       )
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
-        const errorOption = Cause.failureOption(exit.cause)
+        const errorOption = Cause.findErrorOption(exit.cause)
         expect(Option.isSome(errorOption)).toBe(true)
         if (Option.isSome(errorOption)) {
           expect(errorOption.value).toBeInstanceOf(

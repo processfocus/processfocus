@@ -30,30 +30,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read public workspace tool versions
-        id: versions
+      - name: Check public workspace marker
         shell: bash
-        run: |
-          test -f public-source.json
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import tomllib
-          with open("mise.toml", "rb") as source:
-              tools = tomllib.load(source)["tools"]
-          for tool in ("bun", "node"):
-              version = tools[tool]
-              assert isinstance(version, str) and all(c in "0123456789." for c in version)
-              print(f"{tool}={version}")
-          PY
+        run: test -f public-source.json
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
         with:
-          bun-version: ${{ steps.versions.outputs.bun }}
+          install_args: bun node usage http:tursodb
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ steps.versions.outputs.node }}
-          package-manager-cache: false
-
+      # The filtered public export rewrites dependencies and excludes private actions.
+      # See .github/actions/install-dependencies/README.md in the canonical repo.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -75,7 +61,7 @@ jobs:
 
       - name: Retain release review evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: public-release-${{ github.sha }}
           path: dist/public-release/

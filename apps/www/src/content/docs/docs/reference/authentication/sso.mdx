@@ -1,0 +1,56 @@
+---
+title: Single-Sign-On (SSO)
+description: Identity-provider sign-in for Process Focus.
+---
+
+Single sign-on lets people authenticate using their organisation's identity
+provider. Process Focus uses that identity to establish the provider user;
+[authorisation](/docs/reference/authorisation/) determines what they may do.
+
+## Setting up an identity provider
+
+Setting up an identity provider in Process Focus looks quite similar
+regardless of the identity provider. But every identity provider has
+its own way of creating the values and secrets Process Focus needs. That is
+discussed in the provider-specific pages.
+
+Configure an identity provider via the `AuthenticationConfig` construct.
+
+```typescript
+import {
+  AuthenticationConfig,
+} from "@pf/auth-config"
+
+new AuthenticationConfig(org, "auth", {
+  identityProviders: {
+    google: {
+      ...
+    },
+  },
+})
+```
+
+## Inviting users
+
+If SSO is enabled, a user cannot simply log in. They must have an
+invitation. And for Google Workspace it is possible to create
+automatic invitations: all members of a particular Organisational Unit
+are automatically invited.
+
+## Identity providers
+
+- [Google](/docs/reference/authentication/sso/google/)
+- [Entra (Active Directory)](/docs/reference/authentication/sso/active-directory/)
+
+These provider pages are starting points for configuration documentation.
+
+## Registration and sign-in
+
+A configured human identity provider can accept an invitation when it supplies
+verified acceptance evidence. Acceptance creates the provider user and assigns
+the invitation's initial roles.
+
+Open registration allows a human identity to create a provider user without an
+invitation when that mode is enabled. See
+[First user registration](/docs/reference/authentication/first-user-registration/)
+for the distinction between organisation setup and registering a user.

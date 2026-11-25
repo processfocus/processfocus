@@ -3,8 +3,9 @@
  * POST /oauth/token
  * @packageDocumentation
  */
-import type { HttpServerRequest, HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import type { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { errorJson } from "../../response"
 import type { IssuerCallbacks } from "../../services/callbacks"
 import type { ClientRegistryService } from "../../services/client-registry"
@@ -23,6 +24,7 @@ import {
   handleClientCredentialsGrant,
 } from "./client-credentials"
 import { handleRefreshTokenGrant } from "./refresh-token"
+import { handleTokenExchangeGrant } from "./token-exchange"
 
 export { handleAuthorizationCodeGrant } from "./authorization-code"
 export { handleClientCredentialsGrant } from "./client-credentials"
@@ -30,7 +32,7 @@ export { handleRefreshTokenGrant } from "./refresh-token"
 
 /**
  * Result of token endpoint processing.
- * Either a complete HttpServerResponse or an indication that additional processing is needed.
+ * Result a complete HttpServerResponse or an indication that additional processing is needed.
  */
 export type TokenEndpointResult =
   | HttpServerResponse.HttpServerResponse
@@ -71,6 +73,9 @@ export const handleToken = (
 > =>
   Effect.gen(function* () {
     const grantType = form.get("grant_type")
+    if (grantType === "urn:ietf:params:oauth:grant-type:token-exchange") {
+      return yield* handleTokenExchangeGrant(form)
+    }
 
     if (grantType === "authorization_code") {
       return yield* handleAuthorizationCodeGrant(form)

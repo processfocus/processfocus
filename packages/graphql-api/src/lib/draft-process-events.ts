@@ -32,9 +32,7 @@ export class SubscriptionNotSupportedError extends Data.TaggedError(
 /**
  * Service for broadcasting draft process execution changes to WebSocket subscribers
  */
-export class DraftProcessEvents extends Context.Tag(
-  "@pf/graphql-api/DraftProcessEvents",
-)<
+export class DraftProcessEvents extends Context.Service<
   DraftProcessEvents,
   {
     /**
@@ -60,4 +58,4 @@ export class DraftProcessEvents extends Context.Tag(
       SubscriptionNotSupportedError
     >
   }
->() {}
+>()("@pf/graphql-api/DraftProcessEvents") {}

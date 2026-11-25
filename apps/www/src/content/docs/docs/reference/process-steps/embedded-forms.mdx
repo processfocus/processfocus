@@ -1,0 +1,42 @@
+---
+title: Embedded forms
+description: Embed a process start form on an approved website.
+---
+
+An embedded form lets a visitor start a process from an approved website
+without signing in to the Dashboard. It identifies the external participant
+through the form's declared email field.
+
+## Configuration
+
+Only start forms explicitly configured with `Form.embed` are available for
+embedding. The process must have exactly one start step, and the form must
+declare a browser-safe `Form.browser` entrypoint for its shared schema.
+File-upload fields are not supported.
+
+Set `Form.embed.sites` to the exact origins of websites allowed to host the
+form. The allowed origins are resolved when the organisation is built.
+Rebuild both the organisation and frontend for the target environment when
+these settings change.
+
+## Add the form to a website
+
+The embed helper inserts an iframe at the script's position and handles
+resizing:
+
+```html
+<script src="https://app.example.com/processfocus-embed.js?form=/contact-request"></script>
+```
+
+Replace the host and process path with those of your deployment. The process
+path resolves to its embedded start form.
+
+## Security and submissions
+
+The frontend restricts which websites can frame the form using the configured
+origins. These restrictions are not authentication or bot protection: direct
+clients can forge request headers. Consider additional anti-abuse controls
+where needed.
+
+Draft values are stored in the visitor's browser. A successful submission
+clears the draft and shows the configured thank-you state.

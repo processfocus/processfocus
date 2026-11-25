@@ -1,3 +1,4 @@
+import { makeRouter } from "../router"
 /**
  * A dummy provider for testing and development purposes.
  *
@@ -21,7 +22,7 @@
  * @packageDocumentation
  */
 
-import { HttpRouter } from "@effect/platform"
+import { HttpRouter } from "effect/http"
 import type { Oauth2Token } from "./oauth2.js"
 import type { Provider, ProviderOptions } from "./provider.js"
 
@@ -110,9 +111,9 @@ export function DummyProvider(
     init(options: ProviderOptions<DummyProperties>) {
       // Build an HttpRouter with a single GET /authorize route
       // that immediately completes authentication
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", options.success(createProperties())),
-      )
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", options.success(createProperties())),
+      ])
     },
     // Support client credentials flow for programmatic testing
     client: async () => createProperties(),

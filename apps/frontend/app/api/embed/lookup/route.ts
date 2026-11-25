@@ -2,7 +2,6 @@ import { ClientError } from "graphql-request"
 import { type NextRequest, NextResponse } from "next/server"
 import { getFrontendJwt } from "@pf/auth-session"
 import type { CalendarSlotItem, LookupSuggestion } from "@pf/form"
-import { FormComponentType } from "@pf/form-client-representation/types"
 import {
   findEmbedLookupDefinitionByField,
   findEmbedLookupDefinitionByQueryName,
@@ -19,6 +18,7 @@ interface EmbedLookupBody {
   readonly limit?: unknown
   readonly queryName?: unknown
   readonly input?: unknown
+  readonly selectedValue?: unknown
 }
 
 const LOOKUP_SUGGESTIONS_QUERY = `
@@ -26,6 +26,7 @@ const LOOKUP_SUGGESTIONS_QUERY = `
     lookupSuggestions(stepPath: $stepPath, field: $field, filter: $filter, limit: $limit) {
       value
       label
+      searchText
     }
   }
 `
@@ -38,6 +39,12 @@ const CALENDAR_SLOTS_QUERY = `
       startsAt
       endsAt
     }
+  }
+`
+
+const LOOKUP_SELECTION_QUERY = `
+  query LookupSelection($stepPath: String!, $field: String!, $value: String!) {
+    lookupSelection(stepPath: $stepPath, field: $field, value: $value) { value label }
   }
 `
 
@@ -98,6 +105,7 @@ const buildDependentLookupQuery = (
       ${queryName}(input: { ${inputFields} }, limit: $limit) {
         value
         label
+        searchText
       }
     }
   `
@@ -147,10 +155,7 @@ export const POST = async (request: NextRequest): Promise<Response> => {
   try {
     if (typeof body?.field === "string") {
       const filter = typeof body?.filter === "string" ? body.filter : ""
-      const lookup = findEmbedLookupDefinitionByField(
-        entry.formDefinition,
-        body.field,
-      )
+      const lookup = findEmbedLookupDefinitionByField(entry.lookups, body.field)
 
       if (!lookup) {
         return NextResponse.json(
@@ -159,7 +164,7 @@ export const POST = async (request: NextRequest): Promise<Response> => {
         )
       }
 
-      if (lookup.type === FormComponentType.CalendarSlot) {
+      if (lookup.type === "calendarSlot") {
         const data = await client.request<{
           calendarSlots: CalendarSlotItem[]
         }>(CALENDAR_SLOTS_QUERY, {
@@ -168,6 +173,19 @@ export const POST = async (request: NextRequest): Promise<Response> => {
         })
 
         return NextResponse.json({ items: data.calendarSlots })
+      }
+
+      if (typeof body.selectedValue === "string") {
+        const data = await client.request<{
+          lookupSelection: LookupSuggestion | null
+        }>(LOOKUP_SELECTION_QUERY, {
+          stepPath,
+          field: body.field,
+          value: body.selectedValue,
+        })
+        return NextResponse.json({
+          items: data.lookupSelection ? [data.lookupSelection] : [],
+        })
       }
 
       const data = await client.request<{
@@ -190,7 +208,7 @@ export const POST = async (request: NextRequest): Promise<Response> => {
     }
 
     const lookup = findEmbedLookupDefinitionByQueryName(
-      entry.formDefinition,
+      entry.lookups,
       body.queryName,
     )
     if (!lookup) {

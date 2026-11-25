@@ -9,33 +9,31 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { NodeContext } from "@effect/platform-node"
+import { NodeServices } from "@effect/platform-node"
 import { Cause, Effect, Exit, Option } from "effect"
 import { FRONTEND_CLIENT_ID, readFrontendJwt } from "@pf/auth-api"
 import { resolveDatabasePath } from "@pf/db-info"
 import { makeFrontendJwtStorageLayer } from "../src/utils/frontend-jwt-storage-layer"
 import { Database } from "bun:sqlite"
-import { afterEach, beforeEach } from "bun:test"
+import { afterAll, afterEach, beforeEach } from "bun:test"
 
 const WORKSPACE_ROOT = resolve(__dirname, "..", "..", "..")
 export const DEMO_ORG = resolve(WORKSPACE_ROOT, "examples/demo")
 
 type RunBuild = (orgPath: string, outputDir?: string) => Effect.Effect<unknown>
 
-const SHARED_DEMO_BUILD_ID =
-  process.env["PFCLI_TEST_RUN_ID"] ?? String(process.pid)
-const SHARED_DEMO_BUILD_ROOT = join(
-  tmpdir(),
-  `pfcli-shared-demo-build-${SHARED_DEMO_BUILD_ID}`,
-)
+// The runner owns shared roots until every child exits. Direct bun test runs
+// use the per-file teardown in useSerializedTestState (Bun test does not emit
+// process exit events). Create the private directory only when a fixture is used.
+const runnerFixtureRoot = process.env["PFCLI_TEST_FIXTURE_ROOT"]
+const fixtureRoot =
+  runnerFixtureRoot ?? join(tmpdir(), `pfcli-fixtures-${crypto.randomUUID()}`)
+const SHARED_DEMO_BUILD_ROOT = join(fixtureRoot, "shared-demo-build")
 const SHARED_DEMO_BUILD_LOCK_DIR = `${SHARED_DEMO_BUILD_ROOT}.lock`
 const SHARED_DEMO_BUILD_ORG_ROOT = join(SHARED_DEMO_BUILD_ROOT, "org")
 const SHARED_DEMO_BUILD_DIST_DIR = join(SHARED_DEMO_BUILD_ORG_ROOT, "dist")
 const SHARED_DEMO_BUILD_READY_FILE = join(SHARED_DEMO_BUILD_ROOT, ".ready")
-const SHARED_IMPORTED_DEMO_ROOT = join(
-  tmpdir(),
-  `pfcli-shared-imported-demo-${SHARED_DEMO_BUILD_ID}`,
-)
+const SHARED_IMPORTED_DEMO_ROOT = join(fixtureRoot, "shared-imported-demo")
 const SHARED_IMPORTED_DEMO_LOCK_DIR = `${SHARED_IMPORTED_DEMO_ROOT}.lock`
 const SHARED_IMPORTED_DEMO_DATABASE_PATH = join(
   SHARED_IMPORTED_DEMO_ROOT,
@@ -87,6 +85,7 @@ const getSharedBuiltDemoDistDir = async () => {
   }
 
   sharedDemoBuildPromise = (async () => {
+    mkdirSync(fixtureRoot, { recursive: true })
     const deadline = Date.now() + 120_000
 
     while (!isSharedDemoBuildReady()) {
@@ -105,7 +104,7 @@ const getSharedBuiltDemoDistDir = async () => {
               await Effect.runPromise(
                 Effect.provide(
                   runBuild(SHARED_DEMO_BUILD_ORG_ROOT),
-                  NodeContext.layer,
+                  NodeServices.layer,
                 ),
               )
             } finally {
@@ -191,6 +190,7 @@ const getSharedImportedDemoDatabasePath = async () => {
   }
 
   sharedImportedDemoPromise = (async () => {
+    mkdirSync(fixtureRoot, { recursive: true })
     const deadline = Date.now() + 120_000
 
     while (!isSharedImportedDemoReady()) {
@@ -201,7 +201,12 @@ const getSharedImportedDemoDatabasePath = async () => {
               recursive: true,
               force: true,
             })
-            const orgRoot = join(SHARED_IMPORTED_DEMO_ROOT, "org")
+            // A later direct-test file may rebuild this fixture in the same
+            // process; use a fresh module URL rather than Bun's cached org.
+            const orgRoot = join(
+              SHARED_IMPORTED_DEMO_ROOT,
+              `org-${crypto.randomUUID()}`,
+            )
             mkdirSync(orgRoot, { recursive: true })
             await copySharedBuiltDemoArtifact(orgRoot)
 
@@ -223,7 +228,7 @@ const getSharedImportedDemoDatabasePath = async () => {
               },
               () =>
                 Effect.runPromise(
-                  Effect.provide(runImport(orgRoot), NodeContext.layer),
+                  Effect.provide(runImport(orgRoot), NodeServices.layer),
                 ),
             )
 
@@ -287,7 +292,7 @@ export const runPfcliInProcess = async (args: readonly string[]) => {
       commandExit = await Effect.runPromiseExit(
         Effect.provide(
           module.runPfcliCommand(["bun", "pfcli", ...args]),
-          NodeContext.layer,
+          NodeServices.layer,
         ),
       )
     })
@@ -314,7 +319,7 @@ export const getFailureMessage = (
     return ""
   }
 
-  const failure = Cause.failureOption(exit.cause)
+  const failure = Cause.findErrorOption(exit.cause)
   if (Option.isNone(failure)) {
     return ""
   }
@@ -336,7 +341,7 @@ export const runWithNodeContext = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(
     // Tests use this helper when NodeContext is the only remaining runtime
     // requirement on the command effect.
-    effect.pipe(Effect.provide(NodeContext.layer)) as Effect.Effect<A, E>,
+    effect.pipe(Effect.provide(NodeServices.layer)) as Effect.Effect<A, E>,
   )
 
 export const runWithNodeContextExit = <A, E, R>(
@@ -345,7 +350,7 @@ export const runWithNodeContextExit = <A, E, R>(
   Effect.runPromiseExit(
     // Tests use this helper when NodeContext is the only remaining runtime
     // requirement on the command effect.
-    effect.pipe(Effect.provide(NodeContext.layer)) as Effect.Effect<A, E>,
+    effect.pipe(Effect.provide(NodeServices.layer)) as Effect.Effect<A, E>,
   )
 
 export const readStoredFrontendJwt = async (orgPath: string) => {
@@ -486,6 +491,14 @@ const acquireSharedTestState = async () => {
 
 export const useSerializedTestState = () => {
   let releaseLock: (() => void) | undefined
+
+  if (!runnerFixtureRoot) {
+    afterAll(() => {
+      rmSync(fixtureRoot, { recursive: true, force: true })
+      sharedDemoBuildPromise = undefined
+      sharedImportedDemoPromise = undefined
+    })
+  }
 
   beforeEach(async () => {
     releaseLock = await acquireSharedTestState()

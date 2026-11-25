@@ -159,7 +159,12 @@ export const startLocalRuntime = async (
     child: Bun.Subprocess,
   ): Promise<number> => {
     const schema = Schema.Struct({
-      port: Schema.Number.pipe(Schema.int(), Schema.between(1, 65535)),
+      port: Schema.Number.pipe(
+        Schema.check(
+          Schema.isInt(),
+          Schema.isBetween({ minimum: 1, maximum: 65535 }),
+        ),
+      ),
     })
     for (let attempt = 0; attempt < 150; attempt += 1) {
       if (stopping || child.exitCode !== null)
@@ -245,10 +250,35 @@ export const startLocalRuntime = async (
       return 0
     }
 
-    spawn({
-      entry: fileURLToPath(new URL("./job-worker.mjs", import.meta.url)),
+    const workerStateFile =
+      env["PF_LOCAL_QUEUE_STATE_FILE"] ||
+      resolve(runtimeRoot, ".queue-worker-state.json")
+    env["PF_LOCAL_QUEUE_STATE_FILE"] = workerStateFile
+    rmSync(workerStateFile, { force: true })
+    const worker = spawn({
+      entry: fileURLToPath(
+        new URL("./job-worker-supervisor.mjs", import.meta.url),
+      ),
       args: ["--org", orgPath],
     })
+    await (async () => {
+      for (let attempt = 0; attempt < 650; attempt += 1) {
+        if (stopping || worker.exitCode !== null)
+          throw new Error("Local queue supervisor exited before readiness")
+        if (existsSync(workerStateFile)) {
+          const state = Schema.decodeUnknownSync(
+            Schema.Struct({ health: Schema.String }),
+          )(JSON.parse(readFileSync(workerStateFile, "utf8")))
+          if (state.health === "ready") return
+          if (state.health === "failed")
+            throw new Error(
+              "Local queue supervision failed; see worker diagnostics",
+            )
+        }
+        await Bun.sleep(100)
+      }
+      throw new Error("Timed out waiting for local queue worker readiness")
+    })()
     spawn({
       entry: cli,
       args: ["import", "--watch", "--watch-skip-initial", orgPath],

@@ -1,8 +1,9 @@
-import * as SqliteDrizzle from "@effect/sql-drizzle/Sqlite"
+import "./make-sqlite-drizzle"
 import { defineRelations } from "drizzle-orm"
 import type { SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy"
-import { Context, Effect, Layer } from "effect"
+import { Context, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
+import { makeSqliteDrizzle } from "./make-sqlite-drizzle"
 
 const relations = defineRelations(schema, (r) => ({
   process: {
@@ -34,15 +35,6 @@ const relations = defineRelations(schema, (r) => ({
 }))
 
 type TypedSqliteDatabase = SqliteRemoteDatabase<typeof schema, typeof relations>
-type SqliteDrizzleConfig = Parameters<
-  typeof SqliteDrizzle.make<typeof schema>
->[0]
-
-// @effect/sql-drizzle 0.50 passes Drizzle config through at runtime, but its
-// type only exposes the schema generic. Keep the cast local until it exposes
-// Drizzle v1's relations generic too.
-const sqliteDrizzleConfig = { schema, relations } as SqliteDrizzleConfig
-
 /**
  * Tag for typed Drizzle ORM database service.
  *
@@ -66,9 +58,10 @@ const sqliteDrizzleConfig = { schema, relations } as SqliteDrizzleConfig
  * )
  * ```
  */
-export class TypedSqliteDrizzle extends Context.Tag(
-  "@pf/service-drizzle-sqlite/TypedSqliteDrizzle",
-)<TypedSqliteDrizzle, TypedSqliteDatabase>() {}
+export class TypedSqliteDrizzle extends Context.Service<
+  TypedSqliteDrizzle,
+  TypedSqliteDatabase
+>()("@pf/service-drizzle-sqlite/TypedSqliteDrizzle") {}
 
 /**
  * Layer that provides the TypedSqliteDrizzle service.
@@ -85,7 +78,5 @@ export class TypedSqliteDrizzle extends Context.Tag(
  */
 export const TypedSqliteDrizzleLayer = Layer.effect(
   TypedSqliteDrizzle,
-  SqliteDrizzle.make<typeof schema>(sqliteDrizzleConfig).pipe(
-    Effect.map((db) => db as TypedSqliteDatabase),
-  ),
+  makeSqliteDrizzle({ schema, relations }),
 )

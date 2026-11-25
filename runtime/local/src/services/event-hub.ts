@@ -1,4 +1,4 @@
-import { Cause, type Context, Effect, Layer, Queue, Runtime } from "effect"
+import { Cause, type Context, Effect, Layer, Queue } from "effect"
 import type { GraphQLSchema } from "graphql"
 
 const DEFAULT_BUFFER_SIZE = 32
@@ -42,83 +42,88 @@ export const createEventHubLayer = <
   SubscribeError = never,
   EmitError = never,
 >(
-  tag: Context.Tag<I, EventHubService<Event, SubscribeError, EmitError>>,
+  tag: Context.Service<I, EventHubService<Event, SubscribeError, EmitError>>,
   options: CreateEventHubLayerOptions = {},
 ): Layer.Layer<I> => {
   const bufferSize = options.bufferSize ?? DEFAULT_BUFFER_SIZE
 
-  return Layer.effect(
-    tag,
-    Effect.sync(() => {
-      const subscribers = new Set<Queue.Queue<Event>>()
+  return Layer.effect(tag, createEventHub<Event>(bufferSize))
+}
 
-      return {
-        emit: (event: Event, _schema: GraphQLSchema) =>
-          // Broadcast to all active subscribers.
-          // Note: schema is unused in local runtime - it's needed by AWS
-          // runtime for AppSync Events serialization.
-          Effect.forEach(
-            Array.from(subscribers),
-            (queue) => Queue.offer(queue, event),
-            { discard: true },
-          ),
+/** Shared local hub without a GraphQL transport dependency. */
+export const createEventHub = <Event>(
+  bufferSize = DEFAULT_BUFFER_SIZE,
+): Effect.Effect<{
+  readonly emit: (event: Event) => Effect.Effect<void>
+  readonly subscribe: (
+    accepts?: (event: Event) => boolean,
+  ) => Effect.Effect<AsyncIterableIterator<Event>>
+}> =>
+  Effect.sync(() => {
+    const subscribers = new Map<Queue.Queue<Event>, (event: Event) => boolean>()
 
-        subscribe: () =>
-          Effect.gen(function* () {
-            const queue = yield* Queue.sliding<Event>(bufferSize)
-            subscribers.add(queue)
+    return {
+      emit: (event: Event) =>
+        // Broadcast to all active subscribers.
+        // Note: schema is unused in local runtime - it's needed by AWS
+        // runtime for AppSync Events serialization.
+        Effect.forEach(
+          Array.from(subscribers).filter(([, accepts]) => accepts(event)),
+          ([queue]) => Queue.offer(queue, event),
+          { discard: true },
+        ),
 
-            // Capture FiberRef-propagating runtime for the async iterator.
-            const runtime = yield* Effect.runtime<never>()
-            const run = Runtime.runPromise(runtime)
-            let closed = false
-            const close = async () => {
-              closed = true
-              subscribers.delete(queue)
-              await run(Queue.shutdown(queue))
-            }
+      subscribe: (accepts: (event: Event) => boolean = () => true) =>
+        Effect.gen(function* () {
+          const queue = yield* Queue.sliding<Event>(bufferSize)
+          subscribers.set(queue, accepts)
 
-            const iterator: AsyncIterableIterator<Event> = {
-              [Symbol.asyncIterator]() {
-                return this
-              },
-              async next(): Promise<IteratorResult<Event>> {
+          // Capture -propagating runtime for the async iterator.
+          const runtime = yield* Effect.context<never>()
+          const run = Effect.runPromiseWith(runtime)
+          let closed = false
+          const close = async () => {
+            closed = true
+            subscribers.delete(queue)
+            await run(Queue.shutdown(queue))
+          }
+
+          const iterator: AsyncIterableIterator<Event> = {
+            [Symbol.asyncIterator]() {
+              return this
+            },
+            async next(): Promise<IteratorResult<Event>> {
+              if (closed) return { done: true, value: undefined }
+              try {
+                const event = await run(Queue.take(queue))
+                return closed
+                  ? { done: true, value: undefined }
+                  : { done: false, value: event }
+              } catch (error) {
                 if (closed) return { done: true, value: undefined }
+                // Best-effort structured log; never mask the original failure.
                 try {
-                  const event = await run(Queue.take(queue))
-                  return closed
-                    ? { done: true, value: undefined }
-                    : { done: false, value: event }
-                } catch (error) {
-                  if (closed) return { done: true, value: undefined }
-                  // Best-effort structured log; never mask the original failure.
-                  try {
-                    await run(
-                      Effect.logError(
-                        "Subscriber queue error",
-                        Cause.die(error),
-                      ),
-                    )
-                  } catch {
-                    // ignore logging failures
-                  }
-                  await close()
-                  throw error
+                  await run(
+                    Effect.logError("Subscriber queue error", Cause.die(error)),
+                  )
+                } catch {
+                  // ignore logging failures
                 }
-              },
-              async return(): Promise<IteratorResult<Event>> {
-                // Async-generator return waits behind next; shutdown must interrupt take.
-                await close()
-                return { done: true, value: undefined }
-              },
-              async throw(error: unknown): Promise<IteratorResult<Event>> {
                 await close()
                 throw error
-              },
-            }
-            return iterator
-          }),
-      }
-    }),
-  )
-}
+              }
+            },
+            async return(): Promise<IteratorResult<Event>> {
+              // Async-generator return waits behind next; shutdown must interrupt take.
+              await close()
+              return { done: true, value: undefined }
+            },
+            async throw(error: unknown): Promise<IteratorResult<Event>> {
+              await close()
+              throw error
+            },
+          }
+          return iterator
+        }),
+    }
+  })

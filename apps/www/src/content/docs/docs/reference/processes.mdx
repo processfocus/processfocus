@@ -1,0 +1,49 @@
+---
+title: Processes
+description: Define a process and connect its steps.
+---
+
+## Creating a process
+
+Create a `Process` under your organisation or an organisational unit. Pass
+the parent, a stable ID, and the process properties. This example uses a
+previously defined organisation, `org`.
+
+```typescript
+import { Form, Process } from "@pf/process"
+
+export const orderFulfilment = new Process(org, "order-fulfilment", {
+  name: "Order fulfilment",
+  purpose: "Receive an order and confirm dispatch",
+})
+```
+
+## Adding steps
+
+Create steps under the process, then connect them in the order they should
+run. This example uses two form steps with previously defined roles:
+`sales` records the order number, and `warehouse` records the tracking number
+when the order ships.
+
+```typescript
+import { TextField } from "@pf/form-schema"
+import { Schema } from "effect"
+
+const receiveOrder = new Form(orderFulfilment, "Receive order", {
+  role: sales,
+  form: Schema.Struct({ orderNumber: TextField({ label: "Order number" }) }),
+})
+
+const confirmDispatch = new Form(orderFulfilment, "Confirm dispatch", {
+  role: warehouse,
+  form: Schema.Struct({ trackingNumber: TextField({ label: "Tracking number" }) }),
+})
+
+orderFulfilment
+  .start(receiveOrder)
+  .next(confirmDispatch)
+  .end()
+```
+
+`start()` sets the first step, `next()` connects it to the following step,
+and `end()` marks the current step as the end of the process.

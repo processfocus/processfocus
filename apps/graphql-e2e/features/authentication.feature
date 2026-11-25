@@ -33,12 +33,15 @@ Feature: JWT Authentication
     Then I should receive an authentication error
 
   # WebSocket Authentication Tests
+  # Negative handshake tests use the local graphql-ws transport; AWS uses AppSync Events.
 
+  @localhost-only
   Scenario: WebSocket connection without token is rejected
     Given I am not authenticated
     When I try to subscribe to todo updates
     Then the subscription should have an authentication error
 
+  @localhost-only
   Scenario: WebSocket connection with expired token is rejected
     Given I have an expired JWT token
     When I try to subscribe to todo updates

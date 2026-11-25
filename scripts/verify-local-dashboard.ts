@@ -69,16 +69,24 @@ writeFileSync(
   `
 import { Organisation, Role, Invitation, Process, Form, AuthenticationConfig } from "processfocus"
 import { PostHog } from "@processfocus/plugin-posthog"
-import { Schema } from "effect"
+import { submitForm, reviewForm } from "./forms"
+export const Configuration = { version: 1, groups: [] }
 export const org = new Organisation({ name: "Consumer Dashboard" })
 const role = new Role(org, "Operator", { name: "Operator" })
 new AuthenticationConfig(org, "auth", { inviteOnly: true, passkey: { rpName: "Consumer Dashboard", rpID: "localhost", origin: "http://localhost:13000" } })
 new Invitation(org, "tester", { email: "consumer@example.com", roles: [role] })
 const process = new Process(org, "Request", { name: "Consumer request", purpose: "Verify the installed Dashboard" })
-const submit = new Form(process, "Submit", { name: "Submit request", role, form: () => ({ description: Schema.String }) })
-const review = new Form(process, "Review", { name: "Review request", role, form: () => ({ approved: Schema.Boolean }) })
+const submit = new Form(process, "Submit", { name: "Submit request", role, form: submitForm, browser: { entrypoint: "src/forms.ts", exportName: "submitForm" } })
+const review = new Form(process, "Review", { name: "Review request", role, form: reviewForm, browser: { entrypoint: "src/forms.ts", exportName: "reviewForm" } })
 process.start(submit).next(review).end()
 new PostHog(org, "analytics", { enabled: true, apiKey: "phc_local_fixture", host: "http://localhost:14080" })
+`,
+)
+writeFileSync(
+  join(root, "src/forms.ts"),
+  `import { Schema } from "effect"
+export const submitForm = Schema.Struct({ description: Schema.String })
+export const reviewForm = Schema.Struct({ approved: Schema.Boolean })
 `,
 )
 const env = {

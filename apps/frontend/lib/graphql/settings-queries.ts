@@ -145,91 +145,17 @@ const allInvitationRolesQuery = graphql(`
   }
 `)
 
-/**
- * Combined query for fetching all settings data in one request.
- * Fetches users, invitations, roles, and OAuth providers simultaneously.
- */
-const allSettingsDataQuery = graphql(`
-  query AllSettingsData(
-    $usersPage: Int!
-    $usersLimit: Int!
-    $invitationsPage: Int!
-    $invitationsLimit: Int!
-    $rolesPage: Int!
-    $rolesLimit: Int!
-    $providersPage: Int!
-    $providersLimit: Int!
+const settingsCountsQuery = graphql(`
+  query SettingsCounts(
+    $users: Boolean!
+    $invitations: Boolean!
+    $roles: Boolean!
+    $providers: Boolean!
   ) {
-    allUsers(page: $usersPage, limit: $usersLimit) {
-      items {
-        id
-        provider
-        sub
-        lastLoggedIn
-        isProviderUser
-        providerUserName
-        providerUserEmail
-      }
-      totalCount
-      page
-      limit
-      hasNextPage
-    }
-    allInvitations(
-      page: $invitationsPage
-      limit: $invitationsLimit
-      status: PENDING
-    ) {
-      items {
-        id
-        email
-        status
-        roles {
-          id
-          name
-          path
-        }
-        acceptedAt
-        acceptedByProvider
-        acceptedBySubject
-        acceptedByProviderUserId
-        legacyClosedAt
-        legacyClosureReason
-        registrationLinkStatus
-        registrationLinkExpiresAt
-        registrationLinkGeneratedAt
-        registrationLinkGeneratedBy
-        registrationLinkRevealedAt
-        registrationLinkRevealedBy
-        registrationLinkRevokedAt
-        registrationLinkRevokedBy
-      }
-      totalCount
-      page
-      limit
-      hasNextPage
-    }
-    allRoles(page: $rolesPage, limit: $rolesLimit) {
-      items {
-        id
-        name
-        path
-      }
-      totalCount
-      page
-      limit
-      hasNextPage
-    }
-    allOAuthProviders(page: $providersPage, limit: $providersLimit) {
-      items {
-        id
-        providerName
-      }
-      totalCount
-      page
-      limit
-      hasNextPage
-    }
+    settingsUserCount @include(if: $users)
+    settingsInvitationCount @include(if: $invitations)
+    settingsRoleCount @include(if: $roles)
+    settingsOAuthProviderCount @include(if: $providers)
   }
 `)
 
@@ -322,10 +248,6 @@ const deleteInvitationMutation = graphql(`
     }
   }
 `)
-
-/**
- * Fetch all settings data in a single GraphQL request
- */
 
 const generateRegistrationLinkMutation = graphql(`
   mutation GenerateRegistrationLink($invitationId: ID!) {
@@ -457,23 +379,10 @@ const revokeRegistrationLinkMutation = graphql(`
   }
 `)
 
-export const fetchAllSettingsData = async (
+export const fetchSettingsCounts = (
   client: GraphQLClient,
-  page: number,
-  limit: number,
-) => {
-  const data = await client.request(allSettingsDataQuery, {
-    usersPage: page,
-    usersLimit: limit,
-    invitationsPage: page,
-    invitationsLimit: limit,
-    rolesPage: page,
-    rolesLimit: limit,
-    providersPage: page,
-    providersLimit: limit,
-  })
-  return data
-}
+  sections: Record<"users" | "invitations" | "roles" | "providers", boolean>,
+) => client.request(settingsCountsQuery, sections)
 
 /**
  * Fetch paginated users with provider user status

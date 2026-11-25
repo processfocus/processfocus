@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/spec",
+    "types": ["bun", "node"],
+    "rootDir": "."
+  },
+  "include": ["test/**/*.ts"],
+  "references": [{ "path": "./tsconfig.lib.json" }]
+}

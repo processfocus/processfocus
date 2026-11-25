@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert"
-import type { SqlError } from "@effect/sql/SqlError"
-import { asc, count, eq } from "drizzle-orm"
+import { and, asc, count, eq, like } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import * as systemSchema from "@pf/drizzle-sqlite"
 import { type UserDetails, getUserDetails } from "@pf/graphql-db-operations"
 import type { ListQueryContext, ListQueryResult } from "@pf/process"
@@ -52,7 +52,7 @@ interface ProcessCatalogListItem {
  * These operations work with the custom purchase_order table
  * and integrate with the standard audit fields (requestTime, userDetails).
  */
-export class DemoOperations extends Context.Tag("@pf/demo/DemoOperations")<
+export class DemoOperations extends Context.Service<
   DemoOperations,
   {
     /**
@@ -108,7 +108,7 @@ export class DemoOperations extends Context.Tag("@pf/demo/DemoOperations")<
       RequestTime | UserDetails
     >
   }
->() {}
+>()("@pf/demo/DemoOperations") {}
 
 /**
  * Live implementation of DemoOperations using TypedDemoDrizzle.
@@ -143,6 +143,12 @@ export const DemoOperationsLive = Layer.effect(
       queryPurchaseOrders: (ctx) =>
         Effect.gen(function* () {
           const offset = (ctx.page - 1) * ctx.limit
+          const visible = and(
+            eq(schema.purchaseOrder._deleted, false),
+            ctx.filter
+              ? like(schema.purchaseOrder.item, `%${ctx.filter}%`)
+              : undefined,
+          )
 
           const selectedFields = {
             id: schema.purchaseOrder.id,
@@ -150,11 +156,10 @@ export const DemoOperationsLive = Layer.effect(
             price: schema.purchaseOrder.price,
           } satisfies Record<string, ListQuerySortExpression>
 
-          // Query items with pagination
           const items = yield* db
             .select(selectedFields)
             .from(schema.purchaseOrder)
-            .where(eq(schema.purchaseOrder._deleted, false))
+            .where(visible)
             .orderBy(
               ...listQueryOrderBy({
                 sort: ctx.sort,
@@ -173,11 +178,10 @@ export const DemoOperationsLive = Layer.effect(
             .limit(ctx.limit)
             .offset(offset)
 
-          // Query total count
           const countResult = yield* db
             .select({ count: count() })
             .from(schema.purchaseOrder)
-            .where(eq(schema.purchaseOrder._deleted, false))
+            .where(visible)
 
           const totalCount = countResult[0]?.count ?? 0
 
@@ -239,7 +243,12 @@ export const DemoOperationsLive = Layer.effect(
               price: schema.purchaseOrder.price,
             })
             .from(schema.purchaseOrder)
-            .where(eq(schema.purchaseOrder.id, id))
+            .where(
+              and(
+                eq(schema.purchaseOrder.id, id),
+                eq(schema.purchaseOrder._deleted, false),
+              ),
+            )
             .limit(1)
 
           return results[0] ?? null
@@ -265,13 +274,11 @@ export const DemoOperationsLive = Layer.effect(
             updateData["price"] = input.price
           }
 
-          // Update the record
           yield* db
             .update(schema.purchaseOrder)
             .set(updateData)
             .where(eq(schema.purchaseOrder.id, id))
 
-          // Fetch and return the updated record
           const results = yield* db
             .select({
               id: schema.purchaseOrder.id,

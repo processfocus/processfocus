@@ -8,10 +8,12 @@
     ]
   },
   "dependencies": {
-    "@pf/frontend-endpoints": "workspace:*"
+    "@pf/auth-session": "workspace:*",
+    "@pf/frontend-endpoints": "workspace:*",
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@next/playwright": "16.3.5"
+    "@next/playwright": "16.4.6"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

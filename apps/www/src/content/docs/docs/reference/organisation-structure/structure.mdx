@@ -1,0 +1,73 @@
+---
+title: Organisation structure
+description: Define organisational units, nest them, and choose where roles belong.
+---
+
+Organisational units let you model the structure of your organisation. They are hierarchical containers that can represent:
+
+- **Departments** - Sales, Engineering, HR, Finance
+- **Teams** - Product Team A, Support Team B
+- **Divisions** - Regional offices, product divisions
+- **Projects** - Temporary structures for specific initiatives
+
+Each organisational unit can have its own:
+
+- Members and managers
+- Processes and workflows
+- Data visibility rules
+- Approval hierarchies
+
+The examples below use `org` from the
+[overview](/docs/reference/organisation-structure/).
+
+## Organisational units
+
+An **organisational unit** is a part of the organisation, such as a department,
+division, or team. Create a unit with `OrgUnit`, passing its parent, an ID, and
+its properties:
+
+```typescript
+import { OrgUnit } from "@pf/process"
+
+export const hr = new OrgUnit(org, "hr", {
+  name: "Human Resources",
+  acronym: "HR",
+  type: "department",
+})
+```
+
+The arguments and properties are:
+
+- `org` is the parent that contains the unit.
+- `"hr"` is the unit's stable ID within that parent. Keep it unchanged when
+  renaming the department, so it continues to identify the same unit.
+- `name` is the display name and is required.
+- `acronym` is an optional shortened name.
+- `type` is an optional classification used on the organisation chart.
+
+The available types for an `OrgUnit` are `"board"`, `"division"`,
+`"department"`, `"team"`, `"unit"`, and `"other"`. The type
+`"organisation"` is reserved for the root `Organisation`.
+
+### Nesting units
+
+Each unit has one parent: either the organisation or another organisational
+unit. To place a team within a department, pass the department as its parent:
+
+```typescript
+export const recruitment = new OrgUnit(hr, "recruitment", {
+  name: "Recruitment",
+  type: "team",
+})
+```
+
+Together, these examples define this hierarchy:
+
+```text
+Demo Company
+└── Human Resources
+    └── Recruitment
+```
+
+The parent argument determines where a unit sits in the hierarchy; `type`
+describes what kind of unit it is.

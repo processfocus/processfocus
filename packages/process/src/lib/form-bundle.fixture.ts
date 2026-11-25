@@ -1,5 +1,11 @@
 import { Effect, Schema } from "effect"
-import { TextField } from "@pf/form-schema"
+import {
+  BooleanField,
+  DateField,
+  NumberFieldFrom,
+  NumberFromString,
+  TextField,
+} from "@pf/form-schema"
 import { Form } from "./form"
 import { OrgUnit } from "./org-unit"
 import { Organisation } from "./organisation"
@@ -23,6 +29,10 @@ export const form = new Form(process, "submit", {
       ),
     }),
     accepted: Schema.Boolean,
+    amount: NumberFieldFrom(NumberFromString),
+    approved: BooleanField({ required: true }),
+    startDate: DateField(),
+    nickname: Schema.optionalKey(Schema.String),
   }),
 })
 process.start(form).end()

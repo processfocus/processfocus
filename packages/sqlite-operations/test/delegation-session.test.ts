@@ -1,16 +1,21 @@
 import { createHash } from "node:crypto"
-import { HttpServerRequest } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
 import { eq } from "drizzle-orm"
-import { Clock, DateTime, Effect, Layer, Logger, Option, Schema } from "effect"
+import {
+  Clock,
+  ConfigProvider,
+  DateTime,
+  Effect,
+  Layer,
+  Logger,
+  Option,
+  Schema,
+} from "effect"
+import { HttpServerRequest } from "effect/http"
+import { SqlClient } from "effect/sql"
 import { SignJWT, jwtVerify } from "jose"
 import {
   AuthenticationDatabase,
-  DelegationDatabase,
-  DelegationSessionService,
-  DelegationSessionServiceIsolated,
   buildFrontendClients,
-  createAuthenticationServer,
   createClientJwt,
 } from "@pf/auth-api"
 import {
@@ -19,6 +24,14 @@ import {
   LocalCedarConfigDefault,
 } from "@pf/auth-local-cedar"
 import { subjects } from "@pf/auth-session"
+import {
+  DelegationCredentialServiceLive,
+  DelegationDatabase,
+} from "@pf/delegation"
+import {
+  DelegationSessionService,
+  DelegationSessionServiceIsolated,
+} from "@pf/delegation/authorization"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   KeyManagementService,
@@ -30,12 +43,19 @@ import {
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { SqliteDelegationDatabaseLive } from "../src/lib/delegation-database.js"
 import { TestLayer, setupTestData } from "./auth-server.fixture.js"
+import { createDelegationTestApp as createAuthenticationServer } from "./delegation-app.fixture"
 import { describe, expect, it } from "bun:test"
 
-const base = Layer.mergeAll(
+const credentialBase = Layer.mergeAll(
   TestLayer,
   SqliteDelegationDatabaseLive.pipe(Layer.provide(TestLayer)),
   KeyManagementServiceLive.pipe(Layer.provide(TestLayer)),
+)
+const credentialOnly = DelegationCredentialServiceLive.pipe(
+  Layer.provideMerge(credentialBase),
+)
+const base = Layer.mergeAll(
+  credentialBase,
   LocalCedarAuthorizationLive.pipe(
     Layer.provide(
       Layer.effect(
@@ -76,7 +96,10 @@ const base = Layer.mergeAll(
     ),
   ),
 )
-const isolated = DelegationSessionServiceIsolated.pipe(Layer.provideMerge(base))
+const isolated = Layer.mergeAll(
+  DelegationSessionServiceIsolated,
+  DelegationCredentialServiceLive,
+).pipe(Layer.provideMerge(base))
 const Tokens = Schema.decodeUnknownSync(
   Schema.Struct({
     access_token: Schema.String,
@@ -127,8 +150,8 @@ const setup = Effect.gen(function* () {
     id: "dsg-test",
     delegationId: "dlg-test",
     verifier: createHash("sha256").update(secret).digest("base64url"),
-    issuedAt: DateTime.unsafeMake(now),
-    expiresAt: DateTime.unsafeMake(now + 120_000),
+    issuedAt: DateTime.makeUnsafe(now),
+    expiresAt: DateTime.makeUnsafe(now + 120_000),
   })
   const { app, runtime } = yield* createAuthenticationServer({
     clients: [
@@ -229,13 +252,13 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
     [120_000, 119_999, 0],
     [120_000, 120_000, 0],
   ] as const) {
-    it(`caps CLI export at deadline ${deadline} after ${elapsed}ms without zero-lifetime success`, async () => {
+    it(`caps Cedar-free CLI export at deadline ${deadline} after ${elapsed}ms without zero-lifetime success`, async () => {
       let time = now
       await Effect.runPromise(
         Effect.gen(function* () {
           const { db, exchange, refresh, verify, acceptSession } = yield* setup
           yield* db.update(schema.secretGeneration).set({
-            secretExpiresAt: DateTime.unsafeMake(now + deadline),
+            secretExpiresAt: DateTime.makeUnsafe(now + deadline),
           })
           const response = yield* Effect.promise(() => exchange())
           const browser = Tokens(yield* Effect.promise(() => response.json()))
@@ -291,12 +314,16 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
               .status,
           ).toBe(400)
         }).pipe(
-          Effect.provide(isolated),
-          Effect.withClock(
-            Object.assign(Clock.make(), {
-              currentTimeMillis: Effect.sync(() => time),
-              unsafeCurrentTimeMillis: () => time,
-            }),
+          Effect.provide(credentialOnly),
+          Effect.provideService(
+            Clock.Clock,
+            Object.assign(
+              Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+              {
+                currentTimeMillis: Effect.sync(() => time),
+                currentTimeMillisUnsafe: () => time,
+              },
+            ),
           ),
         ),
       )
@@ -309,7 +336,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         const { db, exchange, refresh, verify } = yield* setup
         yield* db
           .update(schema.secretGeneration)
-          .set({ secretExpiresAt: DateTime.unsafeMake(now + 86400_000) })
+          .set({ secretExpiresAt: DateTime.makeUnsafe(now + 86400_000) })
         const issued = yield* Effect.promise(() => exchange())
         const browser = Tokens(yield* Effect.promise(() => issued.json()))
         const exported = yield* Effect.promise(() =>
@@ -326,12 +353,16 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         const next = Tokens(yield* Effect.promise(() => refreshed.json()))
         expect(next.expires_in).toBe(600)
       }).pipe(
-        Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.succeed(now),
-            unsafeCurrentTimeMillis: () => now,
-          }),
+        Effect.provide(credentialOnly),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.succeed(now),
+              currentTimeMillisUnsafe: () => now,
+            },
+          ),
         ),
       ),
     )
@@ -369,13 +400,17 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
                 audience: "configured-api",
               })
             }
+            // Use the test environment without Bun's startup import.meta.env values.
+            const config = ConfigProvider.layer(
+              ConfigProvider.fromEnvRecord(process.env),
+            )
             const clientIds = [
               ...new Set([frontendClientId, "frontend", "other"]),
             ]
             const { app, runtime } = yield* createAuthenticationServer({
               clients: [
                 ...(configuration === "jwt"
-                  ? yield* Effect.promise(buildFrontendClients)
+                  ? yield* buildFrontendClients().pipe(Effect.provide(config))
                   : []),
                 ...clientIds
                   .filter(
@@ -387,7 +422,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
                     tokenEndpointAuthMethod: "client_jwt" as const,
                   })),
               ],
-            })
+            }).pipe(Effect.provide(config))
             const server = createTestApp(app, { runtime })
             for (const clientId of clientIds) {
               const bearer = yield* createClientJwt({
@@ -538,11 +573,15 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
             }
           }).pipe(
             Effect.provide(isolated),
-            Effect.withClock(
-              Object.assign(Clock.make(), {
-                currentTimeMillis: Effect.succeed(now),
-                unsafeCurrentTimeMillis: () => now,
-              }),
+            Effect.provideService(
+              Clock.Clock,
+              Object.assign(
+                Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+                {
+                  currentTimeMillis: Effect.succeed(now),
+                  currentTimeMillisUnsafe: () => now,
+                },
+              ),
             ),
           ),
         )
@@ -565,7 +604,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
   }
 
   for (const change of ["roles", "owner", "login", "storage"] as const) {
-    it(`rejects exported signed access and browser/CLI refresh after live ${change} invalidation`, async () => {
+    it(`separates protected acceptance from credential validity after live ${change} invalidation`, async () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           const { db, ownerId, exchange, refresh, verify, acceptSession } =
@@ -617,17 +656,27 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
             }
           }
           for (const tokens of [browser, cli]) {
-            yield* verify(tokens.access_token)
+            const verified = yield* verify(tokens.access_token)
+            const acceptance = yield* (yield* DelegationSessionService)
+              .check(verified.properties)
+              .pipe(Effect.option)
+            expect(Option.isNone(acceptance)).toBe(true)
+            const credentialValid = change === "roles" || change === "login"
             expect(
               (yield* Effect.promise(() => acceptSession(tokens.access_token)))
                 .status,
-            ).toBe(401)
+            ).toBe(credentialValid ? 200 : 401)
             for (const scope of [undefined, "cli", "role:%2FTester"])
               expect(
                 (yield* Effect.promise(() =>
                   refresh(tokens.refresh_token, scope),
                 )).status,
-              ).toBe(400)
+              ).toBe(
+                credentialValid &&
+                  !(change === "roles" && scope === "role:%2FTester")
+                  ? 200
+                  : 400,
+              )
           }
         }).pipe(Effect.provide(isolated)),
       )
@@ -660,10 +709,13 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         LocalCedarAuthorizationLive.pipe(Layer.provide(policy)),
       )
       let time = now
-      const clock = Object.assign(Clock.make(), {
-        unsafeCurrentTimeMillis: () => time,
-        currentTimeMillis: Effect.sync(() => time),
-      })
+      const clock = Object.assign(
+        Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+        {
+          currentTimeMillisUnsafe: () => time,
+          currentTimeMillis: Effect.sync(() => time),
+        },
+      )
       await Effect.runPromise(
         Effect.gen(function* () {
           expect(
@@ -724,8 +776,8 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
             verifier: createHash("sha256")
               .update("target-secret")
               .digest("base64url"),
-            issuedAt: DateTime.unsafeMake(now),
-            expiresAt: DateTime.unsafeMake(now + 120_000),
+            issuedAt: DateTime.makeUnsafe(now),
+            expiresAt: DateTime.makeUnsafe(now + 120_000),
           })
           const guard = {
             id: "dlg-target",
@@ -815,7 +867,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
           // JWT expiry remains in the future; live generation validity must win over Cedar grants.
           yield* db
             .update(schema.secretGeneration)
-            .set({ secretExpiresAt: DateTime.unsafeMake(now + 1000) })
+            .set({ secretExpiresAt: DateTime.makeUnsafe(now + 1000) })
             .where(eq(schema.secretGeneration.id, "dsg-test"))
           const expiring = yield* Effect.promise(() => sign(now + 1000))
           time += 1000
@@ -838,11 +890,11 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
           }
           yield* db
             .update(schema.secretGeneration)
-            .set({ secretExpiresAt: DateTime.unsafeMake(now + 120_000) })
+            .set({ secretExpiresAt: DateTime.makeUnsafe(now + 120_000) })
             .where(eq(schema.secretGeneration.id, "dsg-test"))
           yield* store.revoke({
             id: "dlg-test",
-            revokedAt: DateTime.unsafeMake(time),
+            revokedAt: DateTime.makeUnsafe(time),
           })
           for (const method of ["GET", "PATCH"]) {
             const denied = yield* Effect.promise(() =>
@@ -867,7 +919,10 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
           expect(yield* db.select().from(schema.secretGeneration)).toHaveLength(
             2,
           )
-        }).pipe(Effect.provide(managementLayer), Effect.withClock(clock)),
+        }).pipe(
+          Effect.provide(managementLayer),
+          Effect.provideService(Clock.Clock, clock),
+        ),
       )
     })
   }
@@ -875,10 +930,13 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
   for (const elapsed of [30_000, 120_000]) {
     it(`replaces ${elapsed === 30_000 ? "live" : "expired"} access through the owner API and immediately rejects old secrets, access and refresh credentials`, async () => {
       let time = now
-      const clock = Object.assign(Clock.make(), {
-        unsafeCurrentTimeMillis: () => time,
-        currentTimeMillis: Effect.sync(() => time),
-      })
+      const clock = Object.assign(
+        Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+        {
+          currentTimeMillisUnsafe: () => time,
+          currentTimeMillis: Effect.sync(() => time),
+        },
+      )
       await Effect.runPromise(
         Effect.gen(function* () {
           const {
@@ -1079,7 +1137,10 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
           ).toEqual(["dsg-test", next.generationId].sort())
           expect(JSON.stringify(history)).not.toContain(secret)
           expect(JSON.stringify(history)).not.toContain(next.secret)
-        }).pipe(Effect.provide(isolated), Effect.withClock(clock)),
+        }).pipe(
+          Effect.provide(isolated),
+          Effect.provideService(Clock.Clock, clock),
+        ),
       )
     })
   }
@@ -1116,7 +1177,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
     })
   }
 
-  it("returns live trusted session facts and rejects owner authority loss", async () => {
+  it("introspects live credential facts while protected acceptance rejects owner authority loss", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const { db, exchange, acceptSession, ownerId, verify } = yield* setup
@@ -1144,10 +1205,17 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         const denied = yield* Effect.promise(() =>
           acceptSession(tokens.access_token),
         )
-        expect(denied.status).toBe(401)
-        expect(yield* Effect.promise(() => denied.json())).toEqual({
-          error: "invalid_token",
+        expect(denied.status).toBe(200)
+        expect(yield* Effect.promise(() => denied.json())).toMatchObject({
+          session: { roles: [] },
         })
+        expect(
+          Option.isNone(
+            yield* (yield* DelegationSessionService)
+              .check(initial)
+              .pipe(Effect.option),
+          ),
+        ).toBe(true)
         yield* db
           .update(schema.providerUserRole)
           .set({ _deleted: false })
@@ -1167,7 +1235,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
   it("verifies session signatures, issuer, audience, raw identity and capped expiry", async () => {
     const logs: string[] = []
     const logger = Logger.make((entry) =>
-      logs.push(Logger.stringLogger.log(entry)),
+      logs.push(Logger.formatSimple.log(entry)),
     )
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -1228,10 +1296,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
           (yield* Effect.promise(() => acceptSession("x".repeat(30_000))))
             .status,
         ).toBe(400)
-      }).pipe(
-        Effect.provide(isolated),
-        Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
-      ),
+      }).pipe(Effect.provide(isolated), Effect.provide(Logger.layer([logger]))),
     )
   })
 
@@ -1257,11 +1322,15 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         })
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.sync(() => time),
-            unsafeCurrentTimeMillis: () => time,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.sync(() => time),
+              currentTimeMillisUnsafe: () => time,
+            },
+          ),
         ),
       ),
     )
@@ -1269,7 +1338,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
   it("fails closed on real storage failure without exposing credential-bearing causes", async () => {
     const logs: string[] = []
     const logger = Logger.make((entry) =>
-      logs.push(Logger.stringLogger.log(entry)),
+      logs.push(Logger.formatSimple.log(entry)),
     )
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -1287,10 +1356,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         expect(yield* db.select().from(schema.delegationHistory)).toHaveLength(
           0,
         )
-      }).pipe(
-        Effect.provide(isolated),
-        Effect.provide(Logger.replace(Logger.defaultLogger, logger)),
-      ),
+      }).pipe(Effect.provide(isolated), Effect.provide(Logger.layer([logger]))),
     )
   })
   it("exchanges a freshly issued secret and rejects delegated issuance without manufacturing human evidence", async () => {
@@ -1429,11 +1495,15 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         ).toBe(400)
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.sync(() => time),
-            unsafeCurrentTimeMillis: () => time,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.sync(() => time),
+              currentTimeMillisUnsafe: () => time,
+            },
+          ),
         ),
       ),
     )
@@ -1466,7 +1536,7 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         const service = yield* DelegationSessionService
         yield* db
           .update(schema.secretGeneration)
-          .set({ secretRevokedAt: DateTime.unsafeMake(now) })
+          .set({ secretRevokedAt: DateTime.makeUnsafe(now) })
         expect(
           Option.isNone(yield* service.check(session).pipe(Effect.option)),
         ).toBe(true)
@@ -1549,11 +1619,15 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         expect(generations[0]!.secretLastUsedAt).not.toBeNull()
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.succeed(now),
-            unsafeCurrentTimeMillis: () => now,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.succeed(now),
+              currentTimeMillisUnsafe: () => now,
+            },
+          ),
         ),
       ),
     )
@@ -1638,17 +1712,19 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
           .update(schema.oauthProvider)
           .set({ providerConfig: { delegatedAccess: false } })
         expect((yield* live.check(session)).delegation).toEqual(
-          session.delegation,
+          Option.getOrThrow(Option.fromNullishOr(session.delegation)),
         )
         yield* db
           .update(schema.oauthProvider)
           .set({ providerConfig: { delegatedAccess: true } })
         expect((yield* live.check(session)).delegation).toEqual(
-          session.delegation,
+          Option.getOrThrow(Option.fromNullishOr(session.delegation)),
         )
         yield* store.revokeGeneration({
-          generationId: session.delegation.generationId,
-          revokedAt: DateTime.unsafeMake(time),
+          generationId: Option.getOrThrow(
+            Option.fromNullishOr(session.delegation),
+          ).generationId,
+          revokedAt: DateTime.makeUnsafe(time),
         })
         expect(
           Option.isNone(yield* live.check(session).pipe(Effect.option)),
@@ -1656,11 +1732,15 @@ describe("isolated delegated session HTTP, signed credentials and SQLite", () =>
         expect((yield* Effect.promise(() => exchange())).status).toBe(400)
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.sync(() => time),
-            unsafeCurrentTimeMillis: () => time,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.sync(() => time),
+              currentTimeMillisUnsafe: () => time,
+            },
+          ),
         ),
       ),
     )

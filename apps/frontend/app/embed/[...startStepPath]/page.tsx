@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation"
+import { connection } from "next/server"
 import EmbedClient from "./embed-client"
+import { fetchEmbedFormData } from "@/lib/embed-form-server"
 import {
   embedSegmentsFromStepPath,
   stepPathFromEmbedSegments,
@@ -47,5 +49,7 @@ export default async function EmbedPage({
     notFound()
   }
 
-  return <EmbedClient entry={entry} />
+  await connection()
+  const data = await fetchEmbedFormData(entry.stepPath)
+  return <EmbedClient entry={entry} data={data} />
 }

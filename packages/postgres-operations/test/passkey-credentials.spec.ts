@@ -1,6 +1,6 @@
 import { expect, it } from "@effect/vitest"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, Either, Layer, Option } from "effect"
+import { DateTime, Effect, Layer, Option, Result } from "effect"
 import { AuthenticationDatabase } from "@pf/auth-api"
 import * as schema from "@pf/drizzle-postgres"
 import { PostgresAuthenticationDatabaseLive } from "../src/lib/authentication-database"
@@ -27,7 +27,7 @@ const seedPasskeyIdentity = (suffix: string) =>
       id: userId,
       provider: "passkey",
       sub: `handle-${suffix}`,
-      lastLoggedIn: DateTime.unsafeMake("2026-07-27T00:00:00.000Z"),
+      createdAt: DateTime.makeUnsafe("2026-07-27T00:00:00.000Z"),
     })
     yield* db.insert(schema.providerUser).values({
       id: `pu-passkey-${suffix}`,
@@ -165,7 +165,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
           publicKey: "original-public-key",
           counter: 0,
         })
-        const duplicate = yield* Effect.either(
+        const duplicate = yield* Effect.result(
           authDb.createPasskeyCredential({
             userId,
             credentialId,
@@ -174,7 +174,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
           }),
         )
 
-        expect(Either.isLeft(duplicate)).toBe(true)
+        expect(Result.isFailure(duplicate)).toBe(true)
         expect(
           Option.getOrThrow(
             yield* authDb.findPasskeyCredentialById(credentialId),
@@ -265,17 +265,23 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
             counter: 7,
           })
 
-          yield* authDb.updateLastLoggedIn(
-            userId,
-            DateTime.unsafeMake("2026-01-01T00:00:00.000Z"),
-          )
+          yield* (yield* TypedPostgresDrizzle)
+            .insert(schema.auditEvent)
+            .values({
+              auditKind: "login",
+              occurredAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+              auditDetails: {
+                actorUserId: userId,
+                authenticationMethod: "oauth",
+              },
+            })
           expect(
             (yield* authDb.listPasskeyCredentialsForUser(userId)).every(
               (item) => item.lastUsedAt === null,
             ),
           ).toBe(true)
 
-          const usedAt = DateTime.unsafeMake("2026-04-05T06:07:00.000Z")
+          const usedAt = DateTime.makeUnsafe("2026-04-05T06:07:00.000Z")
           expect(
             yield* authDb.advancePasskeyCredentialCounter(
               "credential-used",

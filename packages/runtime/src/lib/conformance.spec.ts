@@ -4,7 +4,7 @@ import type { RuntimeLogging } from "./runtime.js"
 import { Runtime } from "./runtime.js"
 
 const capability = <Identifier, Service>(
-  tag: Context.Tag<Identifier, Service>,
+  tag: Context.Service<Identifier, Service>,
   service: NoInfer<Service>,
   name: string,
   events: string[],
@@ -19,17 +19,17 @@ const capability = <Identifier, Service>(
 
 const logging = (events: string[]): RuntimeLogging => ({
   decorate: (effect) =>
-    Effect.sync(() => events.push("logging")).pipe(Effect.zipRight(effect)),
+    Effect.sync(() => events.push("logging")).pipe(Effect.andThen(effect)),
 })
 
 describe("runtime capability composition", () => {
   it("acquires every authentication capability before starting the server", async () => {
     const events: string[] = []
-    const Database = Context.GenericTag<{ readonly database: true }>("Database")
-    const Configuration = Context.GenericTag<{ readonly configuration: true }>(
+    const Database = Context.Service<{ readonly database: true }>("Database")
+    const Configuration = Context.Service<{ readonly configuration: true }>(
       "Configuration",
     )
-    const Policy = Context.GenericTag<{ readonly policy: true }>("Policy")
+    const Policy = Context.Service<{ readonly policy: true }>("Policy")
 
     const result = await Effect.runPromise(
       Runtime.authentication({
@@ -65,20 +65,20 @@ describe("runtime capability composition", () => {
 
   it("supplies every GraphQL capability to the transport", async () => {
     const events: string[] = []
-    const Persistence = Context.GenericTag<{ readonly persistence: true }>(
+    const Persistence = Context.Service<{ readonly persistence: true }>(
       "Persistence",
     )
-    const Queue = Context.GenericTag<{ readonly queue: true }>("Queue")
-    const DocumentStore = Context.GenericTag<{ readonly documentStore: true }>(
+    const Queue = Context.Service<{ readonly queue: true }>("Queue")
+    const DocumentStore = Context.Service<{ readonly documentStore: true }>(
       "DocumentStore",
     )
-    const EventPublisher = Context.GenericTag<{
+    const EventPublisher = Context.Service<{
       readonly eventPublisher: true
     }>("EventPublisher")
-    const OrganisationLoader = Context.GenericTag<{
+    const OrganisationLoader = Context.Service<{
       readonly organisationLoader: true
     }>("OrganisationLoader")
-    const Authorization = Context.GenericTag<{ readonly authorization: true }>(
+    const Authorization = Context.Service<{ readonly authorization: true }>(
       "Authorization",
     )
 

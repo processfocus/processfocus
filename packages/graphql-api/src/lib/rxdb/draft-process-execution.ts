@@ -1,25 +1,59 @@
-import { Context, Data, Effect, Either, Layer, Schema } from "effect"
+import {
+  Context,
+  Data,
+  DateTime,
+  Effect,
+  Equal,
+  Layer,
+  Result,
+  Schema,
+} from "effect"
+import {
+  AuthorizationService,
+  type DelegationPrincipal,
+  type ProviderUserPrincipal,
+  type ServiceAccountPrincipal,
+} from "@pf/auth-policy"
 import { calculateFieldCompletion } from "@pf/form-schema"
 import { submissionSchemaSync } from "@pf/form-submission-schema"
 import {
   DraftProcessExecutionQueries,
   type DraftProcessExecutionRow,
+  type StepRoleInfo,
 } from "@pf/graphql-db-operations"
 import type {
   DraftProcessExecution,
   DraftProcessExecutionInputPushRowT0NewDocumentStateT0,
 } from "@pf/graphql-schema"
 import { type Form, OrganisationProvider, isForm } from "@pf/process"
+import { trySequentialStepAuthorization } from "../authorization"
 import type { DraftProcessExecutionEventDocument } from "../draft-process-events"
+import { getProcessPathFromStepPath } from "../resolver-utils"
 import type { RxDbCollectionOps } from "./collection-ops"
 
-const ProcessStateSchema = Schema.Record({
-  key: Schema.String,
-  value: Schema.Unknown,
-})
+const ProcessStateSchema = Schema.Record(Schema.String, Schema.Unknown)
+
+export const canSaveStartForm = (
+  principal:
+    | ProviderUserPrincipal
+    | DelegationPrincipal
+    | ServiceAccountPrincipal,
+  stepPath: string,
+  step: StepRoleInfo | undefined,
+) =>
+  Effect.gen(function* () {
+    if (!step?.startsProcess) return false
+    const auth = yield* AuthorizationService
+    return yield* trySequentialStepAuthorization(
+      step,
+      stepPath,
+      getProcessPathFromStepPath(stepPath),
+      (resource) => auth.canCompleteStep(principal, resource),
+    )
+  })
 
 const decodeProcessState = (state: unknown) =>
-  Schema.decodeUnknown(ProcessStateSchema)(state ?? {}).pipe(
+  Schema.decodeUnknownEffect(ProcessStateSchema)(state ?? {}).pipe(
     Effect.mapError(
       (cause) => new Error("Invalid draft process execution state", { cause }),
     ),
@@ -64,7 +98,6 @@ const findStepByPath = (
       currentNode = child as typeof org
     }
 
-    // Verify the final node is a Form
     if (!isForm(currentNode)) {
       return yield* new StepNotFoundByPathError({ stepPath, processId })
     }
@@ -85,21 +118,19 @@ const calculateFieldCompletionForRow = (
 > =>
   Effect.gen(function* () {
     // Try to find the step and its schema
-    const stepResult = yield* Effect.either(
+    const stepResult = yield* Effect.result(
       findStepByPath(row.startStepPath, row.processId),
     )
 
-    // If step not found, return 0/0
-    if (Either.isLeft(stepResult)) {
+    if (Result.isFailure(stepResult)) {
       yield* Effect.logWarning(
-        `Cannot calculate field completion for draft ${row.id}: ${stepResult.left.message}`,
+        `Cannot calculate field completion for draft ${row.id}: ${stepResult.failure.message}`,
       )
       return { fieldsCompleted: 0, totalFields: 0 }
     }
 
-    const step = stepResult.right
+    const step = stepResult.success
 
-    // If step has no output schema, return 0/0
     if (!step.output) {
       return { fieldsCompleted: 0, totalFields: 0 }
     }
@@ -109,7 +140,6 @@ const calculateFieldCompletionForRow = (
     const inputSchema = Schema.Struct(step.output)
     const subSchema = submissionSchemaSync(inputSchema)
 
-    // Calculate field completion using the imported function
     return calculateFieldCompletion(subSchema, row.state)
   })
 
@@ -130,7 +160,7 @@ const mapRowToGraphqlWithValidation = (
 
     return {
       ...row,
-      lastSaved: row.lastSaved.epochMillis,
+      lastSaved: DateTime.toEpochMillis(row.lastSaved),
       fieldsCompleted,
       totalFields,
     }
@@ -142,9 +172,7 @@ const mapRowToGraphqlWithValidation = (
  * This service adapts the DraftProcessExecutionQueries to the generic
  * RxDbCollectionOps interface, enabling use with the generic resolvers.
  */
-export class DraftProcessExecutionCollectionOps extends Context.Tag(
-  "@pf/graphql-api/DraftProcessExecutionCollectionOps",
-)<
+export class DraftProcessExecutionCollectionOps extends Context.Service<
   DraftProcessExecutionCollectionOps,
   RxDbCollectionOps<
     DraftProcessExecutionRow,
@@ -152,7 +180,7 @@ export class DraftProcessExecutionCollectionOps extends Context.Tag(
     DraftProcessExecutionInputPushRowT0NewDocumentStateT0,
     OrganisationProvider
   >
->() {}
+>()("@pf/graphql-api/DraftProcessExecutionCollectionOps") {}
 
 /**
  * Live implementation that delegates to DraftProcessExecutionQueries.
@@ -202,6 +230,15 @@ export const DraftProcessExecutionCollectionOpsLive = Layer.effect(
         }),
 
       getByIds: queries.getProcessStates,
+
+      // The server stamps the saved revision. A later optimistic write may
+      // already be queued against the browser's copy of the same values.
+      matchesMaster: (current, assumed) =>
+        current.id === assumed.id &&
+        current.processId === assumed.processId &&
+        current.startStepPath === assumed.startStepPath &&
+        current.deleted === assumed.deleted &&
+        Equal.equals(current.state, assumed.state),
 
       mapToGraphql: mapRowToGraphqlWithValidation,
     }

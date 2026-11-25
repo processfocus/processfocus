@@ -6,6 +6,7 @@ import type { Session } from "@pf/auth-session"
 import { getRealtimeRecipientId } from "@pf/auth-session/realtime-recipient"
 import { disconnectAllAdapters } from "@/lib/appsync-events/reconnect-registry"
 import { REFRESH_BUFFER_SECONDS } from "@/lib/auth/config"
+import { getValidRedirect } from "@/lib/auth/redirect"
 import { getSessionCacheScope } from "@/lib/auth/session-cache-scope"
 import { beginReplicationCredentialRefresh } from "@/lib/collections/replication-registry"
 
@@ -22,6 +23,8 @@ interface TokenRefreshSchedulerProps {
   /** Unix timestamp in seconds when the access token expires */
   initialExpiresAt: number
   session: Session
+  /** Upstream SSO deadline in Unix milliseconds, independent of access-token expiry. */
+  googleRevalidationDeadline?: number | undefined
   onRefresh: (expiresAt: number) => Promise<void>
   onInvalidSession: () => void
 }
@@ -38,6 +41,7 @@ interface TokenRefreshSchedulerProps {
 export function TokenRefreshScheduler({
   initialExpiresAt,
   session,
+  googleRevalidationDeadline: googleDeadline,
   onRefresh,
   onInvalidSession,
 }: TokenRefreshSchedulerProps) {
@@ -61,12 +65,43 @@ export function TokenRefreshScheduler({
     if (hasRedirectedRef.current) return
     hasRedirectedRef.current = true
     clearScheduledRefresh()
+    cancelRefreshRef.current?.()
     disconnectAllAdapters()
     onInvalidSession()
-    router.push("/login")
-  }, [clearScheduledRefresh, router, onInvalidSession])
+    const destination = getValidRedirect(
+      window.location.pathname + window.location.search,
+    )
+    const params = new URLSearchParams({ redirect: destination })
+    if (googleDeadline !== undefined && Date.now() >= googleDeadline)
+      window.location.replace(`/api/auth/revalidate-google?${params}`)
+    else router.push(`/login?${params}`)
+  }, [clearScheduledRefresh, googleDeadline, router, onInvalidSession])
+
+  useEffect(() => {
+    if (googleDeadline === undefined) return
+    const revalidate = () => {
+      if (
+        document.visibilityState === "visible" &&
+        Date.now() >= googleDeadline
+      )
+        redirectToLogin()
+    }
+    const timer = setTimeout(
+      revalidate,
+      Math.max(0, googleDeadline - Date.now()),
+    )
+    document.addEventListener("visibilitychange", revalidate)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener("visibilitychange", revalidate)
+    }
+  }, [googleDeadline, redirectToLogin])
 
   const refreshToken = useCallback(async (): Promise<boolean | null> => {
+    // The issuer rounds access-token expiry down to seconds. Let the separate
+    // SSO deadline timer navigate when a refresh cannot extend the token.
+    if (googleDeadline !== undefined && googleDeadline - Date.now() <= 2_000)
+      return null
     // Prevent overlapping refresh attempts
     if (cancelRefreshRef.current) {
       return true // Treat as success since a refresh is already in progress
@@ -158,6 +193,7 @@ export function TokenRefreshScheduler({
     }
     return success
   }, [
+    googleDeadline,
     redirectToLogin,
     session,
     onRefresh,
@@ -177,7 +213,6 @@ export function TokenRefreshScheduler({
     const timeUntilRefreshSeconds =
       timeUntilExpirySeconds - REFRESH_BUFFER_SECONDS
 
-    // Calculate delay in milliseconds
     let delayMs = timeUntilRefreshSeconds * 1000
 
     // Ensure minimum delay to avoid rapid retries
@@ -191,17 +226,14 @@ export function TokenRefreshScheduler({
     }
 
     timeoutRef.current = setTimeout(async () => {
-      // Skip if we've already redirected
       if (!isMountedRef.current || hasRedirectedRef.current) return
 
       const success = await refreshToken()
 
-      // Skip scheduling if we've already redirected
       if (success === null || !isMountedRef.current || hasRedirectedRef.current)
         return
 
       if (success) {
-        // Schedule next refresh
         scheduleRefreshRef.current()
       } else {
         // Retry with exponential backoff
@@ -230,9 +262,7 @@ export function TokenRefreshScheduler({
     scheduleRefreshRef.current = scheduleRefresh
   }, [scheduleRefresh, initialExpiresAt])
 
-  // Handle visibility changes
   const handleVisibilityChange = useCallback(() => {
-    // Skip if we've already redirected to login
     if (hasRedirectedRef.current) return
 
     if (document.visibilityState === "visible") {
@@ -284,10 +314,8 @@ export function TokenRefreshScheduler({
 
   useEffect(() => {
     isMountedRef.current = true
-    // Initial schedule
     scheduleRefresh()
 
-    // Listen for visibility changes
     document.addEventListener("visibilitychange", handleVisibilityChange)
 
     return () => {
@@ -299,6 +327,5 @@ export function TokenRefreshScheduler({
     }
   }, [scheduleRefresh, handleVisibilityChange, clearScheduledRefresh])
 
-  // This component doesn't render anything
   return null
 }

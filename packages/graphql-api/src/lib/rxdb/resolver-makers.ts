@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 // biome-ignore lint/suspicious/noShadowRestrictedNames: Effect Array module
-import { Array, type Context, Effect, Either } from "effect"
+import { Array, type Context, Effect, Result } from "effect"
+import { SqlClient } from "effect/sql"
 import type { GraphQLSchema } from "graphql"
 import {
   CurrentPrincipal,
@@ -92,12 +92,12 @@ export const makePushResolver =
       checkpoint?: { id: string; updatedAt: number } | null
     } = RxDbPullBulkEvent<GraphQL>,
   >(
-    tag: Context.Tag<
+    tag: Context.Service<
       Id,
       RxDbCollectionOps<Row, GraphQL, InsertInput, MapContext>
     >,
     // biome-ignore lint/suspicious/noExplicitAny: makePushResolver only calls emit, doesn't use subscribe
-    eventTag?: Context.Tag<EventId, RxDbEventService<GraphQL, Event, any>>,
+    eventTag?: Context.Service<EventId, RxDbEventService<GraphQL, Event, any>>,
   ) =>
   (
     writeRows:
@@ -123,7 +123,8 @@ export const makePushResolver =
           const successfulIds: string[] = []
 
           for (const row of writeRows) {
-            if (row.assumedMasterState) {
+            let assumedMaster = row.assumedMasterState
+            if (assumedMaster) {
               const currentRows = yield* ops.getByIds([row.newDocumentState.id])
               const currentRow = currentRows[0]
 
@@ -135,30 +136,34 @@ export const makePushResolver =
               }
 
               const current = yield* ops.mapToGraphql(currentRow)
-              if (!rxDbMasterStatesMatch(current, row.assumedMasterState)) {
+              const matches = ops.matchesMaster ?? rxDbMasterStatesMatch
+              if (!matches(current, assumedMaster)) {
                 conflicts.push(current)
                 continue
               }
+              // The adapter's database CAS uses the authoritative revision,
+              // not the optimistic timestamp sent by the browser.
+              assumedMaster = { ...assumedMaster, updatedAt: current.updatedAt }
             }
 
-            const operation = !row.assumedMasterState
+            const operation = !assumedMaster
               ? ops.insert(row.newDocumentState.id, row.newDocumentState)
               : row.newDocumentState.deleted
-                ? ops.delete(row.newDocumentState.id, row.assumedMasterState)
+                ? ops.delete(row.newDocumentState.id, assumedMaster)
                 : ops.update(
                     row.newDocumentState.id,
                     row.newDocumentState,
-                    row.assumedMasterState,
+                    assumedMaster,
                   )
 
-            const result = yield* Effect.either(operation)
+            const result = yield* Effect.result(operation)
 
-            if (Either.isRight(result)) {
+            if (Result.isSuccess(result)) {
               successfulIds.push(row.newDocumentState.id)
             } else {
               yield* Effect.logWarning(
                 `RxDB collection conflict for document ${row.newDocumentState.id}`,
-                result.left,
+                result.failure,
               )
               const currentRows = yield* ops.getByIds([row.newDocumentState.id])
               const currentRow = currentRows[0]
@@ -253,7 +258,7 @@ export const makeAuthorizedStreamSubscription = <
     | ServiceAccountPrincipal,
   EmitError = never,
 >(
-  eventTag: Context.Tag<
+  eventTag: Context.Service<
     EventId,
     RxDbEventService<GraphQL, Event, SubscribeError, EmitError>
   >,
@@ -290,14 +295,17 @@ export const makeAuthorizedStreamSubscription = <
                   const filtered = await execute(
                     Effect.gen(function* () {
                       const principal = yield* buildPrincipalFn(context)
-                      const requestTime = yield* RequestTime
-                      const userDetails = yield* UserDetails
-                      const currentPrincipal = yield* CurrentPrincipal
                       return yield* filterFn(event.documents, principal).pipe(
-                        Effect.locally(requestTime, context._requestTime),
-                        Effect.locally(userDetails, context._userDetails),
-                        Effect.locally(
-                          currentPrincipal,
+                        Effect.provideService(
+                          RequestTime,
+                          context._requestTime,
+                        ),
+                        Effect.provideService(
+                          UserDetails,
+                          context._userDetails,
+                        ),
+                        Effect.provideService(
+                          CurrentPrincipal,
                           "orgUnit" in principal ? principal : null,
                         ),
                       )

@@ -28,7 +28,8 @@ Feature: Leave Request
     Then I should have 1 todo
     And the todo should be for step "Approve time off request"
     And the todo summary should contain "When" with value "2026-03-15 to 2026-03-20"
-    And the todo summary should contain "Requester" with value "ci-pipeline"
+    # Local client credentials and deployed GitHub OIDC use distinct service accounts.
+    And the todo summary should contain "Requester" with pattern "(github-demo-)?ci-pipeline"
 
     # Manager approves the request
     When I complete the first todo with time off approval

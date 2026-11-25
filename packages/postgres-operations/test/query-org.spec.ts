@@ -1,6 +1,6 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
 import { expect, it } from "@effect/vitest"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { OrgQueries } from "@pf/graphql-db-operations"
 import { storeOrganisation } from "@pf/org-to-db"
 import { OrgUnit, Organisation, Process, Role } from "@pf/process"
@@ -12,7 +12,7 @@ import { PostgresTest } from "./postgres-test"
 
 const RequestTimeTest = Layer.succeed(
   RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+  DateTime.makeUnsafe(Date.now()),
 )
 
 const TestLayer = Layer.provideMerge(

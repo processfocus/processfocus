@@ -40,7 +40,7 @@
  */
 
 import type { StandardSchemaV1 } from "@standard-schema/spec"
-import { Either, Schema } from "effect"
+import { Result, Schema } from "effect"
 import type { JSONWebKeySet } from "jose"
 import {
   createLocalJWKSet,
@@ -63,26 +63,26 @@ import type { SubjectSchema } from "./subject"
  * Validates required fields but allows additional properties.
  * @internal
  */
-const TokenResponseSchema = Schema.Struct({
+const TokenResponseSchema = Schema.StructWithRest(Schema.Struct({
   access_token: Schema.String,
   refresh_token: Schema.String,
   expires_in: Schema.Number,
-  refresh_expires_in: Schema.optionalWith(Schema.Number, { exact: true }),
-}).pipe(Schema.extend(Schema.Record({ key: Schema.String, value: Schema.Unknown })))
+  refresh_expires_in: Schema.optionalKey(Schema.Number),
+}), [Schema.Record(Schema.String, Schema.Unknown)])
 
-const OAuthErrorResponseSchema = Schema.Struct({
+const OAuthErrorResponseSchema = Schema.StructWithRest(Schema.Struct({
   error: Schema.String,
-  error_description: Schema.optionalWith(Schema.String, { exact: true }),
-}).pipe(Schema.extend(Schema.Record({ key: Schema.String, value: Schema.Unknown })))
+  error_description: Schema.optionalKey(Schema.String),
+}), [Schema.Record(Schema.String, Schema.Unknown)])
 
 const tokenError = (
   json: unknown,
 ): { readonly code: string; readonly description?: string } | undefined => {
-  const result = Schema.decodeUnknownEither(OAuthErrorResponseSchema)(json)
-  if (Either.isLeft(result)) return undefined
-  const code = result.right.error
+  const result = Schema.decodeUnknownResult(OAuthErrorResponseSchema)(json)
+  if (Result.isFailure(result)) return undefined
+  const code = result.success.error
   if (code === "") return undefined
-  const description = result.right.error_description
+  const description = result.success.error_description
   return description ? { code, description } : { code }
 }
 
@@ -265,6 +265,8 @@ export interface AuthorizeOptions {
    * If there's only one provider configured, the user will be redirected to that.
    */
   provider?: string | undefined
+  /** Expected Google subject for a non-interactive revalidation request. */
+  googleRevalidationSubject?: string | undefined
   /**
    * The audience for the access token. This specifies which API/service the token is intended for.
    *
@@ -781,6 +783,12 @@ export function createClient(input: ClientInput): Client {
       result.searchParams.set("response_type", response)
       result.searchParams.set("state", challenge.state)
       if (opts?.provider) result.searchParams.set("provider", opts.provider)
+      if (opts?.provider === "google" && opts.googleRevalidationSubject) {
+        result.searchParams.set(
+          "google_revalidation_sub",
+          opts.googleRevalidationSubject,
+        )
+      }
       const requestedAudience = opts?.audience ?? audience
       if (requestedAudience) result.searchParams.set("audience", requestedAudience)
       if (shouldUsePkce && response === "code") {
@@ -864,15 +872,15 @@ export function createClient(input: ClientInput): Client {
           ),
         }
       }
-      const result = Schema.decodeUnknownEither(TokenResponseSchema)(json)
-      if (Either.isLeft(result)) {
+      const result = Schema.decodeUnknownResult(TokenResponseSchema)(json)
+      if (Result.isFailure(result)) {
         return {
           err: new InvalidAuthorizationCodeError(
             "Token endpoint returned an invalid token response",
           ),
         }
       }
-      const parsed = result.right
+      const parsed = result.success
       const resultTokens: Tokens = {
         access: parsed.access_token,
         refresh: parsed.refresh_token,
@@ -938,13 +946,13 @@ export function createClient(input: ClientInput): Client {
           err: new InvalidRefreshTokenError(),
         }
       }
-      const result = Schema.decodeUnknownEither(TokenResponseSchema)(json)
-      if (Either.isLeft(result)) {
+      const result = Schema.decodeUnknownResult(TokenResponseSchema)(json)
+      if (Result.isFailure(result)) {
         return {
           err: new InvalidRefreshTokenError(),
         }
       }
-      const parsed = result.right
+      const parsed = result.success
       const refreshedTokens: Tokens = {
         access: parsed.access_token,
         refresh: parsed.refresh_token,

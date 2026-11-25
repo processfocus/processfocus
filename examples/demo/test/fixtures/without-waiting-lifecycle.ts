@@ -7,6 +7,7 @@ import {
   Process,
   type Role,
 } from "@pf/process"
+import { controlForm, dateForm, emptyForm } from "./lifecycle-forms"
 
 class LifecycleFailure extends Data.TaggedError("LifecycleFailure")<{
   readonly message: string
@@ -23,7 +24,11 @@ export const addLifecycleFixtures = (org: Organisation, role: Role): void => {
     })
     const submit = new Form(process, "Submit", {
       role,
-      form: () => ({ control: Schema.String }),
+      form: controlForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "controlForm",
+      },
     })
     const start = process.start(submit)
     const action = new NodeStep(start, "Action", {
@@ -50,44 +55,94 @@ export const addLifecycleFixtures = (org: Organisation, role: Role): void => {
         }),
     })
     const future = {
-      fn: () => DateTime.unsafeMake("2099-01-01T00:00:00Z"),
+      fn: () => DateTime.makeUnsafe("2099-01-01T00:00:00Z"),
       text: "Future business date",
     }
     const actionFlow = start.next(action, { schedule: future })
-    const gate = new Form(actionFlow, "Gate", { role, form: () => ({}) })
+    const gate = new Form(actionFlow, "Gate", {
+      role,
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
+    })
     const gateFlow = actionFlow.next(gate, { schedule: future })
     const items = new Form(gateFlow, "Item", {
       role,
       forEach: { items: () => Effect.succeed([{ id: "one" }, { id: "two" }]) },
-      form: () => ({}),
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
     })
     const barrier = gateFlow.next(items, { schedule: future })
-    const after = new Form(barrier, "After", { role, form: () => ({}) })
+    const after = new Form(barrier, "After", {
+      role,
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
+    })
     barrier.end(after, { schedule: future })
-    const witness = new Form(start, "Witness", { role, form: () => ({}) })
+    const witness = new Form(start, "Witness", {
+      role,
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
+    })
     start.end(witness)
-    const never = new Form(start, "Never", { role, form: () => ({}) })
+    const never = new Form(start, "Never", {
+      role,
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
+    })
     start.end(never, {
       schedule: future,
       condition: { fn: () => false, text: "False stays false" },
     })
-    const clock = new Form(start, "Clock", { role, form: () => ({}) })
+    const clock = new Form(start, "Clock", {
+      role,
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
+    })
     start.end(clock, {
       condition: {
         fn: () =>
-          DateTime.greaterThan(
-            DateTime.unsafeNow(),
-            DateTime.unsafeMake("2099-01-01T00:00:00Z"),
+          DateTime.isGreaterThan(
+            DateTime.nowUnsafe(),
+            DateTime.makeUnsafe("2099-01-01T00:00:00Z"),
           ),
         text: "The real clock is in 2099",
       },
     })
-    const alternate = new Form(start, "Alternate", { role, form: () => ({}) })
+    const alternate = new Form(start, "Alternate", {
+      role,
+      form: emptyForm,
+      browser: {
+        entrypoint: "src/lifecycle-forms.ts",
+        exportName: "emptyForm",
+      },
+    })
     start.else().end(alternate)
     if (handled) {
       const recovered = new Form(process, "Recovered", {
         role,
-        form: () => ({}),
+        form: emptyForm,
+        browser: {
+          entrypoint: "src/lifecycle-forms.ts",
+          exportName: "emptyForm",
+        },
       })
       action.onError(recovered, { taggedErrors: ["LifecycleFailure"] }).end()
     }
@@ -98,10 +153,15 @@ export const addLifecycleFixtures = (org: Organisation, role: Role): void => {
   })
   const submit = new Form(invalid, "Submit", {
     role,
-    form: () => ({ date: Schema.String }),
+    form: dateForm,
+    browser: { entrypoint: "src/lifecycle-forms.ts", exportName: "dateForm" },
   })
   const start = invalid.start(submit)
-  const target = new Form(start, "Target", { role, form: () => ({}) })
+  const target = new Form(start, "Target", {
+    role,
+    form: emptyForm,
+    browser: { entrypoint: "src/lifecycle-forms.ts", exportName: "emptyForm" },
+  })
   start.end(target, {
     schedule: {
       fn: (state) =>

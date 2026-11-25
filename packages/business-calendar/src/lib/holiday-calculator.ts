@@ -90,14 +90,14 @@ const safeDateTime = (
 ): Effect.Effect<DateTime.Utc, InvalidDateError> =>
   Effect.try({
     try: () =>
-      DateTime.unsafeMake({
+      DateTime.makeUnsafe({
         year,
         month,
         day,
         hour: 0,
         minute: 0,
         second: 0,
-        millis: 0,
+        millisecond: 0,
       }),
     catch: (error) =>
       new InvalidDateError({
@@ -341,7 +341,6 @@ export const calculateHolidaysForYear = (
       }
     }
 
-    // Sort by date
     return instances.sort((a, b) => {
       const aMillis = DateTime.toEpochMillis(a.date)
       const bMillis = DateTime.toEpochMillis(b.date)

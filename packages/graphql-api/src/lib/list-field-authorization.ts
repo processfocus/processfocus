@@ -54,7 +54,7 @@ export const canModifyListFieldForAnyRole = (
             listRolePath,
           }),
         ),
-        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.catch(() => Effect.succeed(false)),
       )
 
       if (allowed) return true

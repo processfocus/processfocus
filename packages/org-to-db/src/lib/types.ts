@@ -125,6 +125,8 @@ export interface ExtractedFlowData {
   isElse: boolean
   /** Whether this flow runs after a terminal system-step failure */
   isOnError: boolean
+  deadlineName?: string
+  interrupting?: boolean
   /** Optional case-sensitive outer error tags this error branch matches */
   taggedErrors: readonly string[] | null
 }

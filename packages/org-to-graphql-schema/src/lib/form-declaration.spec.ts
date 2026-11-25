@@ -6,6 +6,7 @@ import {
   FormDefault,
   ListField,
   LookupField,
+  NumberFromString,
   TextBlock,
   TextField,
   Wrapper,
@@ -35,7 +36,7 @@ const fixture = (deferred: boolean) => {
   const fields = {
     email: EmailField(),
     group: Wrapper({
-      amount: Schema.NumberFromString.annotations({ [FormDefault]: "12" }),
+      amount: NumberFromString.annotate({ [FormDefault]: "12" }),
     }),
     nested: Schema.Struct({
       name: TextField(),
@@ -74,7 +75,7 @@ const fixture = (deferred: boolean) => {
           ...fields,
           display: TextField({ readOnly: true, default: "display" }),
           group: Wrapper({
-            amount: Schema.NumberFromString.annotations({
+            amount: NumberFromString.annotate({
               [FormDefault]: "12",
             }),
           }),
@@ -84,19 +85,15 @@ const fixture = (deferred: boolean) => {
   return { org, form, calls: () => calls }
 }
 
-it("keeps static and deferred defaults equivalent across Effect, JSON, GraphQL and metadata", async () => {
+it("keeps static and deferred defaults equivalent across Effect, GraphQL and metadata", async () => {
   const old = fixture(false)
   const next = fixture(true)
   expect(printSchema(await buildFormContractSchema(next.org))).toBe(
     printSchema(await buildFormContractSchema(old.org)),
   )
-  expect(next.form.submissionSchema()).toEqual(old.form.submissionSchema())
-  expect(await Effect.runPromise(next.form.clientFormDefinition())).toEqual(
-    await Effect.runPromise(old.form.clientFormDefinition()),
-  )
   expect(next.calls()).toBe(0)
   const context = {
-    ...buildFlowContext("actual", DateTime.unsafeNow(), []),
+    ...buildFlowContext("actual", DateTime.nowUnsafe(), []),
     step: {},
   }
   expect(
@@ -139,7 +136,7 @@ it("emits v3 for every organisation and rejects obsolete manifest versions", () 
   ).toThrow()
 })
 
-it("builds embedded manifests from static fallbacks without calling decoration", async () => {
+it("builds embedded artifact references without calling decoration", async () => {
   const { org, role, process } = (() => {
     const org = new Organisation({ name: "Embed" })
     const unit = new OrgUnit(org, "unit", { name: "Unit", type: "department" })
@@ -154,6 +151,7 @@ it("builds embedded manifests from static fallbacks without calling decoration",
   })()
   const form = new Form(process, "submit", {
     role,
+    browser: { entrypoint: "form.ts", exportName: "form" },
     embed: {
       externalParticipantEmailField: "email",
       sites: ["https://example.com"],
@@ -168,5 +166,5 @@ it("builds embedded manifests from static fallbacks without calling decoration",
   })
   process.start(form).end()
   const manifest = await Effect.runPromise(buildOrganisationEmbedManifest(org))
-  expect(JSON.stringify(manifest)).toContain("fallback")
+  expect(manifest.entries).toMatchObject([{ formPath: "/unit/process/submit" }])
 })

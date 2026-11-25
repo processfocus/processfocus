@@ -24,6 +24,7 @@ import { Context } from "effect"
  * })
  * ```
  */
-export class DatabaseConnectionInfo extends Context.Tag(
-  "@pf/db-info/DatabaseConnectionInfo",
-)<DatabaseConnectionInfo, string>() {}
+export class DatabaseConnectionInfo extends Context.Service<
+  DatabaseConnectionInfo,
+  string
+>()("@pf/db-info/DatabaseConnectionInfo") {}

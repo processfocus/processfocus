@@ -75,7 +75,6 @@ export function calculateStepColumns(
     flowsToStep.set(flow.targetStepId, sources)
   }
 
-  // Build step lookup by id
   const stepById = new Map<string, WorkflowStep>()
   for (const step of steps) {
     stepById.set(step.id, step)
@@ -128,7 +127,6 @@ export function calculateStepColumns(
     // Determine what can be placed this column:
     // - If we have any seen-phase steps, we cannot place new-phase steps
     // - No-phase steps can always be placed
-    // - If multiple new phases ready and no seen phases, pick one (alphabetically first)
     const toPlace: string[] = [...noPhaseSteps, ...seenPhaseSteps]
 
     if (seenPhaseSteps.length === 0 && newPhaseSteps.length > 0) {
@@ -161,7 +159,6 @@ export function calculateStepColumns(
       }
     }
 
-    // Place steps
     for (const id of toPlace) {
       stepColumns.set(id, column)
       placed.add(id)

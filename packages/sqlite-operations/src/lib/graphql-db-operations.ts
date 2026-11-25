@@ -1,4 +1,5 @@
 import { Layer } from "effect"
+import { SqliteAwsRoleProofStoreLive } from "./aws-role-proof"
 import { SqliteBusinessCalendarQueriesLive } from "./business-calendar-queries"
 import { SqliteCleanupOperationsLive } from "./cleanup"
 import { SqliteDraftProcessExecutionQueriesLive } from "./draft-process-execution"
@@ -26,6 +27,7 @@ import { SqliteTodoQueriesLive } from "./todo-queries"
  * Combines all individual query and operation services into a single layer.
  */
 export const SqliteGraphqlDbOperationsLive = Layer.mergeAll(
+  SqliteAwsRoleProofStoreLive,
   SqliteBusinessCalendarQueriesLive,
   SqliteCleanupOperationsLive,
   SqliteOrgQueriesLive,

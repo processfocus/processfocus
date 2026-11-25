@@ -13,9 +13,7 @@ export type {
   IssuedSalesInvoice,
 } from "./identities"
 
-export class XeroInvoice extends Context.Tag(
-  "@processfocus/plugin-xero/XeroInvoice",
-)<
+export class XeroInvoice extends Context.Service<
   XeroInvoice,
   {
     readonly issueAuthorisedSalesInvoice: (
@@ -26,12 +24,14 @@ export class XeroInvoice extends Context.Tag(
       CurrentStepJobContext
     >
   }
->() {}
+>()("@processfocus/plugin-xero/XeroInvoice") {}
 
 export const decodeIssueAuthorisedSalesInvoiceInput = (
   input: unknown,
 ): Effect.Effect<IssueAuthorisedSalesInvoiceInput, XeroInvoiceError> =>
-  Schema.decodeUnknown(IssueAuthorisedSalesInvoiceInputSchema)(input).pipe(
+  Schema.decodeUnknownEffect(IssueAuthorisedSalesInvoiceInputSchema)(
+    input,
+  ).pipe(
     Effect.mapError(() =>
       xeroValidationError("Sales Invoice input is invalid"),
     ),

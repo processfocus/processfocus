@@ -1,7 +1,8 @@
 import { createHmac } from "node:crypto"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 import {
   type ProviderUserSession,
+  type Session,
   getRealtimeRecipientId,
   isAppSyncChannelPath,
 } from "@pf/auth-session"
@@ -10,6 +11,7 @@ import {
   isRealtimeRecipientId,
 } from "@pf/auth-session/realtime-recipient"
 import { createExecutionEventSource } from "../src/utils/execution-subscription"
+import { waitForExecutionToFinish } from "../src/utils/execution-wait"
 import { describe, expect, it } from "bun:test"
 
 const token = (claims: unknown): string => {
@@ -26,6 +28,128 @@ const properties: ProviderUserSession = {
 // Fixed regression: the old human digest was hv_jefmQIYl_-hdYFm3mQOpZLhDhGHD9kB0AdqIIktc.
 const exp = 2_000_000_026
 
+it.each([
+  { interruption: "close", status: "Completed" },
+  { interruption: "terminate", status: "Failed" },
+  { interruption: "protocol", status: "Completed" },
+] as const)(
+  "waits for persisted $status after $interruption, but preserves protocol errors",
+  async ({ interruption, status }) => {
+    const interrupt = Promise.withResolvers<() => void>()
+    const messages: string[] = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request, server) =>
+        request.method === "POST"
+          ? Response.json({ successful: [], failed: [] })
+          : server.upgrade(request)
+            ? undefined
+            : new Response("upgrade required"),
+      websocket: {
+        message(socket, data) {
+          const message: unknown = JSON.parse(data.toString())
+          if (
+            typeof message !== "object" ||
+            message === null ||
+            !("type" in message)
+          )
+            return
+          if (message.type === "connection_init")
+            socket.send(JSON.stringify({ type: "connection_ack" }))
+          if (message.type === "subscribe" && "id" in message) {
+            socket.send(
+              JSON.stringify({ type: "subscribe_success", id: message.id }),
+            )
+            interrupt.resolve(() => {
+              if (interruption === "close")
+                socket.close(1000, "server maintenance")
+              else if (interruption === "terminate") socket.terminate()
+              else
+                socket.send(
+                  JSON.stringify({
+                    type: "error",
+                    errors: [{ message: "Execution access denied" }],
+                  }),
+                )
+            })
+          }
+        },
+      },
+    })
+    let snapshotFetches = 0
+    try {
+      const source = await Effect.runPromise(
+        createExecutionEventSource({
+          kind: "APPSYNC_EVENTS",
+          realtimeUrl: `ws://127.0.0.1:${server.port}`,
+          appSyncEventsHttpHost: `127.0.0.1:${server.port}`,
+          userId: properties.userId,
+          accessToken: token({
+            mode: "access",
+            type: "providerUser",
+            properties,
+            exp,
+          }),
+        }),
+      )
+      try {
+        const result = Effect.runPromise(
+          Effect.result(
+            waitForExecutionToFinish(source, "exec-1", {
+              executionLabel: "deployment",
+              timeoutMs: 20,
+              heartbeatMs: 60_000,
+              maxWaitMs: 1_000,
+              hasPendingInitialLine: false,
+              quiet: true,
+              formatLogMessage: (message) => {
+                messages.push(message)
+                return message
+              },
+              fetchSnapshot: async () => {
+                snapshotFetches++
+                if (snapshotFetches === 1)
+                  throw new Error("temporary snapshot failure")
+                return {
+                  id: "exec-1",
+                  status: snapshotFetches === 2 ? "Running" : status,
+                  steps: [],
+                  failureReason:
+                    status === "Failed" ? "deployment failed" : null,
+                  abandonedReason: null,
+                  finishedAt: null,
+                }
+              },
+            }),
+          ),
+        )
+        ;(await interrupt.promise)()
+        const outcome = await result
+        if (interruption === "protocol") {
+          expect(Result.isFailure(outcome)).toBe(true)
+          if (Result.isFailure(outcome))
+            expect(outcome.failure.message).toContain("Execution access denied")
+          expect(snapshotFetches).toBe(0)
+        } else {
+          expect(Result.isSuccess(outcome)).toBe(true)
+          if (Result.isSuccess(outcome))
+            expect(outcome.success.status).toBe(status)
+          expect(snapshotFetches).toBe(3)
+          if (interruption === "close")
+            expect(messages.join("\n")).toContain(
+              "code=1000 reason=server maintenance",
+            )
+        }
+      } finally {
+        await source.close()
+      }
+    } finally {
+      await server.stop(true)
+    }
+  },
+)
+
 describe("CLI AppSync execution recipient addressing", () => {
   it("uses the full token authority and expiry rather than caller userId or sub", async () => {
     const channels: string[] = []
@@ -33,9 +157,11 @@ describe("CLI AppSync execution recipient addressing", () => {
       hostname: "127.0.0.1",
       port: 0,
       fetch: (request, server) =>
-        server.upgrade(request)
-          ? undefined
-          : new Response("upgrade required", { status: 400 }),
+        request.method === "POST"
+          ? Response.json({ successful: [], failed: [] })
+          : server.upgrade(request)
+            ? undefined
+            : new Response("upgrade required", { status: 400 }),
       websocket: {
         message: (socket, data) => {
           const message: unknown = JSON.parse(data.toString())
@@ -107,7 +233,29 @@ describe("CLI AppSync execution recipient addressing", () => {
       name: "Agent",
       expiresAt: (exp + 600) * 1000,
     }
-    const cases: readonly { properties: ProviderUserSession; exp: number }[] = [
+    const cases: readonly { properties: Session; exp: number }[] = [
+      {
+        properties: {
+          userId: "machine-owner",
+          clientId: "deployment-machine",
+          roles: ["/Workload deploy"],
+          workload: {
+            bindingId: "deployment-machine",
+            repositoryId: "123",
+            repositoryOwnerId: "456",
+            workflowRef:
+              "org/repo/.github/workflows/deploy.yml@refs/heads/main",
+            ref: "refs/heads/main",
+            event: "workflow_dispatch",
+            environment: "console",
+            sha: "abc",
+            runId: "789",
+            runAttempt: "1",
+            expiresAt: exp * 1000,
+          },
+        },
+        exp,
+      },
       { properties, exp },
       { properties: { ...properties, roles: ["/Worker"] }, exp },
       { properties, exp: exp + 60 },
@@ -166,10 +314,10 @@ describe("CLI AppSync execution recipient addressing", () => {
           createExecutionEventSource({
             kind: "APPSYNC_EVENTS",
             realtimeUrl: `ws://127.0.0.1:${server.port}`,
-            appSyncEventsHttpHost: "test.appsync-api.us-east-1.amazonaws.com",
+            appSyncEventsHttpHost: `127.0.0.1:${server.port}`,
             accessToken: token({
               ...claims,
-              type: "providerUser",
+              type: "clientId" in claims.properties ? "user" : "providerUser",
               mode: "access",
               sub: "different-sub-owner",
             }),
@@ -228,13 +376,13 @@ describe("CLI AppSync execution recipient addressing", () => {
           appSyncEventsHttpHost: "unused",
           accessToken,
           userId: "fallback-owner",
-        }).pipe(Effect.either),
+        }).pipe(Effect.result),
       )
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left.message).toContain("CLI access token")
-        expect(result.left.message).toContain("pfcli auth login")
-        expect(result.left.message.includes(accessToken)).toBe(false)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure.message).toContain("CLI access token")
+        expect(result.failure.message).toContain("pfcli auth login")
+        expect(result.failure.message.includes(accessToken)).toBe(false)
       }
     },
   )
@@ -255,17 +403,35 @@ it("narrows wire strings to branded realtime recipient IDs only after validation
   encoded satisfies RealtimeRecipientId | undefined
 })
 
-it.each(["ready", "cancel", "error"])(
+it.each(["ready", "cancel", "error", "close during presence registration"])(
   "waits for AppSync subscription acknowledgement and cleans up on %s",
   async (mode) => {
     const subscribed = Promise.withResolvers<() => void>()
     const closed = Promise.withResolvers<void>()
+    const releaseRegistration = Promise.withResolvers<void>()
     let ready = false
+    let closeDuringPresence = () => {}
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch: (request, server) =>
-        server.upgrade(request) ? undefined : new Response("upgrade required"),
+      async fetch(request, server) {
+        if (request.method === "POST") {
+          const credential = JSON.parse(
+            request.headers.get("authorization") || "{}",
+          )
+          if (
+            mode === "close during presence registration" &&
+            credential.action === "open"
+          ) {
+            closeDuringPresence()
+            // Server-side closure does not establish client-side close ordering.
+            await releaseRegistration.promise
+          }
+          return Response.json({ successful: [], failed: [] })
+        }
+        if (server.upgrade(request)) return
+        return new Response("upgrade required")
+      },
       websocket: {
         message: (socket, data) => {
           const message: unknown = JSON.parse(data.toString())
@@ -277,7 +443,9 @@ it.each(["ready", "cancel", "error"])(
             return
           if (message.type === "connection_init")
             socket.send(JSON.stringify({ type: "connection_ack" }))
-          if (message.type === "subscribe" && "id" in message)
+          if (message.type === "subscribe" && "id" in message) {
+            closeDuringPresence = () =>
+              socket.close(1001, "registration interrupted")
             subscribed.resolve(() => {
               if (mode === "error") {
                 socket.send(
@@ -315,6 +483,7 @@ it.each(["ready", "cancel", "error"])(
                 JSON.stringify({ type: "subscribe_success", id: message.id }),
               )
             })
+          }
         },
         close: () => closed.resolve(),
       },
@@ -325,7 +494,7 @@ it.each(["ready", "cancel", "error"])(
         createExecutionEventSource({
           kind: "APPSYNC_EVENTS",
           realtimeUrl: `ws://127.0.0.1:${server.port}`,
-          appSyncEventsHttpHost: "local.test",
+          appSyncEventsHttpHost: `127.0.0.1:${server.port}`,
           userId: properties.userId,
           accessToken: token({
             mode: "access",
@@ -339,7 +508,7 @@ it.each(["ready", "cancel", "error"])(
               ready = true
             }),
           ),
-          Effect.either,
+          Effect.result,
         ),
         { signal: controller.signal },
       )
@@ -350,22 +519,37 @@ it.each(["ready", "cancel", "error"])(
         await expect(result).rejects.toThrow()
       } else {
         acknowledge()
-        const outcome = await result
-        if (mode === "error") {
-          expect(Either.isLeft(outcome)).toBe(true)
-          if (Either.isLeft(outcome))
-            expect(outcome.left.message).toContain("Execution access denied")
+        const outcome = await Promise.race([
+          result,
+          Bun.sleep(1000).then(() => "pending" as const),
+        ])
+        if (outcome === "pending")
+          throw new Error(
+            "Acquisition remained pending after the acknowledged socket closed",
+          )
+        if (mode === "close during presence registration") {
+          expect(Result.isFailure(outcome)).toBe(true)
+          if (Result.isFailure(outcome))
+            expect(outcome.failure.message).toContain(
+              "AppSync socket closed unexpectedly",
+            )
+          expect(ready).toBe(false)
+        } else if (mode === "error") {
+          expect(Result.isFailure(outcome)).toBe(true)
+          if (Result.isFailure(outcome))
+            expect(outcome.failure.message).toContain("Execution access denied")
         } else {
-          expect(Either.isRight(outcome)).toBe(true)
-          if (Either.isRight(outcome)) {
-            const event = await outcome.right[Symbol.asyncIterator]().next()
+          expect(Result.isSuccess(outcome)).toBe(true)
+          if (Result.isSuccess(outcome)) {
+            const event = await outcome.success[Symbol.asyncIterator]().next()
             expect(event.value?.failureReason).toBe("credit rejected")
-            await outcome.right.close()
+            await outcome.success.close()
           }
         }
       }
       await closed.promise
     } finally {
+      releaseRegistration.resolve()
       controller.abort()
       await server.stop(true)
     }

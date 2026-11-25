@@ -1,0 +1,76 @@
+---
+title: First user registration
+description: How the initial administrator becomes a provider user.
+---
+
+Process Focus does not have the concept of a super user or admin, or a
+special user id with super privileges. What a user can do is entirely
+determined by how the authorisation policies are defined.
+
+But when you start your project, how do you log in and how do you get
+full administrator privileges to make development and testing
+possible? The actual path depends on whether you use single sign-on (SSO)
+or passkeys. An explicit invitation is needed for passkeys, but SSO can
+also allow implicitly invited users to sign in.
+
+## Creating an invitation
+
+When an explicit invitation is needed, create it in code or via `pfcli`.
+See [Invitations](/docs/reference/authentication/invitations/) for the process.
+
+## First user with SSO
+
+Configure an [SSO identity provider](/docs/reference/authentication/sso/). If
+your user is not implicitly invited, create an invitation for the email address
+you will use to sign in and assign it the roles needed for your project's
+administrator permissions.
+
+If the user's organisational unit is configured as implicitly invited, no
+invitation needs to be created. For example, Google Workspace can invite
+members of selected [organisational units](/docs/reference/authentication/sso/google/#organisational-units).
+Make sure the user has the roles needed for administrator permissions; being
+implicitly invited does not itself grant those permissions.
+
+Start your project, open the frontend, and sign in using the configured
+identity provider. No registration link is needed. When an explicit invitation
+is accepted, Process Focus creates your provider user and assigns the
+invitation's roles. What you can do depends on your project's authorisation
+policies.
+
+## First user with passkeys
+
+Enable [passkeys](/docs/reference/authentication/passkeys/) and create an
+invitation for the user. Assign the invitation the roles needed for your
+project's administrator permissions.
+
+For local bootstrap before a Dashboard user is available, use
+`pfcli invitation create` with an email and explicit role paths after building
+and importing the organisation. Local database write access is required. See
+[Creating an invitation with pfcli](/docs/reference/authentication/passkeys/#creating-an-invitation-with-pfcli).
+
+Create a registration link for the invited user with:
+
+```bash
+pfcli invitation registration-link ./my-org --email alice@example.com
+```
+
+Replace `./my-org` and the email with your project path and invited user's
+email. The command prints a link and its expiry time, for example:
+
+```text
+http://localhost:3000/register/passkey#token=<token>
+expires at: 2026-11-19T01:57:28.000Z
+```
+
+If your frontend uses a different host or port, pass its origin:
+
+```bash
+pfcli invitation registration-link ./my-org --email alice@example.com --frontend-url https://app.example.com
+```
+
+Use an HTTP(S) origin, including the port when needed, without a path, query,
+fragment, or credentials. This local-only option also applies with `--rotate`.
+For a custom local database file, add `--database-path ./data.db`. See the
+[pfcli reference](/docs/reference/pfcli/) for environment variable fallbacks.
+
+Open the generated link in your browser to set up a passkey and log in.

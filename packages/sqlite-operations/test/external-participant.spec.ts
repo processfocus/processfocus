@@ -1,11 +1,11 @@
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
+import type { UserDetailsValue } from "@pf/graphql-db-operations"
 import {
   ExternalParticipantOperations,
   InvalidExternalParticipantEmail,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { RequestTime } from "@pf/request-time"
 import {
@@ -16,24 +16,21 @@ import { SqliteExternalParticipantOperationsLive } from "../src/lib/external-par
 import { describe, expect, it } from "bun:test"
 
 describe("external-participant", () => {
-  const fixedRequestTime = DateTime.unsafeMake("2026-04-06T10:00:00.000Z")
+  const fixedRequestTime = DateTime.makeUnsafe("2026-04-06T10:00:00.000Z")
 
   const TestLayer = Layer.provideMerge(
     Layer.mergeAll(
       SqliteExternalParticipantOperationsLive,
-      Layer.succeed(RequestTime, FiberRef.unsafeMake(fixedRequestTime)),
-      Layer.succeed(
-        UserDetails,
-        FiberRef.unsafeMake({
-          by: "TEST_USER",
-          id: "usr-test-external-participant",
-        }) as FiberRef.FiberRef<UserDetailsValue>,
-      ),
+      Layer.succeed(RequestTime, fixedRequestTime),
+      Layer.succeed(UserDetails, {
+        by: "TEST_USER",
+        id: "usr-test-external-participant",
+      } as UserDetailsValue),
     ),
     DatabaseTest,
   )
 
-  type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+  type TestRequirements = Layer.Success<typeof TestLayer>
 
   const runTest = <A, E>(test: Effect.Effect<A, E, TestRequirements>) =>
     Effect.runPromise(Effect.provide(test, TestLayer))

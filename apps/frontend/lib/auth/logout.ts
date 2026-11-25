@@ -1,4 +1,4 @@
-import { cleanupAllPlugins } from "@pf/form-client-representation/plugin-registry"
+import { cleanupAllPlugins } from "@processfocus/runtime/walker-plugin"
 import { cleanupDraftProcessCollection } from "@/lib/collections/draft-process-execution-collection-provider"
 import { cleanupExecutionCollection } from "@/lib/collections/execution-collection-provider"
 import { cleanupProcessCollection } from "@/lib/collections/process-collection-provider"

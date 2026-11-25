@@ -1,23 +1,27 @@
+import { Schema } from "effect"
 import { JSDOM } from "jsdom"
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, test, vi } from "vitest"
-import { parseClientFormDefinition } from "@pf/form-client-representation/client-form-definition"
-import { FormComponentType } from "@pf/form-client-representation/types"
 import { isPublicPath } from "../lib/auth/config"
 import { isPublicTodoLinkError } from "../lib/public-todo-graphql-errors"
 import {
-  parsePublicTodoFormDefinition,
-  publicTodoDefaultValues,
   publicTodoStateCopy,
   publicTodoTerminalStatusFromResult,
-  publicTodoUnsupportedComponentTypes,
 } from "../lib/public-todo-model"
 
 const completePublicTodo = vi.fn()
 const fetchPublicTodo = vi.fn()
-const dynamicForm = vi.fn(() => "Submit")
+const renderEffectSchemaForm = vi.fn(() => "Submit")
+const browserSchema = Promise.resolve(Schema.Struct({}))
+vi.mock("@/lib/frontend-form-loaders", () => ({
+  loadBrowserFormDefinition: () => browserSchema,
+}))
+vi.mock("@pf/form/effect-schema-form", () => ({
+  EffectSchemaForm: (props: { onSubmit: unknown }) =>
+    renderEffectSchemaForm({ handleSubmit: props.onSubmit }),
+}))
 const publicTodoCalendarSlots = vi.fn()
 const publicTodoLookupSuggestions = vi.fn()
 const requestFreshPublicTodoLink = vi.fn()
@@ -36,7 +40,6 @@ const publicTodoGraphqlError = (code: string) => ({
 })
 
 vi.mock("@/lib/public-todo-form-runtime", () => ({
-  dynamicForm,
   LookupProvider: ({ children }: { readonly children: unknown }) => children,
 }))
 
@@ -244,131 +247,6 @@ describe("public todo model", () => {
       "COMPLETED",
     )
   })
-
-  test("allows embedded-safe form components", () => {
-    expect(
-      publicTodoUnsupportedComponentTypes({
-        components: {
-          name: {
-            _tag: FormComponentType.Text,
-            field: "name",
-            label: "Name",
-          },
-          agree: {
-            _tag: FormComponentType.Boolean,
-            field: "agree",
-            label: "Agree",
-          },
-        },
-        rules: [],
-      }),
-    ).toEqual([])
-  })
-
-  test("fails safely for unsupported public form components", () => {
-    expect(
-      publicTodoUnsupportedComponentTypes({
-        components: {
-          details: {
-            _tag: FormComponentType.FieldSet,
-            label: "Details",
-            children: {
-              attachment: {
-                _tag: FormComponentType.File,
-                field: "details.attachment",
-                label: "Attachment",
-                documentStore: "documents",
-              },
-              assignee: {
-                _tag: FormComponentType.ProviderUser,
-                field: "details.assignee",
-                label: "Assignee",
-              },
-            },
-          },
-        },
-        rules: [],
-      }),
-    ).toEqual(["file", "provider-user"])
-  })
-
-  test("allows independent lookup components in public forms", () => {
-    expect(
-      publicTodoUnsupportedComponentTypes({
-        components: {
-          selectedSlot: {
-            _tag: FormComponentType.Lookup,
-            field: "selectedSlot",
-            label: "Meeting slot",
-          },
-        },
-        rules: [],
-      }),
-    ).toEqual([])
-  })
-
-  test("allows calendar slot components in public forms", () => {
-    expect(
-      publicTodoUnsupportedComponentTypes({
-        components: {
-          selectedSlot: {
-            _tag: FormComponentType.CalendarSlot,
-            field: "selectedSlot",
-            label: "Meeting slot",
-            timeZone: "Pacific/Auckland",
-            locale: "en-NZ",
-          },
-        },
-        rules: [
-          {
-            condition: {
-              _tag: "present",
-              value: { _tag: "field", path: ["selectedSlot"] },
-            },
-            effects: [{ target: ["selectedSlot"], state: { required: true } }],
-          },
-        ],
-      }),
-    ).toEqual([])
-  })
-
-  test("fails safely for dependent public lookup components", () => {
-    expect(
-      publicTodoUnsupportedComponentTypes({
-        components: {
-          selectedClass: {
-            _tag: FormComponentType.Lookup,
-            field: "selectedClass",
-            label: "Class",
-            dependencies: ["school"],
-            queryName: "lookupSchoolClass",
-          },
-        },
-        rules: [],
-      }),
-    ).toEqual(["dependent-lookup"])
-  })
-
-  test("rejects malformed public form definitions before rendering", () => {
-    const malformedDefinition = {
-      components: { selectedSlot: [] },
-      rules: [],
-    }
-
-    expect(() => parseClientFormDefinition(malformedDefinition)).toThrow(
-      "must be a valid client form definition",
-    )
-    expect(parsePublicTodoFormDefinition(malformedDefinition)).toEqual({
-      formDefinitionStatus: "malformed",
-      formDefinition: null,
-    })
-  })
-
-  test("ignores non-object default values", () => {
-    expect(publicTodoDefaultValues(null)).toBeNull()
-    expect(publicTodoDefaultValues("bad")).toBeNull()
-    expect(publicTodoDefaultValues({ name: "Ada" })).toEqual({ name: "Ada" })
-  })
 })
 
 describe("public todo completion api", () => {
@@ -551,8 +429,8 @@ describe("public todo lookup api", () => {
     ["negative limit", { token: "token-1", field: "selectedSlot", limit: -1 }],
     ["float limit", { token: "token-1", field: "selectedSlot", limit: 1.5 }],
     [
-      "limit above maximum",
-      { token: "token-1", field: "selectedSlot", limit: 101 },
+      "non-string selected identity",
+      { token: "token-1", field: "selectedSlot", selectedValue: 101 },
     ],
   ])("rejects invalid lookup payload fields: %s", async (_name, payload) => {
     publicTodoLookupSuggestions.mockClear()
@@ -572,7 +450,7 @@ describe("public todo lookup api", () => {
     expect(publicTodoLookupSuggestions).not.toHaveBeenCalled()
   })
 
-  test("loads public todo lookup suggestions", async () => {
+  test("passes the local sentinel bound to the capability-scoped resolver", async () => {
     publicTodoLookupSuggestions.mockResolvedValueOnce([
       { value: "slot-1", label: "Monday 09:00" },
     ])
@@ -585,7 +463,7 @@ describe("public todo lookup api", () => {
           token: "token-1",
           field: "selectedSlot",
           filter: "mon",
-          limit: 10,
+          limit: 501,
         }),
       }),
     )
@@ -597,7 +475,8 @@ describe("public todo lookup api", () => {
       "token-1",
       "selectedSlot",
       "mon",
-      10,
+      501,
+      undefined,
     )
   })
 
@@ -687,7 +566,7 @@ describe("public todo client", () => {
       throw new Error("Missing test root")
     }
 
-    dynamicForm.mockImplementationOnce(
+    renderEffectSchemaForm.mockImplementationOnce(
       (props: {
         readonly handleSubmit: (
           values: Record<string, unknown>,
@@ -759,10 +638,12 @@ describe("public todo client", () => {
             formMetadata: {
               stepPath: "/ops/todo/Complete",
               processName: "Enrolment Enquiry",
-              formDefinitionStatus: "parsed",
-              formDefinition: { components: {}, rules: [] },
+              requestData: {
+                presentation: {},
+                originalValues: {},
+                inaccessible: [],
+              },
               defaultValues: {},
-              jsonSchema: {},
             },
           }),
         )
@@ -782,7 +663,7 @@ describe("public todo client", () => {
         root.unmount()
       })
     } finally {
-      dynamicForm.mockImplementation(() => "Submit")
+      renderEffectSchemaForm.mockImplementation(() => "Submit")
       restoreGlobal("window", originalWindow)
       restoreGlobal("document", originalDocument)
       restoreGlobal("HTMLElement", originalHTMLElement)
@@ -816,12 +697,11 @@ describe("public todo page", () => {
         processName: "Onboarding",
         publicFormTitle: "Confirm your details",
         publicFormDescription: "Check your details and submit the form.",
-        formDefinitionStatus: "parsed",
-        formDefinition: null,
+        requestData: { presentation: {}, originalValues: {}, inaccessible: [] },
         defaultValues: null,
-        jsonSchema: null,
       },
     })
+    await browserSchema
     const markup = await renderPublicTodoContent("token-1")
 
     expect(markup).not.toContain("Public to-do")
@@ -830,66 +710,6 @@ describe("public todo page", () => {
     expect(markup).not.toContain("Submit this form to continue the process.")
     expect(markup).toContain("Submit")
     expect(markup).not.toContain("Dashboard")
-  })
-
-  test("disables provider-user lookup for public todo forms", async () => {
-    dynamicForm.mockClear()
-    fetchPublicTodo.mockResolvedValueOnce({
-      todoId: "todo-1",
-      status: "ACTIVE",
-      formMetadata: {
-        stepPath: "/onboarding/Confirm details",
-        processName: "Onboarding",
-        formDefinitionStatus: "parsed",
-        formDefinition: null,
-        defaultValues: null,
-        jsonSchema: null,
-      },
-    })
-    await renderPublicTodoContent("token-1")
-
-    expect(dynamicForm).toHaveBeenCalledWith(
-      expect.objectContaining({ enableProviderUserLookup: false }),
-    )
-  })
-
-  test("passes lookup components through to public todo forms", async () => {
-    dynamicForm.mockClear()
-    fetchPublicTodo.mockResolvedValueOnce({
-      todoId: "todo-1",
-      status: "ACTIVE",
-      formMetadata: {
-        stepPath: "/onboarding/Choose slot",
-        processName: "Onboarding",
-        formDefinitionStatus: "parsed",
-        formDefinition: {
-          components: {
-            selectedSlot: {
-              _tag: FormComponentType.Lookup,
-              field: "selectedSlot",
-              label: "Meeting slot",
-            },
-          },
-          rules: [],
-        },
-        defaultValues: null,
-        jsonSchema: null,
-      },
-    })
-    const markup = await renderPublicTodoContent("token-1")
-
-    expect(markup).not.toContain("This form cannot be opened here")
-    expect(dynamicForm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        formDefinition: expect.objectContaining({
-          components: expect.objectContaining({
-            selectedSlot: expect.objectContaining({
-              _tag: FormComponentType.Lookup,
-            }),
-          }),
-        }),
-      }),
-    )
   })
 
   test("renders expired and completed standalone states", async () => {

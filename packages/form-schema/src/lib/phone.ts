@@ -24,7 +24,6 @@ import { type FieldOptions, applyFieldAnnotations } from "./form-schema"
 // Valid characters with an optional leading country-code plus sign.
 const VALID_PHONE_CHARS = /^\+?[\d\s\-()]+$/
 
-// Count digits in the string
 const countDigits = (s: string): number => {
   return (s.match(/\d/g) || []).length
 }
@@ -39,21 +38,23 @@ const isPhoneNumber = (s: string): boolean => {
 }
 
 export const Phone = Schema.Trim.pipe(
-  Schema.filter((s) => isPhoneNumber(s), {
-    message: () => "must be a valid phone number (7-15 digits)",
-  }),
-  Schema.annotations({
+  Schema.check(
+    Schema.makeFilter((s) => isPhoneNumber(s), {
+      message: "must be a valid phone number (7-15 digits)",
+    }),
+  ),
+  Schema.annotate({
     identifier: "Phone",
     title: "Phone number",
     description: "A valid phone number",
-    jsonSchema: { format: "phone" },
+    format: "phone",
     [FormPhoneInput]: true,
   }),
 )
 
 export const PhoneField = (
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never> =>
+): Schema.Codec<string, string, never, never> =>
   applyFieldAnnotations(Phone, {
     autoComplete: options?.autoComplete ?? "tel",
     ...options,

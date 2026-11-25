@@ -53,9 +53,7 @@ export interface CookieAuthServiceInterface {
 /**
  * Effect service tag for cookie authentication.
  */
-export class CookieAuthService extends Context.Tag(
-  "@pf/openauth/CookieAuthService",
-)<CookieAuthService, CookieAuthServiceInterface>() {}
+export class CookieAuthService extends Context.Service<CookieAuthService, CookieAuthServiceInterface>()("@pf/openauth/CookieAuthService") {}
 
 /**
  * Live implementation of CookieAuthService.

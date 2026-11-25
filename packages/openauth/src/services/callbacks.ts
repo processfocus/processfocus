@@ -3,12 +3,9 @@
  * These callbacks are provided by the consuming application.
  * @packageDocumentation
  */
-import type {
-  HttpBody,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
+
 import { Context, Data, Effect, Layer } from "effect"
+import type { HttpBody, HttpServerRequest, HttpServerResponse } from "effect/http"
 import type {
   InvariantViolationError,
   MissingHostError,
@@ -54,6 +51,22 @@ export type SuccessCallbackError =
  * The `provider` field acts as the discriminant.
  */
 export interface IssuerCallbacksInterface<Success = unknown> {
+  /** Admission policy for RFC 8693. Credentials must never be included in failures. */
+  readonly exchange?: (input: {
+    readonly assertion: string
+    readonly assertionType: string
+    readonly scope: string | undefined
+    readonly clientId: string | undefined
+    readonly audience: string | undefined
+    readonly issuer: string
+  }) => Effect.Effect<{
+    readonly type: string
+    readonly properties: Record<string, unknown>
+    readonly subject: string
+    readonly clientId: string
+    readonly audience: string
+    readonly expiresAt: number
+  }, OAuthEndpointError>
   /** Validate live authority on every refresh, including unscoped refreshes. */
   readonly onRefresh?: (input: {
     readonly type: string
@@ -114,10 +127,7 @@ export interface IssuerCallbacksInterface<Success = unknown> {
 /**
  * Effect service tag for issuer callbacks.
  */
-export class IssuerCallbacks extends Context.Tag("@pf/openauth/IssuerCallbacks")<
-  IssuerCallbacks,
-  IssuerCallbacksInterface
->() {}
+export class IssuerCallbacks extends Context.Service<IssuerCallbacks, IssuerCallbacksInterface>()("@pf/openauth/IssuerCallbacks") {}
 
 /**
  * Create an IssuerCallbacks layer with the given callback implementations.

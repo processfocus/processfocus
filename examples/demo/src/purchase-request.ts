@@ -1,14 +1,23 @@
+import { and, eq } from "drizzle-orm"
 import { Schema as ES, Effect } from "effect"
-import { BooleanField, NumberFieldFrom, TextField } from "@pf/form-schema"
+import { searchLookupItems } from "@pf/form-schema"
 import {
   Form,
+  FormSubmissionError,
   NodeStep,
   type OrgUnit,
   Process,
   type Role,
   Sla,
 } from "@pf/process"
+import {
+  purchaseApprovalForm,
+  purchaseRequestForm,
+} from "./purchase-request-form"
+import { procurementApprovalForm, purchaseForm } from "./purchase-request-forms"
 import { DemoOperations } from "./schema"
+import { purchaseOrder } from "./schema/schema"
+import { TypedDemoDrizzle } from "./schema/typed-drizzle"
 
 export class PurchaseRequest extends Process {
   constructor(
@@ -24,16 +33,70 @@ export class PurchaseRequest extends Process {
       sla: Sla.businessWeeks(1), // Overall process must complete in 1 business week
     })
 
-    // Steps
     const submit_request = new Form(this, "Submit request", {
       name: "Submit purchase request",
-      form: () => ({
-        item: TextField({ label: "Item" }),
-        value: NumberFieldFrom(ES.NumberFromString, { label: "Value" }),
-      }),
+      form: purchaseRequestForm,
+      browser: {
+        entrypoint: "src/purchase-request-form.ts",
+        exportName: "purchaseRequestForm",
+      },
+      onSubmit: (input) =>
+        Effect.gen(function* () {
+          const db = yield* TypedDemoDrizzle
+          const existing = yield* db
+            .select({ id: purchaseOrder.id })
+            .from(purchaseOrder)
+            .where(
+              and(
+                eq(purchaseOrder.item, input.item),
+                eq(purchaseOrder._deleted, false),
+              ),
+            )
+            .limit(1)
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new FormSubmissionError({
+                    field: "item",
+                    message:
+                      "Could not check existing purchases. Please try again.",
+                  }),
+              ),
+            )
+          if (existing.length > 0)
+            return yield* new FormSubmissionError({
+              field: "item",
+              message:
+                "This item has already been purchased. Choose a different item.",
+            })
+        }),
       role: employeeRole,
-      sla: Sla.businessHours(4), // Employee has 4 business hours to submit
     })
+
+    submit_request.lookups.referenceOrderId.setQuery(({ filter }, limit) =>
+      Effect.gen(function* () {
+        const db = yield* TypedDemoDrizzle
+        const orders = yield* db
+          .select({ value: purchaseOrder.id, label: purchaseOrder.item })
+          .from(purchaseOrder)
+          .where(eq(purchaseOrder._deleted, false))
+          .orderBy(purchaseOrder.id)
+        return searchLookupItems(orders, filter, limit)
+      }),
+    )
+    submit_request.lookups.referenceOrderId.setResolver((value) =>
+      Effect.gen(function* () {
+        const db = yield* TypedDemoDrizzle
+        const orders = yield* db
+          .select({ value: purchaseOrder.id, label: purchaseOrder.item })
+          .from(purchaseOrder)
+          .where(
+            and(eq(purchaseOrder.id, value), eq(purchaseOrder._deleted, false)),
+          )
+          .limit(1)
+        return orders[0] ?? null
+      }),
+    )
 
     // Start the flow to capture accumulated state
     const flow = this.start(submit_request)
@@ -41,21 +104,14 @@ export class PurchaseRequest extends Process {
     // new Form with flow scope infers state type automatically
     const manager_approve_request = new Form(flow, "Manager approval", {
       name: "Approve purchase request",
-      form: ({ value }) => ({
-        item: TextField({
-          label: "Item to approve",
-          readOnly: true,
-          default: value((state) => state.item),
-        }),
-        cost: TextField({
-          label: "Cost",
-          readOnly: true,
-          default: value((state) => String(state.value)),
-        }),
-        check: BooleanField({
-          label: "I approve",
-          required: true,
-        }),
+      form: purchaseApprovalForm,
+      browser: {
+        entrypoint: "src/purchase-request-form.ts",
+        exportName: "purchaseApprovalForm",
+      },
+      bindings: (state) => ({
+        item: { default: state.item },
+        cost: { default: String(state.value) },
       }),
       summary: (state) => ({ What: `${state.item} for ${state.value}` }),
       role: managerRole,
@@ -66,12 +122,11 @@ export class PurchaseRequest extends Process {
 
     const cfo_approve_request = new Form(managerFlow, "Procurement approval", {
       name: "Approve expensive purchase request",
-      form: () => ({
-        check: BooleanField({
-          label: "LGTM",
-          required: true,
-        }),
-      }),
+      form: procurementApprovalForm,
+      browser: {
+        entrypoint: "src/purchase-request-forms.ts",
+        exportName: "procurementApprovalForm",
+      },
       summary: (state, context) => ({
         What: `${state.item} for ${state.value}`,
         "Approved by": context.step.managerApproval.providerUser.name,
@@ -99,7 +154,6 @@ export class PurchaseRequest extends Process {
         text: "Value >= $1000",
       },
     })
-    // CFO path goes to generate_po
     cfoFlow.next(generate_po)
     // Else path goes directly to generate_po; this FlowPath includes purchaseNumber in state
     const generatePoFlow = managerFlow.elseNext(generate_po)
@@ -108,11 +162,11 @@ export class PurchaseRequest extends Process {
     // Scoped to generatePoFlow which has purchaseNumber in state
     const purchase = new Form(generatePoFlow, "Purchase", {
       name: "Execute purchase",
-      form: () => ({
-        completed: BooleanField({
-          label: "I confirm the purchase has been made",
-        }),
-      }),
+      form: purchaseForm,
+      browser: {
+        entrypoint: "src/purchase-request-forms.ts",
+        exportName: "purchaseForm",
+      },
       summary: (state) => ({
         Item: state.item,
         Value: String(state.value),

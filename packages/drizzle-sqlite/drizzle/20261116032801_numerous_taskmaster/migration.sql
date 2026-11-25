@@ -1,0 +1,1 @@
+ALTER TABLE `pf_oauth_client` ADD `aws_role_bindings` text;

@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 export interface OrgUnitRow {
   id: string
@@ -34,9 +34,7 @@ export interface OrgLevelWithDepth {
 /**
  * Service providing organization query operations.
  */
-export class OrgQueries extends Context.Tag(
-  "@pf/graphql-db-operations/OrgQueries",
-)<
+export class OrgQueries extends Context.Service<
   OrgQueries,
   {
     /**
@@ -65,4 +63,4 @@ export class OrgQueries extends Context.Tag(
      */
     readonly queryOrgLevels: Effect.Effect<OrgLevelWithDepth[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/OrgQueries") {}

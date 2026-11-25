@@ -1,8 +1,8 @@
-import * as Client from "@effect/sql/SqlClient"
 import { readMigrationFiles } from "drizzle-orm/migrator"
 import { getMigrationsToRun } from "drizzle-orm/migrator.utils"
-import { Effect, Either, Layer } from "effect"
-import { makeDatabaseConfigLayer } from "@pf/db-info"
+import { Effect, Layer, Result, Schedule } from "effect"
+import * as Client from "effect/sql/SqlClient"
+import { causeChainIncludes, makeDatabaseConfigLayer } from "@pf/db-info"
 import { MigrationError } from "../errors"
 import { makePfcliSqlClientLayer } from "./local-database-layer"
 
@@ -273,13 +273,13 @@ export const executeMigrationStatements = (
         if (!hasSqlContent(statement)) continue
 
         const template = Object.assign([statement], { raw: [statement] })
-        const result = yield* Effect.either(sqlClient(template))
+        const result = yield* Effect.result(sqlClient(template))
 
-        if (Either.isLeft(result)) {
+        if (Result.isFailure(result)) {
           return yield* new MigrationError({
-            reason: formatErrorWithCauses(result.left),
+            reason: formatErrorWithCauses(result.failure),
             statement: statement.substring(0, 200),
-            cause: result.left,
+            cause: result.failure,
           })
         }
       }
@@ -326,6 +326,8 @@ const ensureMigrationsTable = (migrationsTable: string) =>
     const sql = yield* Client.SqlClient
     const table = quoteIdent(migrationsTable)
 
+    // A Turso timeout can mean the reply was lost after execution. Only this
+    // idempotent statement is safe to replay, not the rest of the migration.
     yield* executeMigrationStatements([
       `CREATE TABLE IF NOT EXISTS ${table} (
 			id INTEGER PRIMARY KEY,
@@ -334,7 +336,16 @@ const ensureMigrationsTable = (migrationsTable: string) =>
 			name text,
 			applied_at TEXT
 		)`,
-    ])
+    ]).pipe(
+      Effect.retry({
+        times: 1,
+        schedule: Schedule.spaced("2 seconds"),
+        while: ({ cause }) =>
+          causeChainIncludes(cause, () => false, {
+            codePredicate: (code) => code === "TIMEOUT",
+          }),
+      }),
+    )
 
     const columns = yield* sql.unsafe(`PRAGMA table_info(${migrationsTable})`)
     const columnNames = new Set(

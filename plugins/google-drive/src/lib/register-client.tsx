@@ -1,7 +1,5 @@
-import type React from "react"
 import { Suspense, lazy } from "react"
 import type {
-  FrontendPluginField,
   GraphqlRequester,
   OrganisationFrontendPlugin,
 } from "@pf/frontend-plugin-host"
@@ -102,24 +100,12 @@ export const organisationFrontendPlugin = {
   activate: (host) => {
     host.formRenderers.register({
       type: GOOGLE_DRIVE_PLUGIN_TYPE,
-      renderer: (
-        form: {
-          AppField: React.ComponentType<{
-            name: string
-            children: () => React.JSX.Element
-          }>
-        },
-        component: FrontendPluginField,
-        shouldAutoFocus: boolean,
-        options?: { readonly todoId?: string; readonly stepPath?: string },
-      ) => {
-        const AppField = form.AppField as React.ComponentType<{
-          readonly name: string
-          readonly children: (field: {
-            readonly state: { readonly value: string }
-            readonly handleChange: (value: string) => void
-          }) => React.JSX.Element
-        }>
+      scripts: [
+        { src: "https://accounts.google.com/gsi/client", async: true },
+        { src: "https://apis.google.com/js/api.js", async: true },
+      ],
+      renderer: (form, component, shouldAutoFocus, options) => {
+        const AppField = form.AppField
         const pluginData = component.pluginData as
           | GoogleDrivePluginData
           | undefined
@@ -138,7 +124,15 @@ export const organisationFrontendPlugin = {
                   {(graphqlClient) => {
                     const picker = (hint?: string) => (
                       <LazyGoogleDrivePicker
-                        field={field}
+                        field={{
+                          state: {
+                            value:
+                              typeof field.state.value === "string"
+                                ? field.state.value
+                                : "",
+                          },
+                          handleChange: field.handleChange,
+                        }}
                         label={component.label}
                         autoFocus={shouldAutoFocus}
                         requestUploadUrl={(input) =>

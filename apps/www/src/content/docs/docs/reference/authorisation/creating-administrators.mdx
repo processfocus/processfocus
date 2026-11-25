@@ -1,0 +1,134 @@
+---
+title: Creating administrators
+description: Grant administrative permissions through roles and Cedar policies.
+---
+
+Process Focus has no built-in superuser or administrator role. Give users an
+administrator role and use Cedar policies to define what it can do.
+
+## The first administrator
+
+`pfcli init` uses the administrator email address you supply to create an
+invitation with the Employee and Administrator roles. The person receives
+those roles when they accept the invitation. See
+[First user registration](/docs/reference/authentication/first-user-registration/).
+
+## Creating an administrator role
+
+Create the role directly under the organisation, rather than an organisational
+unit:
+
+```typescript
+import { Organisation, Role } from "@pf/process"
+
+const org = new Organisation({ name: "Example" })
+
+export const administrator = new Role(org, "Administrator", {
+  name: "Administrator",
+})
+```
+
+The role's path is `/Administrator`. Assign it to users who need the
+permissions granted to that role.
+
+## Making someone an administrator
+
+To add someone who does not have an account, create an invitation in
+**Users & Sign-in** and select the Administrator role. See
+[Invitations](/docs/reference/authentication/invitations/).
+
+For an existing user, assign the role in the Dashboard or with `pfcli`.
+
+### Assigning the administrator role in the Dashboard
+
+1. Open **Users & Sign-in** (`/settings/users`).
+2. Select the user.
+3. Under **Role Assignments**, select **Administrator**:
+
+   ![Role Assignments showing the Administrator checkbox](/images/docs/administrator-role-assignment.png)
+
+4. Select **Save**.
+
+### Assigning the administrator role with `pfcli`
+
+Grant the role to an existing provider user with `pfcli`:
+
+```bash
+pfcli grant role ./my-org --user alice@example.com --role /Administrator
+```
+
+For a deployed environment, specify the project and environment instead:
+
+```bash
+pfcli grant role --project <project-number> --env <environment-name> --user alice@example.com --role /Administrator
+```
+
+## Define administrative permissions
+
+The role name grants no permissions by itself. Cedar policies define what
+members of `/Administrator` can do.
+
+To let administrators manage users:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Administrator",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
+);
+```
+
+To let administrators start any process or complete any Todo:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Administrator",
+    action == PF::Action::"complete",
+    resource is PF::Step
+);
+```
+
+This also permits completing Todos assigned to another user, unless a matching
+forbid applies.
+
+To let administrators inspect any process execution:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Administrator",
+    action == PF::Action::"view",
+    resource is PF::Execution
+);
+```
+
+To let administrators view process state:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Administrator",
+    action == PF::Action::"showProcessState",
+    resource is PF::Application
+);
+```
+
+`pfcli init` generates individual Administrator grants in `custom.cedar`.
+Review them and remove or restrict any grants the role does not need.
+
+Switching roles requires a separate `requestRole` permission. `pfcli init`
+generates a grant for the initial administrator's email address. Scope any
+additional grants carefully: a policy can permit switching to a role the user
+has not been assigned.
+
+If you do not want to spell out individual permissions, the following
+Cedar policy permits `/Administrator` to perform any action on any resource:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Administrator",
+    action,
+    resource
+);
+```
+
+This includes future actions and resources. A matching `forbid` still takes
+precedence.

@@ -1,19 +1,11 @@
-import { Effect } from "effect"
-import { type XeroInvoiceError, xeroValidationError } from "./errors"
-import type { ExactMoney } from "./identities"
-
-export const moneyToCents = (
-  amount: ExactMoney,
-): Effect.Effect<number, XeroInvoiceError> => {
-  const [dollars, cents] = amount.split(".")
-  if (dollars === undefined || cents === undefined) {
-    return Effect.fail(xeroValidationError("Agreed Price is not exact money"))
-  }
-
-  return Effect.succeed(
-    Number.parseInt(dollars, 10) * 100 + Number.parseInt(cents, 10),
+export const invoiceLinesTotalCents = (
+  lines: readonly { readonly quantity: number; readonly unitAmount: string }[],
+): bigint =>
+  lines.reduce(
+    (total, line) =>
+      total + BigInt(line.quantity) * BigInt(line.unitAmount.replace(".", "")),
+    0n,
   )
-}
 
 export const centsToMoney = (cents: number): string => {
   const absolute = Math.abs(cents)

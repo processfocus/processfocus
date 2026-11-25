@@ -4,9 +4,7 @@ Feature: Provider-user Process catalog
   So that denied Processes and RxDB fields never appear in the list API
 
   Background:
-    Given I am authenticated without roles
-    And the database is clean
-    And I am authenticated as provider user "employee@example.com"
+    Given I read as provider user "employee@example.com"
 
   Scenario: Paging and filters apply to Cedar-visible Processes
     When I query Process list page 1 with limit 1

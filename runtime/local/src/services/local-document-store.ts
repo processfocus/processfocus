@@ -8,13 +8,13 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
-import { Context, Effect, Layer, Stream } from "effect"
 import {
   DocumentStoreError,
   DocumentStoreService,
   FileNotFoundError,
   sanitizeDownloadFilename,
-} from "@pf/document-store-service"
+} from "@processfocus/runtime"
+import { Context, Effect, Layer, Stream } from "effect"
 
 /** 1 hour expiry for presigned URLs */
 const URL_EXPIRY_SECONDS = 3600
@@ -26,9 +26,7 @@ const URL_EXPIRY_SECONDS = 3600
  * config-creation time (e.g. when using port fallback).  The function
  * is called each time a URL is generated.
  */
-export class LocalDocumentStoreConfig extends Context.Tag(
-  "@pf/runtime-local/LocalDocumentStoreConfig",
-)<
+export class LocalDocumentStoreConfig extends Context.Service<
   LocalDocumentStoreConfig,
   {
     readonly baseUrl: () => string
@@ -37,7 +35,7 @@ export class LocalDocumentStoreConfig extends Context.Tag(
     /** Maximum allowed file size in bytes. Defaults to 100 MB. */
     readonly maxFileSize: number
   }
->() {}
+>()("@pf/runtime-local/LocalDocumentStoreConfig") {}
 
 /**
  * Generate an HMAC-SHA256 token for file URL authentication.
@@ -97,7 +95,6 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
   Effect.gen(function* () {
     const config = yield* LocalDocumentStoreConfig
 
-    // Ensure storage directory exists
     if (!existsSync(config.storagePath)) {
       mkdirSync(config.storagePath, { recursive: true })
     }
@@ -108,10 +105,21 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
         readonly storePrefix: string
         readonly contentType?: string
         readonly filename?: string
+        readonly expiresAt?: number
       }) =>
         Effect.gen(function* () {
           const { fileId, storePrefix } = opts
-          const expires = Math.floor(Date.now() / 1000 + URL_EXPIRY_SECONDS)
+          const now = Date.now()
+          const expires = Math.floor(
+            Math.min(
+              now + URL_EXPIRY_SECONDS * 1000,
+              opts.expiresAt ?? Infinity,
+            ) / 1000,
+          )
+          if (!Number.isFinite(expires) || expires * 1000 <= now)
+            return yield* new DocumentStoreError({
+              message: "Upload capability deadline has expired",
+            })
           const expiresStr = String(expires)
           const token = generateLocalDocumentStoreToken(
             storePrefix,
@@ -120,7 +128,6 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
             config.secret,
           )
 
-          // Ensure store subdirectory exists
           const storeDir = join(config.storagePath, storePrefix)
           yield* ensureDirectory(
             storeDir,
@@ -147,7 +154,6 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
         filename?: string,
       ) =>
         Effect.gen(function* () {
-          // Check file exists
           const filePath = join(config.storagePath, storePrefix, fileId)
           const exists = yield* pathExists(
             filePath,
@@ -194,7 +200,6 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
         Effect.gen(function* () {
           const { fileId, storePrefix } = opts
 
-          // Ensure store subdirectory exists
           const storeDir = join(config.storagePath, storePrefix)
           yield* ensureDirectory(
             storeDir,
@@ -207,7 +212,7 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
           // interruption — no explicit cleanup needed.
           const parts = yield* Stream.runFold(
             opts.content,
-            [] as Uint8Array[],
+            (): Uint8Array[] => [],
             (acc, chunk) => {
               acc.push(chunk)
               return acc
@@ -322,7 +327,7 @@ export const LocalDocumentStoreServiceLive = Layer.effect(
                 cause: error,
               }),
           }).pipe(
-            Effect.catchAll((error: DocumentStoreError) => {
+            Effect.catch((error: DocumentStoreError) => {
               const nodeError = error.cause as NodeJS.ErrnoException
               if (nodeError.code === "ENOENT") return Effect.void
               return Effect.fail(error)

@@ -1,0 +1,20 @@
+---
+title: API
+---
+
+The Process Focus Dashboard uses the same GraphQL API that external
+systems can use to start processes and work with organisation data.
+
+Process Focus generates a GraphQL API from your organisation’s
+definition. For example, if your **New Order** process starts with a
+form that asks for a product code and quantity, a website backend can
+send those values to the generated `startNewOrder` mutation. It returns
+the ID of the new [process execution](/docs/frontend/process-execution/).
+
+Staff can submit the start form in the Dashboard. An external system can
+start the same process using a
+[system identity](/docs/reference/authentication/system-identities/) with
+a [Cedar policy](/docs/reference/authorisation/authorising-external-systems/)
+that grants access to **New Order** without granting access to other
+processes. See the [GraphQL reference](/docs/reference/graphql/) for
+examples of calling the API and adding custom operations.

@@ -21,7 +21,7 @@ import { describe, expect, it } from "bun:test"
 
 const flowContext = buildFlowContext(
   "contract",
-  DateTime.unsafeMake("2026-04-01"),
+  DateTime.makeUnsafe("2026-04-01"),
   [],
 )
 const context = { ...flowContext, step: {} }
@@ -100,7 +100,7 @@ describe("representative form contract helper", () => {
           // diagnostics; production Forms cannot replace their runtime schema.
           form: {
             node: form.node,
-            submissionSchema: () => form.submissionSchema(),
+            output: form.output,
             getFieldsWithState: () => fields({ runtime: true }),
           },
           fixtures: [
@@ -157,7 +157,7 @@ describe("representative form contract helper", () => {
     })
   })
 
-  it("shares optional read-only filtering across Effect, JSON and GraphQL while retaining display defaults", async () => {
+  it("shares optional read-only filtering across Effect and GraphQL while retaining display defaults", async () => {
     const children = {
       edit: TextField(),
       display: Schema.optional(
@@ -190,11 +190,10 @@ describe("representative form contract helper", () => {
     expect(sdl).not.toContain("leaf:")
     expect(sdl).not.toContain("display:")
     expect(sdl).not.toContain("help:")
-    expect(JSON.stringify(form.submissionSchema())).not.toMatch(
-      /"(leaf|display|help)"/,
-    )
     expect(
-      Schema.decodeUnknownSync(Schema.make(form.submissionEffectSchema.ast))({
+      Schema.decodeUnknownSync(
+        Schema.make<Schema.Codec<unknown>>(form.submissionEffectSchema.ast),
+      )({
         leaf: "client",
         nested: { edit: "ok", display: "client" },
         list: [{ edit: "one", display: "client" }],
@@ -203,9 +202,7 @@ describe("representative form contract helper", () => {
     expect(
       await Effect.runPromise(form.resolveDefaults({}, context)),
     ).toMatchObject({ leaf: "leaf", nested: { display: "display" } })
-    expect(
-      (await Effect.runPromise(form.clientFormDefinition())).components,
-    ).toHaveProperty("leaf")
+    expect(form.output).toHaveProperty("leaf")
   })
 
   for (const replacement of [
@@ -260,7 +257,7 @@ describe("representative form contract helper", () => {
     ).rejects.toThrow(/review\/Confirm.*GraphQL.*amount.*number.*Int/)
   })
 
-  it("reports submission JSON Schema drift independently of GraphQL", async () => {
+  it("reports declared submission contract drift independently of GraphQL", async () => {
     const { org, form } = makeForm(() => ({ confirmation }))
     await expect(
       verifyFormContract({
@@ -270,10 +267,7 @@ describe("representative form contract helper", () => {
           getFieldsWithState: (
             ...args: Parameters<typeof form.getFieldsWithState>
           ) => form.getFieldsWithState(...args),
-          submissionSchema: () => ({
-            ...form.submissionSchema(),
-            required: [],
-          }),
+          output: { confirmation: Schema.optional(confirmation) },
         },
         fixtures: [
           {
@@ -283,6 +277,6 @@ describe("representative form contract helper", () => {
           },
         ],
       }),
-    ).rejects.toThrow(/review\/Confirm.*submissionSchema mismatch: required/)
+    ).rejects.toThrow(/review\/Confirm.*submissionSchema mismatch: .*required/)
   })
 })

@@ -37,13 +37,14 @@ const principalInput = (
   resourceId: string,
   attrValues: Record<string, boolean | string>,
   processPath: string | null = null,
+  completionContext?: AuthorizationEvalInput["completionContext"],
 ): AuthorizationEvalInput => {
   const principal =
     who.kind === "role"
       ? { type: "PF::ProviderUser", id: genericPrincipalId(who.path) }
       : who.kind === "service"
         ? { type: "PF::ServiceAccount", id: who.id }
-        : { type: "PF::PublicLink", id: "prototype-link" }
+        : { type: "PF::PublicLink", id: "handbook-todo" }
   return {
     principal,
     roles: who.kind === "role" ? [who.path] : [],
@@ -54,6 +55,7 @@ const principalInput = (
     entity:
       cedar.entities.find((item) => item.typeName === resourceType) ?? null,
     attrValues,
+    ...(completionContext ? { completionContext } : {}),
   }
 }
 
@@ -84,6 +86,7 @@ const pictureForPrincipal = (
     resourceId: string,
     attrValues: Record<string, boolean | string>,
     processPath: string | null = null,
+    completionContext?: AuthorizationEvalInput["completionContext"],
   ) =>
     isAllow(
       policies,
@@ -96,6 +99,7 @@ const pictureForPrincipal = (
         resourceId,
         attrValues,
         processPath,
+        completionContext,
       ),
     )
 
@@ -171,30 +175,54 @@ const pictureForPrincipal = (
             label: "Complete the linked todo",
             allow:
               who.kind === "public-link" &&
-              check("complete", "PF::Todo", "handbook-todo", {
-                role: false,
-                assignedTo: false,
-              }),
+              check(
+                "complete",
+                "PF::Step",
+                "/prototype/Complete",
+                {
+                  role: false,
+                },
+                null,
+                { todoId: "handbook-todo" },
+              ),
             details: [],
           },
           {
             label: "Complete a todo for their role",
             allow:
               who.kind === "role" &&
-              check("complete", "PF::Todo", "handbook-todo", {
-                role: true,
-                assignedTo: true,
-              }),
+              check(
+                "complete",
+                "PF::Step",
+                "/prototype/Complete",
+                {
+                  role: true,
+                },
+                null,
+                {
+                  todoId: "handbook-todo",
+                  assignedTo: genericPrincipalId(who.path),
+                },
+              ),
             details: [],
           },
           {
             label: "Complete a todo assigned to someone else",
             allow:
               who.kind === "role" &&
-              check("complete", "PF::Todo", "handbook-todo-other", {
-                role: true,
-                assignedTo: false,
-              }),
+              check(
+                "complete",
+                "PF::Step",
+                "/prototype/Complete",
+                {
+                  role: true,
+                },
+                null,
+                {
+                  todoId: "handbook-todo-other",
+                  assignedTo: "someone-else@prototype.local",
+                },
+              ),
             details: [],
           },
         ],

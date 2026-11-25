@@ -14,7 +14,7 @@ import type {
  */
 
 // Derive TypeScript type from Effect Schema (encoded form for JSON storage)
-export type DraftProcessExecutionDocType = ES.Schema.Encoded<
+export type DraftProcessExecutionDocType = ES.Codec.Encoded<
   typeof DraftProcessExecutionSchema
 >
 
@@ -44,22 +44,15 @@ export const migrationStrategies = {
   4: (oldDoc: unknown) => oldDoc,
   // Migration from version 4 to 5: remove updatedAt index
   5: (oldDoc: unknown) => oldDoc,
-  // Migration from version 5 to 6
   6: (oldDoc: unknown) => oldDoc,
-  // Migration from version 6 to 7
   7: (oldDoc: unknown) => ({
     ...(oldDoc as Record<string, unknown>),
     state: {},
   }),
-  // Migration from version 7 to 8
   8: (oldDoc: unknown) => oldDoc,
-  // Migration from version 8 to 9
   9: (oldDoc: unknown) => oldDoc,
-  // Migration from version 9 to 10
   10: (oldDoc: unknown) => oldDoc,
-  // Migration from version 10 to 11
   11: (oldDoc: unknown) => oldDoc,
-  // Migration from version 11 to 12
   12: (oldDoc: unknown) => oldDoc,
   // Migration from version 12 to 13: add startStepPath field - delete existing documents
   13: () => null,

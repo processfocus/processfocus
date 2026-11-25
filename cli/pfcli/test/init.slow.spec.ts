@@ -8,7 +8,7 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { CLI_ORGANISATION_SDK_VERSION } from "../src/package-metadata"
+import { Schema } from "effect"
 import Database from "bun:sqlite"
 import { afterEach, describe, expect, it } from "bun:test"
 
@@ -77,6 +77,10 @@ describe("pfcli init slow smoke", () => {
           PFCLI_INIT_RUNTIME_OVERRIDE: `file:${packedRuntime}`,
           PFCLI_INIT_SDK_OVERRIDE: `file:${packedSdk}`,
           SQLITE_DATABASE_PATH: "",
+          GOOGLE_CLIENT_ID: "test-google-client",
+          GOOGLE_CLIENT_SECRET: "test-google-secret",
+          GITHUB_CLIENT_ID: "test-github-client",
+          GITHUB_CLIENT_SECRET: "test-github-secret",
         },
         encoding: "utf8",
         timeout: 30_000,
@@ -97,13 +101,23 @@ describe("pfcli init slow smoke", () => {
     const packageJson: unknown = JSON.parse(
       readFileSync(packageJsonPath, "utf8"),
     )
+    const cliPackage = Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          dependencies: Schema.Record(Schema.String, Schema.String),
+        }),
+      ),
+    )(readFileSync(join(WORKSPACE_ROOT, "cli/pfcli/package.json"), "utf8"))
     expect(packageJson).toMatchObject({
       dependencies: {
-        "@cedar-policy/cedar-wasm": "^4.12.0",
-        "@tursodatabase/database": "0.7.2",
-        "@tursodatabase/serverless": "1.4.0",
-        "@tursodatabase/sync": "0.7.2",
-        processfocus: CLI_ORGANISATION_SDK_VERSION,
+        "@cedar-policy/cedar-wasm":
+          cliPackage.dependencies["@cedar-policy/cedar-wasm"],
+        "@tursodatabase/database":
+          cliPackage.dependencies["@tursodatabase/database"],
+        "@tursodatabase/serverless":
+          cliPackage.dependencies["@tursodatabase/serverless"],
+        "@tursodatabase/sync": cliPackage.dependencies["@tursodatabase/sync"],
+        processfocus: cliPackage.dependencies["processfocus"],
       },
     })
 

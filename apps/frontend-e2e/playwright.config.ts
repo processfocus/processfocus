@@ -59,6 +59,9 @@ const baseURL =
   process.env["BASE_URL"] || `http://localhost:${localFrontendPort}`
 const hasExplicitBaseUrl = !!process.env["BASE_URL"]
 process.env["BASE_URL"] = baseURL
+// Shared policy personas are leased serially. Devices survive Playwright worker
+// restarts within this run; sessions are always issued by a fresh normal login.
+process.env["PLAYWRIGHT_NO_COPY_PROMPT"] = "1"
 const reuseExistingServer =
   process.env["PLAYWRIGHT_REUSE_EXISTING_SERVER"] === "1"
 const isLocalhost = ["localhost", "127.0.0.1"].includes(
@@ -68,7 +71,8 @@ const isLocalhost = ["localhost", "127.0.0.1"].includes(
 if (!hasExplicitBaseUrl) {
   process.env["GOOGLE_CLIENT_ID"] ??= "ci-google-client-id"
   process.env["GOOGLE_CLIENT_SECRET"] ??= "ci-google-client-secret"
-  process.env["CI_PIPELINE_SECRET"] ??= "ci-pipeline-secret"
+  process.env["CI_PIPELINE_SECRET"] = "ci-pipeline-secret"
+  process.env["PF_AUTH_MODE"] = "local-dummy"
 }
 
 const instantE2E = process.env["PF_INSTANT_E2E"] === "1"
@@ -79,7 +83,9 @@ const featuresGlob =
   (instantE2E
     ? "./src/features-instant/**/*.feature"
     : "./src/features/**/*.feature")
-const isDelegationJourney = featuresGlob.includes("features-delegated-access")
+const isDelegationJourney =
+  featuresGlob.includes("features-delegated-access") ||
+  featuresGlob.includes("features-passkey")
 if (isDelegationJourney) {
   // Playwright's failure accessibility snapshots are independent of trace capture.
   process.env["PLAYWRIGHT_NO_COPY_PROMPT"] = "1"
@@ -172,16 +178,21 @@ const testDir = defineBddConfig({
   steps: "./src/steps/**/*.ts",
 })
 
-/**
- * See https://playwright.dev/docs/test-configuration.
- */
+const localServerCommand =
+  process.env["FRONTEND_E2E_SERVER_COMMAND"] ??
+  (instantE2E
+    ? `bun run --cwd apps/frontend next start --port ${localFrontendPort}`
+    : "bun cli/pfcli/src/run-temp-org.ts examples/demo --copy -- bun apps/frontend-e2e/scripts/with-mcp-list-fixture.ts -- bun scripts/nx-quiet.ts run @processfocus/runtime-local:serve")
+
 export default defineConfig({
   ...nxE2EPreset(__filename, { testDir }),
   // Logout tests wait up to 30s for RxDB population in Background, then need
   // time for the actual logout + redirect. 30s default is too tight on a dev
   // server, so give tests 60s.
   timeout: 60_000,
-  ...(hasExplicitBaseUrl ? {} : { workers: 1 }),
+  ...(isDelegationJourney ? { expect: { timeout: 30_000 } } : {}),
+  workers: 1,
+  globalSetup: "./scripts/setup-passkey-devices.ts",
   ...(process.env["CI"]
     ? {
         reporter: [
@@ -191,12 +202,9 @@ export default defineConfig({
         ],
       }
     : {}),
-  /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     baseURL,
-    /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
-    trace: "on-first-retry",
-    ...(isDelegationJourney ? delegationArtifactOptions : {}),
+    ...delegationArtifactOptions,
   },
   /* Run your local dev server before starting the tests (skip if BASE_URL is set) */
   ...(hasExplicitBaseUrl
@@ -205,11 +213,18 @@ export default defineConfig({
         webServer: {
           // Set FRONTEND_PORT via Playwright env (merged with process.env) so
           // the serve child inherits it without Unix `env VAR=value` prefixes.
-          command:
-            process.env["FRONTEND_E2E_SERVER_COMMAND"] ??
-            (instantE2E
-              ? `bun run --cwd apps/frontend next start --port ${localFrontendPort}`
-              : `bun cli/pfcli/src/run-temp-org.ts examples/demo --copy -- bun scripts/nx-quiet.ts run @processfocus/runtime-local:serve`),
+          ...(process.platform === "linux"
+            ? {
+                command: "bun apps/frontend-e2e/scripts/run-owned-runtime.ts",
+                gracefulShutdown: {
+                  signal: "SIGTERM" as const,
+                  timeout: 5_000,
+                },
+              }
+            : { command: localServerCommand }),
+          ...(isDelegationJourney
+            ? { stdout: "ignore" as const, stderr: "ignore" as const }
+            : {}),
           url: baseURL,
           reuseExistingServer: instantE2E ? false : reuseExistingServer,
           cwd: workspaceRoot,
@@ -217,31 +232,11 @@ export default defineConfig({
           // allow that to take longer than a local warm boot.
           timeout: 300_000,
           env: {
+            FRONTEND_E2E_RUNTIME_COMMAND: localServerCommand,
             FRONTEND_PORT: localFrontendPort,
             ...(instantE2E ? { NODE_ENV: "production" } : {}),
           },
         },
       }),
-  projects: [
-    ...projects,
-    // Uncomment for mobile browsers support
-    /* {
-      name: 'Mobile Chrome',
-      use: { ...devices['Pixel 5'] },
-    },
-    {
-      name: 'Mobile Safari',
-      use: { ...devices['iPhone 12'] },
-    }, */
-
-    // Uncomment for branded browsers
-    /* {
-      name: 'Microsoft Edge',
-      use: { ...devices['Desktop Edge'], channel: 'msedge' },
-    },
-    {
-      name: 'Google Chrome',
-      use: { ...devices['Desktop Chrome'], channel: 'chrome' },
-    } */
-  ],
+  projects: [...projects],
 })

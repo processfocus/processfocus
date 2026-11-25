@@ -22,7 +22,7 @@ export const createTestOrganisation = () => {
     name: "Submit",
     role: employee,
     purpose: "Submit step",
-    form: () => ({ data: Schema.String }),
+    form: Schema.Struct({ data: Schema.String }),
   })
 
   const approve = new Form(process, "approve", {
@@ -30,7 +30,7 @@ export const createTestOrganisation = () => {
     role: employee,
     purpose: "Approve step",
     sla: Sla.minutes(5),
-    form: () => ({}),
+    form: Schema.Struct({}),
   })
 
   process.start(submit).next(approve)

@@ -1,8 +1,4 @@
 import type { GraphQLClient } from "graphql-request"
-import {
-  type ClientFormDefinition,
-  parseNullableClientFormDefinition,
-} from "@pf/form-client-representation/client-form-definition"
 import { graphql } from "@/lib/generated/gql"
 import type { ListFormMetadataQuery } from "@/lib/generated/gql/graphql"
 
@@ -48,6 +44,8 @@ export const availableListsQuery = graphql(`
         name
         startStepPath
       }
+      additionalStartProcesses { name startStepPath }
+      anonymousPage { name path }
       purpose
       queryName
       outputColumns {
@@ -81,9 +79,7 @@ const listFormMetadataQuery = graphql(`
       updateMutationName
       updateInputTypeName
       deleteMutationName
-      formDefinition
       defaultValues
-      jsonSchema
     }
   }
 `)
@@ -100,12 +96,9 @@ export type AvailableList = Awaited<
   ReturnType<typeof fetchAvailableLists>
 >[number]
 
-export type ParsedListFormMetadata = Omit<
-  NonNullable<ListFormMetadataQuery["listFormMetadata"]>,
-  "formDefinition"
-> & {
-  readonly formDefinition: ClientFormDefinition | null
-}
+export type ParsedListFormMetadata = NonNullable<
+  ListFormMetadataQuery["listFormMetadata"]
+>
 
 export type ListDataResult = {
   readonly items: readonly unknown[]
@@ -115,7 +108,10 @@ export type ListDataResult = {
   readonly hasNextPage: boolean
 }
 
-function buildListDataQuery(list: AvailableList): string {
+function buildListDataQuery(
+  list: AvailableList,
+  includeFirstPage = false,
+): string {
   const queryName = list.queryName
   assertGraphqlName(queryName, "query name")
   for (const column of list.outputColumns) {
@@ -125,17 +121,14 @@ function buildListDataQuery(list: AvailableList): string {
     .map((c) => c.field)
     .join("\n              ")
 
+  const selection = `items { ${itemsSelection} }
+    totalCount page limit hasNextPage`
   return `
     query ListData($page: Int!, $limit: Int!, $filter: String, $sort: ListSortInput) {
       ${queryName}(page: $page, limit: $limit, filter: $filter, sort: $sort) {
-        items {
-          ${itemsSelection}
-        }
-        totalCount
-        page
-        limit
-        hasNextPage
+        ${selection}
       }
+      ${includeFirstPage ? `firstPage: ${queryName}(page: 1, limit: $limit, filter: $filter, sort: $sort) { ${selection} }` : ""}
     }
   `
 }
@@ -151,6 +144,26 @@ export async function fetchListData(
   )
 
   return result[list.queryName] as ListDataResult
+}
+
+/** Refresh membership in one operation, including a valid fallback for a removed page. */
+export async function fetchFreshListData(
+  client: GraphQLClient,
+  list: AvailableList,
+  variables: ListQueryVariables,
+): Promise<ListDataResult> {
+  const result = await client.request<Record<string, ListDataResult>>(
+    buildListDataQuery(list, variables.page > 1),
+    variables,
+  )
+  const page = result[list.queryName]
+  if (!page) throw new Error("Missing List data")
+  if (page.page > 1 && page.items.length === 0) {
+    const firstPage = result["firstPage"]
+    if (!firstPage) throw new Error("Missing first List page")
+    return firstPage
+  }
+  return page
 }
 
 /**
@@ -277,13 +290,7 @@ export async function fetchListFormMetadata(
   const metadata = data.listFormMetadata
   if (!metadata) return null
 
-  return {
-    ...metadata,
-    formDefinition: parseNullableClientFormDefinition(
-      metadata.formDefinition,
-      "listFormMetadata.formDefinition",
-    ),
-  }
+  return metadata
 }
 
 /**
@@ -323,9 +330,7 @@ export const listCreateFormMetadataQuery = graphql(`
     listCreateFormMetadata(listPath: $listPath) {
       createMutationName
       createInputTypeName
-      formDefinition
       defaultValues
-      jsonSchema
     }
   }
 `)

@@ -1,12 +1,12 @@
 import * as path from "node:path"
-import { FileSystem } from "@effect/platform"
-import { Console, Data, Effect } from "effect"
+import { Console, Data, Effect, FileSystem } from "effect"
 import { DATABASE_PATH_NOT_CONFIGURED, resolveDatabasePath } from "@pf/db-info"
 import { MigrationError } from "../errors"
 import {
   makeMigrationLayer,
   runDrizzleMigrations,
 } from "../utils/migration-layer"
+import type { DatabaseOptions } from "../utils/operator-inputs"
 
 export { MigrationError }
 
@@ -34,12 +34,14 @@ export class NoDrizzleConfigError extends Data.TaggedError(
  *
  * @param orgPath - Path to organisation directory
  */
-export const runMigrateCustom = (orgPath: string) =>
+export const runMigrateCustom = (
+  orgPath: string,
+  options: DatabaseOptions = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
 
-    // Resolve database path using shared utility
-    const databasePath = resolveDatabasePath(orgPath)
+    const databasePath = options.databasePath ?? resolveDatabasePath(orgPath)
 
     if (!databasePath) {
       // return needed for type narrowing in Effect.gen
@@ -49,10 +51,8 @@ export const runMigrateCustom = (orgPath: string) =>
       })
     }
 
-    // Resolve to absolute path
     const resolvedPath = path.resolve(process.cwd(), orgPath)
 
-    // Check for drizzle.config.ts (convention-based detection)
     const drizzleConfigPath = path.join(resolvedPath, DRIZZLE_CONFIG)
     const hasCustomSchema = yield* fs.exists(drizzleConfigPath)
 
@@ -60,10 +60,8 @@ export const runMigrateCustom = (orgPath: string) =>
       return yield* new NoDrizzleConfigError({ orgPath: resolvedPath })
     }
 
-    // Resolve migrations folder (convention: drizzle/)
     const migrationsFolder = path.join(resolvedPath, MIGRATIONS_FOLDER)
 
-    // Verify migrations folder exists
     const folderExists = yield* fs.exists(migrationsFolder)
     if (!folderExists) {
       yield* Console.log(
@@ -77,7 +75,6 @@ export const runMigrateCustom = (orgPath: string) =>
 
     const appLayer = makeMigrationLayer(databasePath)
 
-    // Run migrations
     yield* runDrizzleMigrations({
       migrationsFolder,
       migrationsTable: "__drizzle_migrations_org",

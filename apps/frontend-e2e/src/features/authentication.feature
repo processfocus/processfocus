@@ -18,16 +18,12 @@ Feature: Authentication
     Then I should stay on the passkey registration page
     And I should see that registration is unavailable
 
-  Scenario: Authenticated user can access the home page
+  Scenario: Authenticated user sees the organisation and desktop dashboard summary
     Given I am authenticated as provider user "ci@example.com"
     When I visit the home page
     Then I should see the home page
     And I should see the organisation name "Demo"
-
-  Scenario: Authenticated user sees the desktop dashboard summary
-    Given I am authenticated as provider user "ci@example.com"
-    When I visit the home page
-    And I wait for RxDB to populate local storage
+    When I wait for RxDB to populate local storage
     Then I should see the home page
     And I should see the desktop dashboard summary
     And I should not see a visible error boundary

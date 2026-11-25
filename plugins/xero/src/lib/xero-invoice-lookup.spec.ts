@@ -1,5 +1,5 @@
-import { HttpClient, HttpClientResponse } from "@effect/platform"
 import { ConfigProvider, Effect, Layer } from "effect"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import {
   XeroInvoiceConfigFromEnv,
   XeroInvoiceLookupLive,
@@ -63,12 +63,15 @@ const run = (
           Layer.provide(http),
         ),
       ),
-      Effect.withConfigProvider(
-        ConfigProvider.fromMap(
-          new Map([
-            ["XERO_CLIENT_ID", "fixture"],
-            ["XERO_CLIENT_SECRET", "fixture"],
-          ]),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnvRecord(
+          Object.fromEntries(
+            new Map([
+              ["XERO_CLIENT_ID", "fixture"],
+              ["XERO_CLIENT_SECRET", "fixture"],
+            ]),
+          ),
         ),
       ),
     ),

@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs"
-import { FileSystem } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
-import { DateTime, Effect, FiberRef, Layer, Runtime, Schema } from "effect"
+import { DateTime, Effect, FileSystem, Layer, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import { buildSchema, defaultFieldResolver, graphql } from "graphql"
 import {
   LocalCedarAuthorizationLive,
@@ -48,7 +47,7 @@ const authLayer = LocalCedarAuthorizationLive.pipe(
 const database = SqliteProcessQueriesLive.pipe(Layer.provideMerge(DatabaseTest))
 const context = (email: string): UserContext => ({
   userId: email,
-  _requestTime: DateTime.unsafeMake("2026-09-17T00:00:00Z"),
+  _requestTime: DateTime.makeUnsafe("2026-09-17T00:00:00Z"),
   _userDetails: { by: email, id: email },
   jwt: {
     mode: "access",
@@ -104,7 +103,7 @@ describe("List creation through generated GraphQL, Cedar and SQLite", () => {
           const schema = buildSchema(
             `scalar DateTimeISO\ninput ListSortInput { field: String! direction: ListSortDirection! }\nenum ListSortDirection { ASC DESC }\n${sdl}`,
           )
-          const runtime = yield* Effect.runtime<
+          const runtime = yield* Effect.context<
             | SqlClient.SqlClient
             | import("@pf/auth-policy").AuthorizationService
             | RequestTime
@@ -129,7 +128,7 @@ describe("List creation through generated GraphQL, Cedar and SQLite", () => {
                         : undefined
                   if (typeof resolver !== "function")
                     return defaultFieldResolver(parent, args, ctx, info)
-                  return Runtime.runPromise(runtime)(
+                  return Effect.runPromiseWith(runtime)(
                     resolver(parent, args, ctx, info),
                   )
                 },
@@ -192,7 +191,7 @@ describe("List creation through generated GraphQL, Cedar and SQLite", () => {
           Effect.provide(
             Layer.effect(
               RequestTime,
-              FiberRef.make(DateTime.unsafeMake("2026-09-17T00:00:00Z")),
+              Effect.succeed(DateTime.makeUnsafe("2026-09-17T00:00:00Z")),
             ),
           ),
         ),

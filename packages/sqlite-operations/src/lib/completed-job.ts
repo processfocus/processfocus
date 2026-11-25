@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
 import {
@@ -26,7 +26,8 @@ export const SqliteCompletedJobOperationsLive = Layer.effect(
               and(
                 eq(schema.completedJob.queue, queue),
                 eq(schema.completedJob.jobId, jobId),
-                eq(schema.completedJob._deleted, false),
+                // Literal SQL 0 matches the active-receipt partial index on Turso.
+                eq(schema.completedJob._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -56,7 +57,7 @@ export const SqliteCompletedJobOperationsLive = Layer.effect(
               and(
                 eq(schema.completedJob.queue, queue),
                 eq(schema.completedJob.jobId, jobId),
-                eq(schema.completedJob._deleted, false),
+                eq(schema.completedJob._deleted, sql`0`),
               ),
             )
         }),

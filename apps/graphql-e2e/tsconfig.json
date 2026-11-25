@@ -17,13 +17,19 @@
   "exclude": ["out-tsc", "reports"],
   "references": [
     {
-      "path": "../../packages/auth-session"
+      "path": "../frontend-e2e"
+    },
+    {
+      "path": "../../packages/realtime-client"
     },
     {
       "path": "../../packages/graphql-schema"
     },
     {
       "path": "../../packages/frontend-endpoints"
+    },
+    {
+      "path": "../../packages/auth-session"
     }
   ]
 }

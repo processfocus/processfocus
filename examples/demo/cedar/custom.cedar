@@ -56,14 +56,14 @@ permit (
 );
 
 // Administrators can complete any step under the /finance/purchase-request process,
-// but only in development, and only after 6am local time.
+// but only in local development, and only after 6am local time.
 permit (
     principal in PF::Role::"/Administrator",
     action == PF::Action::"complete",
     resource in PF::Process::"/finance/purchase-request"
 )
 when {
-    (context.nodeEnv == "development") && (context.requestTime.toTime() >= duration("6h"))
+    (context.runtimeMode == "local") && (context.requestTime.toTime() >= duration("6h"))
 };
 
 // Administrators can complete any step in finance

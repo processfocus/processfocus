@@ -6,9 +6,9 @@ describe("Error handling", () => {
     const source = "base org_unit (A32)."
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -19,9 +19,9 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -29,9 +29,9 @@ describe("Error handling", () => {
     const source = "base name (@@@)."
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -39,9 +39,9 @@ describe("Error handling", () => {
     const source = "base name" // Missing data type and period
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -52,9 +52,9 @@ describe("Error handling", () => {
     const result = await parseSourceExpectingErrors(source)
 
     // Should fail with semantic errors about missing base
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -65,9 +65,9 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -80,9 +80,9 @@ describe("Error handling", () => {
     const result = await parseSourceExpectingErrors(source)
 
     // Should fail with semantic errors about invalid cardinality
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -93,10 +93,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("cannot be empty")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("cannot be empty")
     }
   })
 
@@ -107,10 +107,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "must contain only lowercase letters",
       )
     }
@@ -123,10 +123,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "cannot be longer than 4 characters",
       )
     }
@@ -139,10 +139,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "must contain only lowercase letters",
       )
     }
@@ -155,10 +155,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const cycleError = result.left.find((err) =>
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const cycleError = result.failure.find((err) =>
         err.message.includes("Cycle detected"),
       )
       expect(cycleError).toBeDefined()
@@ -174,10 +174,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const cycleError = result.left.find((err) =>
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const cycleError = result.failure.find((err) =>
         err.message.includes("Cycle detected"),
       )
       expect(cycleError).toBeDefined()
@@ -192,7 +192,7 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Right")
+    expect(result._tag).toBe("Success")
   })
 
   it("should reject 'optional' keyword on self-references", async () => {
@@ -202,10 +202,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const selfRefError = result.left.find((err) =>
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const selfRefError = result.failure.find((err) =>
         err.message.includes("Self-reference"),
       )
       expect(selfRefError).toBeDefined()
@@ -224,7 +224,7 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Right")
+    expect(result._tag).toBe("Success")
   })
 
   it("should detect cycle in complex graph", async () => {
@@ -237,10 +237,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const cycleError = result.left.find((err) =>
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const cycleError = result.failure.find((err) =>
         err.message.includes("Cycle detected"),
       )
       expect(cycleError).toBeDefined()
@@ -255,10 +255,10 @@ describe("Error handling", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const cycleError = result.left.find((err) =>
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const cycleError = result.failure.find((err) =>
         err.message.includes("Cycle detected"),
       )
       expect(cycleError).toBeDefined()
@@ -269,14 +269,14 @@ describe("Error handling", () => {
     const source = "base job attempts (I)."
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "Integer type (I) requires the maximum number of digits",
       )
-      expect(result.left[0]?.message).toContain("I<digits>")
-      expect(result.left[0]?.message).toContain("I10")
+      expect(result.failure[0]?.message).toContain("I<digits>")
+      expect(result.failure[0]?.message).toContain("I10")
     }
   })
 
@@ -284,14 +284,14 @@ describe("Error handling", () => {
     const source = "base name (A)."
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "Text type (A) requires the maximum length",
       )
-      expect(result.left[0]?.message).toContain("A<max_length>")
-      expect(result.left[0]?.message).toContain("A255")
+      expect(result.failure[0]?.message).toContain("A<max_length>")
+      expect(result.failure[0]?.message).toContain("A255")
     }
   })
 
@@ -299,16 +299,16 @@ describe("Error handling", () => {
     const source = "base price (R)."
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "Real type (R) requires digits before and after decimal point",
       )
-      expect(result.left[0]?.message).toContain(
+      expect(result.failure[0]?.message).toContain(
         "R<digits_before>,<digits_after>",
       )
-      expect(result.left[0]?.message).toContain("R10,2")
+      expect(result.failure[0]?.message).toContain("R10,2")
     }
   })
 
@@ -316,11 +316,11 @@ describe("Error handling", () => {
     const source = "base price (R10)."
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
       // Should get error about missing comma or second number
-      expect(result.left.length).toBeGreaterThan(0)
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 })

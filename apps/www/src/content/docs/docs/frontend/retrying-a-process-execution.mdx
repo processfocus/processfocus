@@ -1,0 +1,31 @@
+---
+title: Retrying a process execution
+description: Resume a failed execution after correcting the cause of the failure.
+---
+
+Restart a failed execution to retry its failed work without starting a new
+process run. The execution keeps its ID and existing process state.
+
+## Inspect and restart
+
+1. Open **Executions** in the Dashboard and review the failed execution’s
+   timeline to find where it stopped.
+2. Correct the cause of the failure. For example, restore a missing
+   configuration value before retrying a step that uses it.
+3. Use **Restart** on the execution if your permissions allow it. Then check
+   the same execution to confirm that it has progressed.
+
+You can also restart it from the command line with
+[`pforg`](/docs/reference/pforg/):
+
+```sh
+pforg executions restart <execution-id>
+```
+
+## Manual restart and automatic retries
+
+A [system step](/docs/reference/process-steps/system-steps/) can retry
+automatically according to its retry settings. Use manual restart when the
+execution has failed and you are ready to run the failed work again. Before
+retrying a step that calls an external system, check whether the previous
+attempt already made the change; restarting does not undo it.

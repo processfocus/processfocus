@@ -1,5 +1,6 @@
 import {
   and,
+  count,
   desc,
   eq,
   gt,
@@ -7,6 +8,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  max,
   or,
   sql,
 } from "drizzle-orm"
@@ -33,6 +35,7 @@ import {
   returnedRow,
   serializeNotificationPreferences,
 } from "@pf/graphql-db-operations"
+import { getRequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 
 const isActiveProviderUserRoleConflict = (error: unknown): boolean => {
@@ -55,6 +58,24 @@ export const SqliteSettingsQueriesLive = Layer.effect(
   SettingsQueries,
   Effect.gen(function* () {
     const db = yield* TypedSqliteDrizzle
+
+    // Scalar aggregation retains one row per user, including absent evidence.
+    const latestLogin = db
+      .select({ occurredAt: max(schema.auditEvent.occurredAt) })
+      .from(schema.auditEvent)
+      .where(
+        and(
+          eq(schema.auditEvent.auditKind, "login"),
+          eq(
+            sql`json_extract(${schema.auditEvent.auditDetails}, '$.actorUserId')`,
+            schema.user.id,
+          ),
+        ),
+      )
+    const lastLoggedIn =
+      sql`coalesce((${latestLogin}), ${schema.user.createdAt})`.mapWith(
+        schema.user.createdAt,
+      )
 
     const loadInvitationRoles = (invitationId: string) =>
       Effect.gen(function* () {
@@ -104,6 +125,9 @@ export const SqliteSettingsQueriesLive = Layer.effect(
       }
       if (source === InvitationSource.Process) {
         return InvitationSource.Process
+      }
+      if (source === InvitationSource.Cli) {
+        return InvitationSource.Cli
       }
       return InvitationSource.Legacy
     }
@@ -235,17 +259,52 @@ export const SqliteSettingsQueriesLive = Layer.effect(
       registrationLinkGeneration: schema.invitation.registrationLinkGeneration,
     }
 
+    const countUsers = () =>
+      db
+        .select({ count: count() })
+        .from(schema.user)
+        .where(eq(schema.user._deleted, false))
+        .pipe(Effect.map((rows) => rows[0]?.count ?? 0))
+
+    const countRoles = () =>
+      db
+        .select({ count: count() })
+        .from(schema.role)
+        .where(eq(schema.role._deleted, false))
+        .pipe(Effect.map((rows) => rows[0]?.count ?? 0))
+
+    const countOAuthProviders = () =>
+      db
+        .select({ count: count() })
+        .from(schema.oauthProvider)
+        .where(eq(schema.oauthProvider._deleted, false))
+        .pipe(Effect.map((rows) => rows[0]?.count ?? 0))
+
+    const invitationStatusFilter = (status: InvitationLifecycleStatus) =>
+      and(
+        eq(schema.invitation._deleted, false),
+        eq(schema.invitation.invitationStatus, status),
+      )
+
+    const countInvitations = (
+      status: InvitationLifecycleStatus = InvitationLifecycleStatus.Pending,
+    ) =>
+      db
+        .select({ count: count() })
+        .from(schema.invitation)
+        .where(invitationStatusFilter(status))
+        .pipe(Effect.map((rows) => rows[0]?.count ?? 0))
+
     return {
+      countUsers,
+      countRoles,
+      countOAuthProviders,
+      countInvitations,
       queryAllUsers: (page: number, limit: number) =>
         Effect.gen(function* () {
           const offset = (page - 1) * limit
 
-          // Count total users
-          const countResult = yield* db
-            .select({ count: sql<number>`count(*)` })
-            .from(schema.user)
-            .where(eq(schema.user._deleted, false))
-          const totalCount = countResult[0]?.count ?? 0
+          const totalCount = yield* countUsers()
 
           // Query users with LEFT JOIN to provider_user
           const results = yield* db
@@ -253,7 +312,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
               id: schema.user.id,
               provider: schema.user.provider,
               sub: schema.user.sub,
-              lastLoggedIn: schema.user.lastLoggedIn,
+              lastLoggedIn,
               providerUserId: schema.providerUser.id,
               providerUserName: schema.providerUser.name,
               providerUserEmail: schema.providerUser.email,
@@ -269,7 +328,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
             .where(eq(schema.user._deleted, false))
             // Secondary key keeps offset pagination identity-stable when
             // lastLoggedIn values tie (required for Access Snapshot paging).
-            .orderBy(desc(schema.user.lastLoggedIn), schema.user.id)
+            .orderBy(desc(lastLoggedIn), schema.user.id)
             .limit(limit)
             .offset(offset)
 
@@ -293,14 +352,8 @@ export const SqliteSettingsQueriesLive = Layer.effect(
         Effect.gen(function* () {
           const offset = (page - 1) * limit
 
-          // Count total providers
-          const countResult = yield* db
-            .select({ count: sql<number>`count(*)` })
-            .from(schema.oauthProvider)
-            .where(eq(schema.oauthProvider._deleted, false))
-          const totalCount = countResult[0]?.count ?? 0
+          const totalCount = yield* countOAuthProviders()
 
-          // Query providers
           const results = yield* db
             .select({
               id: schema.oauthProvider.id,
@@ -330,21 +383,12 @@ export const SqliteSettingsQueriesLive = Layer.effect(
       ) =>
         Effect.gen(function* () {
           const offset = (page - 1) * limit
-          const statusFilter = and(
-            eq(schema.invitation._deleted, false),
-            eq(schema.invitation.invitationStatus, status),
-          )
-
-          const countResult = yield* db
-            .select({ count: sql<number>`count(*)` })
-            .from(schema.invitation)
-            .where(statusFilter)
-          const totalCount = countResult[0]?.count ?? 0
+          const totalCount = yield* countInvitations(status)
 
           const paginatedInvitations = yield* db
             .select(invitationSelect)
             .from(schema.invitation)
-            .where(statusFilter)
+            .where(invitationStatusFilter(status))
             .orderBy(schema.invitation.email)
             .limit(limit)
             .offset(offset)
@@ -457,7 +501,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
               id: schema.user.id,
               provider: schema.user.provider,
               sub: schema.user.sub,
-              lastLoggedIn: schema.user.lastLoggedIn,
+              lastLoggedIn,
               providerUserId: schema.providerUser.id,
               providerUserEmail: schema.providerUser.email,
               providerUserName: schema.providerUser.name,
@@ -543,6 +587,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
           const results = yield* db
             .select({
               id: schema.providerUser.id,
+              provider: schema.user.provider,
               email: schema.providerUser.email,
               name: schema.providerUser.name,
               firstName: schema.providerUser.firstName,
@@ -551,6 +596,13 @@ export const SqliteSettingsQueriesLive = Layer.effect(
                 schema.userSettings.notificationPreference,
             })
             .from(schema.providerUser)
+            .innerJoin(
+              schema.user,
+              and(
+                eq(schema.user.id, schema.providerUser.userId),
+                eq(schema.user._deleted, false),
+              ),
+            )
             .leftJoin(
               schema.userSettings,
               and(
@@ -596,6 +648,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
 
           return {
             id: r.id,
+            provider: r.provider,
             email: r.email ?? "",
             name: r.name ?? "",
             firstName: r.firstName ?? "",
@@ -603,6 +656,28 @@ export const SqliteSettingsQueriesLive = Layer.effect(
             roleIds: roleResults.map((rr) => rr.roleId),
             notificationPreferences,
           }
+        }),
+
+      updateProviderUserNames: (
+        providerUserId: string,
+        names: { firstName: string; lastName: string; name: string },
+        updatedBy: string,
+      ) =>
+        Effect.gen(function* () {
+          const now = yield* getRequestTime()
+          yield* db
+            .update(schema.providerUser)
+            .set({
+              ...names,
+              updatedAt: now,
+              updatedBy,
+            })
+            .where(
+              and(
+                eq(schema.providerUser.id, providerUserId),
+                eq(schema.providerUser._deleted, false),
+              ),
+            )
         }),
 
       queryAllRoles: () =>
@@ -647,11 +722,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
         Effect.gen(function* () {
           const offset = (page - 1) * limit
 
-          const countResult = yield* db
-            .select({ count: sql<number>`count(*)` })
-            .from(schema.role)
-            .where(eq(schema.role._deleted, false))
-          const totalCount = countResult[0]?.count ?? 0
+          const totalCount = yield* countRoles()
 
           const results = yield* db
             .select({
@@ -1055,7 +1126,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
       ) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now
-          const expiresAt = DateTime.unsafeMake(input.expiresAt)
+          const expiresAt = DateTime.makeUnsafe(input.expiresAt)
 
           const linkStatePredicate = input.requireActiveLink
             ? and(
@@ -1142,7 +1213,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
 
       queryLiveRegistrationLink: (invitationId: string, now: Date) =>
         Effect.gen(function* () {
-          const nowUtc = DateTime.unsafeMake(now)
+          const nowUtc = DateTime.makeUnsafe(now)
           const results = yield* db
             .select({
               invitationId: schema.invitation.id,
@@ -1421,7 +1492,7 @@ export const SqliteSettingsQueriesLive = Layer.effect(
             })
             .returning({ id: schema.providerUserRole.id })
             .pipe(
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 isActiveProviderUserRoleConflict(error)
                   ? Effect.succeed([] as Array<{ id: string }>)
                   : Effect.fail(error),

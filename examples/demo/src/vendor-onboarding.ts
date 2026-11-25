@@ -1,5 +1,5 @@
-import { Schema as ES } from "effect"
 import { Form, type OrgUnit, Process, type Role } from "@pf/process"
+import { approveVendorForm, submitVendorForm } from "./vendor-onboarding-forms"
 
 export class VendorOnboarding extends Process {
   constructor(
@@ -13,22 +13,26 @@ export class VendorOnboarding extends Process {
       purpose: "Collect documents and approvals for new vendors",
     })
 
-    // Steps
     const submit_vendor = new Form(this, "Submit vendor", {
       name: "Submit vendor information",
-      form: () => ({
-        vendor_name: ES.String,
-      }),
+      form: submitVendorForm,
+      browser: {
+        entrypoint: "src/vendor-onboarding-forms.ts",
+        exportName: "submitVendorForm",
+      },
       role: employeeRole,
     })
 
     const approve_vendor = new Form(this, "Approve vendor", {
       name: "Approve vendor onboarding",
-      form: () => ({}),
+      form: approveVendorForm,
+      browser: {
+        entrypoint: "src/vendor-onboarding-forms.ts",
+        exportName: "approveVendorForm",
+      },
       role: managerRole,
     })
 
-    // Flow
     this.start(submit_vendor).end(approve_vendor)
   }
 }

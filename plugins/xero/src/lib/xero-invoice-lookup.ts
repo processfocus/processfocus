@@ -23,9 +23,7 @@ export const InvoiceDirectory = Schema.Struct({
 })
 export type InvoiceDirectory = typeof InvoiceDirectory.Type
 
-export class XeroInvoiceLookup extends Context.Tag(
-  "@processfocus/plugin-xero/XeroInvoiceLookup",
-)<
+export class XeroInvoiceLookup extends Context.Service<
   XeroInvoiceLookup,
   {
     /** Includes all contacts and ACCREC invoices containing the reference text. */
@@ -34,4 +32,4 @@ export class XeroInvoiceLookup extends Context.Tag(
       previousReference?: string,
     ) => Effect.Effect<InvoiceDirectory, XeroInvoiceError>
   }
->() {}
+>()("@processfocus/plugin-xero/XeroInvoiceLookup") {}

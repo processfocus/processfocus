@@ -1,4 +1,3 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import {
   type SQL,
   and,
@@ -12,7 +11,8 @@ import {
   sql,
 } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   ExecutionQueries,
@@ -58,6 +58,7 @@ export const SqliteExecutionQueriesLive = Layer.effect(
             stepName: schema.step.name,
             stepPath: schema.step.path,
             completed: schema.toDo._deleted,
+            interruptedAt: schema.toDo.interruptedAt,
             failureReason: schema.toDo.failureReason,
             notStartedReason: schema.toDo.notStartedReason,
             correctionRequiredAt: sql<
@@ -130,7 +131,35 @@ export const SqliteExecutionQueriesLive = Layer.effect(
           .where(inArray(schema.toDo.processExecutionId, executionIds))
           .orderBy(schema.toDo.updatedAt)
 
+        const deadlines = yield* db
+          .select({
+            id: schema.taskDeadline.id,
+            ownerTodoId: schema.taskDeadline.ownerToDoId,
+            name: schema.taskDeadline.deadlineName,
+            dueAt: schema.taskDeadline.scheduledAt,
+            triggeredAt: schema.taskDeadline.triggeredAt,
+            disarmedAt: schema.taskDeadline.disarmedAt,
+          })
+          .from(schema.taskDeadline)
+          .innerJoin(
+            schema.toDo,
+            eq(schema.taskDeadline.ownerToDoId, schema.toDo.id),
+          )
+          .where(inArray(schema.toDo.processExecutionId, executionIds))
         return rows.map((row) => ({
+          deadlines: deadlines
+            .filter((deadline) => deadline.ownerTodoId === row.todoId)
+            .map((deadline) => ({
+              id: deadline.id,
+              name: deadline.name,
+              dueAt: DateTime.formatIso(deadline.dueAt),
+              triggeredAt: deadline.triggeredAt
+                ? DateTime.formatIso(deadline.triggeredAt)
+                : null,
+              disarmedAt: deadline.disarmedAt
+                ? DateTime.formatIso(deadline.disarmedAt)
+                : null,
+            })),
           executionId: row.executionId,
           updatedBy: row.updatedBy,
           todoId: row.todoId,
@@ -138,6 +167,7 @@ export const SqliteExecutionQueriesLive = Layer.effect(
           stepName: row.stepName,
           stepPath: row.stepPath,
           completed: row.completed,
+          interrupted: row.interruptedAt !== null,
           failureReason: row.failureReason,
           notStartedReason: row.notStartedReason,
           correctionRequiredAt: row.correctionRequiredAt,
@@ -179,16 +209,38 @@ export const SqliteExecutionQueriesLive = Layer.effect(
 
     /**
      * Builds and executes the execution query.
-     * @param whereClause - The WHERE clause to apply (checkpoint filter or id filter)
+     * @param whereClause - Optional checkpoint or list filter
      * @param limit - Optional limit for the query
      */
     const queryExecutions = (options: {
-      readonly whereClause: SQL | undefined
+      readonly whereClause?: SQL | undefined
+      readonly executionIds?: string[]
       readonly limit?: number | undefined
       readonly offset?: number | undefined
       readonly newestFirst?: boolean | undefined
     }): Effect.Effect<ExecutionRow[], SqlError> =>
       Effect.gen(function* () {
+        // ID lookups still need the full duration range for each requested Process,
+        // but should not aggregate history for unrelated Processes.
+        const executionIdFilter =
+          options.executionIds === undefined
+            ? undefined
+            : inArray(schema.processExecution.id, options.executionIds)
+        const requestedProcessIds =
+          executionIdFilter === undefined
+            ? undefined
+            : db
+                .select({ processId: schema.processState.processId })
+                .from(schema.processExecution)
+                .innerJoin(
+                  schema.processState,
+                  eq(
+                    schema.processExecution.processStateId,
+                    schema.processState.id,
+                  ),
+                )
+                .where(executionIdFilter)
+
         // CTE for duration stats - uses stored business_duration from completed executions
         // business_duration is calculated and stored when execution completes
         const durationStats = db.$with("duration_stats").as(
@@ -216,8 +268,12 @@ export const SqliteExecutionQueriesLive = Layer.effect(
               and(
                 isNotNull(schema.processExecution.finishedAt),
                 isNotNull(schema.processExecution.businessDuration),
-                eq(schema.processExecution._deleted, false),
-                eq(schema.processState._deleted, false),
+                // Keep the active-execution partial index eligible on Turso.
+                eq(schema.processExecution._deleted, sql`0`),
+                eq(schema.processState._deleted, sql`0`),
+                requestedProcessIds === undefined
+                  ? undefined
+                  : inArray(schema.processState.processId, requestedProcessIds),
               ),
             )
             .groupBy(schema.processState.processId),
@@ -270,8 +326,11 @@ export const SqliteExecutionQueriesLive = Layer.effect(
             startStepName: startStep.name,
             startStepPath: startStep.path,
             startStepRoleId: startStepRole.id,
+            // Keep `_deleted = 0` written directly in the SQL to use the partial
+            // index. `= false` causes a full table scan, as does `= ?` with a
+            // zero parameter on Turso: https://github.com/tursodatabase/turso/issues/9345
             systemStartCompleted:
-              sql<boolean>`EXISTS (SELECT 1 FROM ${schema.completedJob} WHERE ${schema.completedJob.queue} = 'system-step-execution' AND ${schema.completedJob.jobId} = 'start-' || ${schema.processExecution.id} AND ${schema.completedJob._deleted} = false)`.mapWith(
+              sql<boolean>`EXISTS (SELECT 1 FROM ${schema.completedJob} WHERE ${schema.completedJob.queue} = 'system-step-execution' AND ${schema.completedJob.jobId} = 'start-' || ${schema.processExecution.id} AND ${schema.completedJob._deleted} = 0)`.mapWith(
                 Boolean,
               ),
             startStepRoleName: startStepRole.name,
@@ -289,6 +348,8 @@ export const SqliteExecutionQueriesLive = Layer.effect(
               ),
             // Started by provider user info
             startedByEmail: schema.providerUser.email,
+            startedByProvider: schema.user.provider,
+            startedBySubject: schema.user.sub,
             createdBy: schema.processExecution.createdBy,
             startedById: schema.providerUser.id,
             startedByFirstName: schema.providerUser.firstName,
@@ -335,7 +396,7 @@ export const SqliteExecutionQueriesLive = Layer.effect(
             schema.providerUser,
             and(
               eq(schema.user.id, schema.providerUser.userId),
-              eq(schema.providerUser._deleted, false),
+              eq(schema.providerUser._deleted, sql`0`),
             ),
           )
           .leftJoin(
@@ -353,7 +414,7 @@ export const SqliteExecutionQueriesLive = Layer.effect(
             durationStats,
             eq(schema.processState.processId, durationStats.processId),
           )
-          .where(options.whereClause)
+          .where(and(executionIdFilter, options.whereClause))
 
         const orderedQuery = options.newestFirst
           ? baseQuery.orderBy(
@@ -420,6 +481,10 @@ export const SqliteExecutionQueriesLive = Layer.effect(
               row.startStepExternalParticipantEmail,
             processStateCreatedAt: row.processStateCreatedAt,
             startedByEmail: row.startedByEmail,
+            startedByServiceAccountId:
+              row.startedByProvider === "client_credentials"
+                ? row.startedBySubject
+                : null,
             createdBy: row.createdBy,
             startedById: row.startedById,
             startedByFirstName: row.startedByFirstName,
@@ -514,14 +579,12 @@ export const SqliteExecutionQueriesLive = Layer.effect(
       getExecutions: (ids: string[]) =>
         ids.length === 0
           ? Effect.succeed([])
-          : queryExecutions({
-              whereClause: inArray(schema.processExecution.id, ids),
-            }),
+          : queryExecutions({ executionIds: ids }),
 
       listExecutions: (query) =>
         queryExecutions({
           whereClause: and(
-            eq(schema.processExecution._deleted, false),
+            eq(schema.processExecution._deleted, sql`0`),
             query.processPath != null
               ? eq(schema.process.path, query.processPath)
               : undefined,
@@ -532,6 +595,60 @@ export const SqliteExecutionQueriesLive = Layer.effect(
         }),
 
       getTodosForExecutions: queryTodosForExecutions,
+
+      getUnfinishedWorkForExecutions: (executionIds) =>
+        Effect.gen(function* () {
+          if (executionIds.length === 0)
+            return { todos: [], scheduledFlows: [] }
+          const source = alias(schema.step, "source_step")
+          const target = alias(schema.step, "target_step")
+          const todos = yield* db
+            .select({
+              executionId: schema.toDo.processExecutionId,
+              stepPath: schema.step.path,
+              failureReason: schema.toDo.failureReason,
+            })
+            .from(schema.toDo)
+            .innerJoin(schema.flow, eq(schema.toDo.flowId, schema.flow.id))
+            .innerJoin(
+              schema.step,
+              eq(schema.flow.targetStepId, schema.step.id),
+            )
+            .where(
+              and(
+                inArray(schema.toDo.processExecutionId, executionIds),
+                eq(schema.toDo._deleted, false),
+              ),
+            )
+          const scheduledFlows = yield* db
+            .select({
+              executionId: schema.scheduledFlow.processExecutionId,
+              sourceStepPath: source.path,
+              targetStepPath: target.path,
+            })
+            .from(schema.scheduledFlow)
+            .innerJoin(
+              source,
+              and(
+                eq(schema.scheduledFlow.sourceStepId, source.id),
+                eq(source._deleted, false),
+              ),
+            )
+            .leftJoin(
+              target,
+              and(
+                eq(schema.scheduledFlow.targetStepId, target.id),
+                eq(target._deleted, false),
+              ),
+            )
+            .where(
+              and(
+                inArray(schema.scheduledFlow.processExecutionId, executionIds),
+                eq(schema.scheduledFlow._deleted, false),
+              ),
+            )
+          return { todos, scheduledFlows }
+        }),
 
       getProcessStateByExecutionId,
     }

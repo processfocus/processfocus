@@ -143,12 +143,11 @@ export async function POST(
       })
     }
 
-    // Update cookies with new tokens
     await setTokenCookies(
       cookieStore,
       {
         access: result.tokens.access,
-        refresh: result.tokens.refresh,
+        ...(result.tokens.refresh ? { refresh: result.tokens.refresh } : {}),
         expiresIn: result.tokens.expiresIn,
         ...(result.tokens.refreshExpiresIn !== undefined && {
           refreshExpiresIn: result.tokens.refreshExpiresIn,
@@ -157,7 +156,6 @@ export async function POST(
       cookieNames,
     )
 
-    // Calculate expiry timestamp
     const expiresAt = Math.floor(Date.now() / 1000) + result.tokens.expiresIn
 
     return NextResponse.json(

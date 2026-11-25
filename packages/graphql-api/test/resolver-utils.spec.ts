@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect"
+import { Effect as MigratedEffect, Option, Schema } from "effect"
 import { FormPermission } from "@pf/form-schema"
 import {
   getSchemaAnnotationDeep,
@@ -26,7 +26,7 @@ describe("getSchemaAnnotationDeep", () => {
   const permission = { modify: "/Business Manager" }
 
   it("finds annotations directly on a schema AST", () => {
-    const schema = Schema.String.annotations({ [FormPermission]: permission })
+    const schema = Schema.String.annotate({ [FormPermission]: permission })
 
     const result = getSchemaAnnotationDeep(schema, FormPermission)
 
@@ -36,7 +36,7 @@ describe("getSchemaAnnotationDeep", () => {
   it("finds annotations wrapped by optional", () => {
     const schema = Schema.Struct({
       field: Schema.optional(
-        Schema.String.annotations({ [FormPermission]: permission }),
+        Schema.String.annotate({ [FormPermission]: permission }),
       ),
     })
 
@@ -46,13 +46,12 @@ describe("getSchemaAnnotationDeep", () => {
   })
 
   it("finds permission annotations on optional transformed property signatures", () => {
-    const fromInput = Schema.optionalWith(
-      Schema.NumberFromString.annotations({ [FormPermission]: permission }),
-      { default: () => 5 },
-    )
-    const fromSignature = Schema.optionalWith(Schema.NumberFromString, {
-      default: () => 5,
-    }).annotations({ [FormPermission]: permission })
+    const fromInput = Schema.NumberFromString.annotate({
+      [FormPermission]: permission,
+    }).pipe(Schema.withDecodingDefaultType(MigratedEffect.sync(() => 5)))
+    const fromSignature = Schema.NumberFromString.pipe(
+      Schema.withDecodingDefaultType(MigratedEffect.sync(() => 5)),
+    ).annotate({ [FormPermission]: permission })
     for (const field of [fromInput, fromSignature])
       expect(
         Option.getOrUndefined(getSchemaAnnotationDeep(field, FormPermission)),
@@ -60,10 +59,10 @@ describe("getSchemaAnnotationDeep", () => {
   })
 
   it("finds annotations on union branches", () => {
-    const schema = Schema.Union(
-      Schema.String.annotations({ [FormPermission]: permission }),
+    const schema = Schema.Union([
+      Schema.String.annotate({ [FormPermission]: permission }),
       Schema.Number,
-    )
+    ])
 
     const result = getSchemaAnnotationDeep(schema, FormPermission)
 
@@ -71,13 +70,8 @@ describe("getSchemaAnnotationDeep", () => {
   })
 
   it("finds permissions on the output side of property transformations", () => {
-    const field = Schema.optionalToRequired(
-      Schema.String,
-      Schema.String.annotations({ [FormPermission]: permission }),
-      {
-        decode: Option.getOrElse(() => "default"),
-        encode: Option.some,
-      },
+    const field = Schema.String.annotate({ [FormPermission]: permission }).pipe(
+      Schema.withDecodingDefaultKey(MigratedEffect.succeed("default")),
     )
 
     expect(

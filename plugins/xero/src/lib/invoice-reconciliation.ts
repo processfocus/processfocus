@@ -10,7 +10,7 @@ import {
   type IssuedSalesInvoice,
   IssuedSalesInvoice as IssuedSalesInvoiceSchema,
 } from "./identities"
-import { centsToMoney } from "./money"
+import { centsToMoney, invoiceLinesTotalCents } from "./money"
 
 export interface ReconcilableInvoice {
   readonly invoiceId: string
@@ -21,10 +21,8 @@ export interface ReconcilableInvoice {
   readonly date: string
   readonly dueDate: string
   readonly contactId: string
-  readonly itemCode: string
-  readonly unitAmount: string
+  readonly lines: IssuedSalesInvoice["lines"]
   readonly total: string
-  readonly lineCount: number
 }
 
 const MICROSOFT_JSON_DATE = /\/Date\((\d+)(?:([+-])(\d{2})(\d{2}))?\)\//
@@ -68,25 +66,39 @@ export const isMateriallyCompatibleInvoice = (
   invoice: ReconcilableInvoice,
   input: IssueAuthorisedSalesInvoiceInput,
   contactId: string,
-): boolean =>
-  invoice.contactId === contactId &&
-  invoice.type === "ACCREC" &&
-  invoice.status === "AUTHORISED" &&
-  invoice.currency === input.currency &&
-  parseXeroCalendarDate(invoice.date) === input.date &&
-  parseXeroCalendarDate(invoice.dueDate) === input.dueDate &&
-  invoice.lineCount === 1 &&
-  invoice.itemCode === input.productSku &&
-  invoice.unitAmount === input.agreedPrice &&
-  invoice.total === input.agreedPrice
+): boolean => {
+  const { lines } = input
+  return (
+    invoice.contactId === contactId &&
+    invoice.type === "ACCREC" &&
+    invoice.status === "AUTHORISED" &&
+    invoice.currency === input.currency &&
+    parseXeroCalendarDate(invoice.date) === input.date &&
+    parseXeroCalendarDate(invoice.dueDate) === input.dueDate &&
+    invoice.lines.length === lines.length &&
+    invoice.lines.every((actual, index) => {
+      const expected = lines[index]
+      return (
+        expected !== undefined &&
+        actual.itemCode === expected.productSku &&
+        actual.quantity === expected.quantity &&
+        actual.unitAmount === expected.unitAmount
+      )
+    }) &&
+    invoice.total === centsToMoney(Number(invoiceLinesTotalCents(lines)))
+  )
+}
 
 export const decodeIssuedSalesInvoice = (
   invoiceId: string,
   invoiceNumber: string,
+  lines: ReconcilableInvoice["lines"],
 ): Effect.Effect<IssuedSalesInvoice, XeroInvoiceError> =>
-  Schema.decodeUnknown(IssuedSalesInvoiceSchema)({
+  Schema.decodeUnknownEffect(IssuedSalesInvoiceSchema)({
     invoiceId,
     invoiceNumber,
+    productDescription: lines[0]?.description ?? "",
+    lines,
   }).pipe(
     Effect.mapError(() =>
       xeroMalformedResponseError("Malformed Xero invoice response"),
@@ -120,5 +132,9 @@ export const reconcileExistingInvoices = (
     return Effect.fail(xeroInvoiceIntentConflictError(input.reference))
   }
 
-  return decodeIssuedSalesInvoice(invoice.invoiceId, invoice.invoiceNumber)
+  return decodeIssuedSalesInvoice(
+    invoice.invoiceId,
+    invoice.invoiceNumber,
+    invoice.lines,
+  )
 }

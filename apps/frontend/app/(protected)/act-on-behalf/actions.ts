@@ -1,6 +1,6 @@
 "use server"
 
-import { Effect, Either, Schema } from "effect"
+import { Effect, Exit, Schema } from "effect"
 import {
   CreateDelegation,
   DelegationList,
@@ -8,8 +8,8 @@ import {
   IssuedDelegation,
   UpdateDelegation,
 } from "@/lib/auth/delegations"
-import { getIssuerUrl } from "@/lib/auth/issuer"
 import { getSessionWithToken } from "@/lib/auth/session"
+import { getGraphqlEndpoint } from "@/lib/graphql/endpoint"
 
 type Result<T> =
   | { kind: "success"; data: T }
@@ -48,7 +48,7 @@ export async function listDelegations(
   try {
     const session = await Effect.runPromise(delegationSession)
     if (session === null) return sessionDenied
-    const url = new URL(`${getIssuerUrl()}/delegations`)
+    const url = new URL("/delegations", getGraphqlEndpoint())
     if (ownerUserId !== undefined)
       url.searchParams.set(
         "ownerUserId",
@@ -82,8 +82,8 @@ export async function createDelegation(
   input: unknown,
   ownerUserId?: string,
 ): Promise<Result<typeof IssuedDelegation.Type>> {
-  const parsed = Schema.decodeUnknownEither(CreateDelegation)(input)
-  if (Either.isLeft(parsed)) {
+  const parsed = Schema.decodeUnknownExit(CreateDelegation)(input)
+  if (Exit.isFailure(parsed)) {
     return {
       kind: "error",
       message: "Enter a name and select 1, 7, or 14 days.",
@@ -92,7 +92,7 @@ export async function createDelegation(
   try {
     const session = await Effect.runPromise(delegationSession)
     if (session === null) return sessionDenied
-    const url = new URL(`${getIssuerUrl()}/delegations`)
+    const url = new URL("/delegations", getGraphqlEndpoint())
     if (ownerUserId !== undefined)
       url.searchParams.set(
         "ownerUserId",
@@ -104,7 +104,7 @@ export async function createDelegation(
         Authorization: `Bearer ${session.accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(parsed.right),
+      body: JSON.stringify(parsed.value),
       cache: "no-store",
       redirect: "error",
     })
@@ -151,8 +151,8 @@ export async function updateDelegation(
   | { kind: "verification_required" }
   | typeof sessionDenied
 > {
-  const parsed = Schema.decodeUnknownEither(UpdateDelegation)(input)
-  if (Either.isLeft(parsed)) {
+  const parsed = Schema.decodeUnknownExit(UpdateDelegation)(input)
+  if (Exit.isFailure(parsed)) {
     return {
       kind: "error",
       message: "Enter a name and select 1, 7, or 14 days for a new secret.",
@@ -162,7 +162,7 @@ export async function updateDelegation(
   try {
     const session = await Effect.runPromise(delegationSession)
     if (session === null) return sessionDenied
-    const url = new URL(`${getIssuerUrl()}/delegations`)
+    const url = new URL("/delegations", getGraphqlEndpoint())
     if (ownerUserId !== undefined)
       url.searchParams.set(
         "ownerUserId",
@@ -174,7 +174,7 @@ export async function updateDelegation(
         Authorization: `Bearer ${session.accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(parsed.right),
+      body: JSON.stringify(parsed.value),
       cache: "no-store",
       redirect: "error",
     })
@@ -233,7 +233,7 @@ export async function updateDelegation(
     }
     const body: unknown = await response.json()
     const data =
-      parsed.right.operation === "replace"
+      parsed.value.operation === "replace"
         ? Schema.decodeUnknownSync(IssuedDelegation)(body)
         : Schema.decodeUnknownSync(DelegationMetadata)(body)
     return { kind: "success", data }

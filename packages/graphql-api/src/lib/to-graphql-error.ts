@@ -1,5 +1,48 @@
-import { Cause, Option, Runtime } from "effect"
+import { Cause, Option, Predicate, Result } from "effect"
 import { GraphQLError } from "graphql"
+
+/** Classify tagged resolver failures and the serialized errors Yoga logs. */
+export const isExpectedGraphQLError = (error: unknown): boolean => {
+  if (!Predicate.isObject(error)) return false
+  const extensions = Predicate.isObject(error["extensions"])
+    ? error["extensions"]
+    : undefined
+  const code = extensions ? extensions["code"] : error["_tag"]
+  if (!extensions && typeof code !== "string") return false
+  const { http, unexpected } = extensions ?? error
+  const status = Predicate.isObject(http) ? http["status"] : undefined
+  if (
+    unexpected === true ||
+    code === "INTERNAL_SERVER_ERROR" ||
+    (typeof status === "number" && status >= 500)
+  ) {
+    return false
+  }
+  if (typeof status === "number" && status >= 400 && status < 500) return true
+
+  switch (code) {
+    case "NotAuthorized":
+    case "UNAUTHENTICATED":
+    case "BAD_REQUEST":
+    case "InputValidationError":
+    case "ExecutionIdConflictError":
+    case "InvalidRolePreparation":
+      return true
+    case "ProjectConfigAccessError": {
+      // This code also wraps backend failures; only downgrade known client misses.
+      const message = error["message"]
+      return (
+        typeof message === "string" &&
+        ((message.startsWith('Project "') &&
+          message.endsWith('" was not found.')) ||
+          message.startsWith("Stage not found in project: ") ||
+          message === "Environment not found.")
+      )
+    }
+    default:
+      return false
+  }
+}
 
 /**
  * Extensions must survive GraphQL Yoga's result serialization; lossy JSON
@@ -18,33 +61,12 @@ export const toSerializableGraphQLExtensions = (
   return JSON.parse(json) as Record<string, unknown>
 }
 
-/**
- * Extract the actual error from an Effect FiberFailure.
- * Effect wraps errors in FiberFailure when runPromise rejects.
- * Uses Runtime.isFiberFailure / FiberFailureCauseId (stable API) rather than
- * constructor-name sniffing, which can fail under minification or Effect upgrades.
- */
-export const extractErrorFromFiberFailure = (
-  fiberFailure: unknown,
-): unknown => {
-  if (!Runtime.isFiberFailure(fiberFailure)) {
-    return fiberFailure
-  }
-
-  const cause = fiberFailure[Runtime.FiberFailureCauseId]
-  // Prefer typed failures (Effect.fail), then defects (Effect.die).
-  const failure = Option.getOrUndefined(Cause.failureOption(cause))
-  if (failure !== undefined) {
-    return failure
-  }
-  const defect = Option.getOrUndefined(Cause.dieOption(cause))
-  if (defect !== undefined) {
-    return defect
-  }
-
-  // Empty / unextractable cause: leave FiberFailure for toGraphQLError to treat
-  // as opaque so pretty-printed SQL never reaches the client via .message.
-  return fiberFailure
+/** Extract typed failures and defects while retaining opaque interruption causes. */
+export const extractErrorFromCause = (cause: Cause.Cause<unknown>): unknown => {
+  const failure = Cause.findErrorOption(cause)
+  if (Option.isSome(failure)) return failure.value
+  const defect = Cause.findDefect(cause)
+  return Result.isSuccess(defect) ? defect.success : cause
 }
 
 /**
@@ -52,8 +74,8 @@ export const extractErrorFromFiberFailure = (
  * SqlError is always redacted so SQL internals never reach the client.
  */
 export const toGraphQLError = (error: unknown): GraphQLError => {
-  // FiberFailure messages embed Cause.pretty output (often SQL). Never forward.
-  if (Runtime.isFiberFailure(error)) {
+  // Never serialize an unextracted cause, which may contain private SQL details.
+  if (Cause.isCause(error)) {
     return new GraphQLError("Internal server error", {
       extensions: {
         code: "INTERNAL_ERROR",

@@ -1,9 +1,16 @@
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { Effect } from "effect"
+import { NodeServices } from "@effect/platform-node"
+import { Deferred, Effect, Exit } from "effect"
 import {
   ORGANISATION_DEPLOY_MANIFEST_FILE,
   ORGANISATION_DEPLOY_MANIFEST_VERSION,
@@ -13,7 +20,7 @@ import type {
   DeployProgressEventSourceConfig,
 } from "../src/utils/deploy-progress-subscription.types"
 import { runPfcliInProcess, useSerializedTestState } from "./test-helpers"
-import { afterEach, describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it, spyOn } from "bun:test"
 
 const WORKSPACE_ROOT = resolve(__dirname, "..", "..", "..")
 const PFCLI = join(WORKSPACE_ROOT, "cli/pfcli/src/main.ts")
@@ -45,7 +52,11 @@ type RunDeploy = (
   orgPath: string,
   projectId: string,
   environmentId: string,
-  options?: { waitForCompletion?: boolean },
+  options?: {
+    waitForCompletion?: boolean
+    executionId?: string
+    waitTimeoutMs?: number
+  },
   dependencies?: {
     createExecutionEventSource?: (
       config: ExecutionEventSourceConfig,
@@ -100,7 +111,11 @@ const runDeployEffect = async (
   orgPath: string,
   projectId: string,
   environmentId: string,
-  options?: { waitForCompletion?: boolean },
+  options?: {
+    waitForCompletion?: boolean
+    executionId?: string
+    waitTimeoutMs?: number
+  },
   dependencies?: Parameters<RunDeploy>[4],
 ) =>
   (await loadRunDeploy())(orgPath, projectId, environmentId, options, {
@@ -233,9 +248,12 @@ const runCliDeploy = (
   )
 
 interface DeployFetchMockOptions {
+  uploadUrl?: string
   subscriptionTransportKind?: "GRAPHQL_WS" | "APPSYNC_EVENTS"
   appSyncEventsHttpHost?: string | null
   onStartOperationsDeploy?: () => void
+  activeDeploy?: { executionId: string; status: string }
+  admissionConflict?: boolean
   failDnsRecordsRequest?: boolean
   dnsRecords?: {
     customDomain?: string | null
@@ -252,13 +270,18 @@ const createDeployFetchMock = (options: DeployFetchMockOptions = {}) =>
 
     const body = JSON.parse(String(init?.body)) as { query: string }
 
+    if (body.query.includes("activeDeploy"))
+      return Response.json({
+        data: { activeDeploy: options.activeDeploy ?? null },
+      })
+
     if (body.query.includes("requestUploadUrl")) {
       return new Response(
         JSON.stringify({
           data: {
             requestUploadUrl: {
               fileId: "file-1",
-              uploadUrl: "http://upload.test/put",
+              uploadUrl: options.uploadUrl ?? "http://upload.test/put",
               expiresAt: new Date(Date.now() + 60_000).toISOString(),
             },
           },
@@ -283,6 +306,19 @@ const createDeployFetchMock = (options: DeployFetchMockOptions = {}) =>
 
     if (body.query.includes("startOperationsDeploy")) {
       options.onStartOperationsDeploy?.()
+      if (options.admissionConflict)
+        return Response.json({
+          errors: [
+            {
+              message:
+                "Deployment already active for project 1000-2000-3000, environment dev: pex-winner. Check status before retrying.",
+              extensions: {
+                code: "ProcessActivationConflict",
+                executionId: "pex-winner",
+              },
+            },
+          ],
+        })
       return new Response(
         JSON.stringify({
           data: {
@@ -350,9 +386,13 @@ describe("pfcli deploy", () => {
   const originalFetch = globalThis.fetch
   const originalPath = process.env["PATH"]
   const originalCredPath = process.env["PFCLI_CREDENTIALS_PATH"]
+  const originalReceiptPath = process.env["PFCLI_START_RECEIPT_PATH"]
   const originalRuntimeRoot = process.env["PF_RUNTIME_ROOT"]
 
   afterEach(() => {
+    if (originalReceiptPath === undefined)
+      delete process.env["PFCLI_START_RECEIPT_PATH"]
+    else process.env["PFCLI_START_RECEIPT_PATH"] = originalReceiptPath
     for (const p of tempPaths) {
       rmSync(p, { recursive: true, force: true })
     }
@@ -379,6 +419,220 @@ describe("pfcli deploy", () => {
     "_tag" in value &&
     "message" in value
 
+  it.each([false, true])(
+    "reports the active execution before building or uploading (admission race: %s)",
+    async (admissionConflict) => {
+      const orgPath = createTempOrg()
+      tempPaths.push(orgPath)
+      process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+        orgPath,
+        "http://mocked.test",
+        new Date(Date.now() + 60_000).toISOString(),
+      )
+      let builds = 0
+      let uploads = 0
+      let starts = 0
+      const fetchMock = createDeployFetchMock({
+        ...(admissionConflict
+          ? { admissionConflict }
+          : { activeDeploy: { executionId: "pex-winner", status: "RUNNING" } }),
+        onStartOperationsDeploy: () => {
+          starts++
+        },
+      })
+      globalThis.fetch = (async (input, init) => {
+        if (init?.method === "PUT") uploads++
+        return fetchMock(input, init)
+      }) as typeof fetch
+      const error = await Effect.runPromise(
+        (
+          await runDeployEffect(
+            orgPath,
+            "1000-2000-3000",
+            "dev",
+            { waitForCompletion: false },
+            {
+              buildOrg: () =>
+                Effect.sync(() => {
+                  builds++
+                }),
+            },
+          )
+        ).pipe(Effect.flip),
+      )
+      expect(error).toMatchObject({
+        message:
+          "Deployment already active for project 1000-2000-3000, environment dev: pex-winner. Check status before retrying.",
+      })
+      expect([builds, uploads, starts]).toEqual(
+        admissionConflict ? [1, 1, 1] : [0, 0, 0],
+      )
+    },
+  )
+
+  it("checks deployment status without an org directory and distinguishes errors from idle", async () => {
+    const orgPath = createTempOrg()
+    tempPaths.push(orgPath)
+    process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+      orgPath,
+      "http://mocked.test",
+      new Date(Date.now() + 60_000).toISOString(),
+    )
+    const command = [
+      "deploy",
+      "status",
+      "--project",
+      "project-123",
+      "--env",
+      "dev",
+    ]
+    globalThis.fetch = createDeployFetchMock()
+    const idle = await runPfcliInProcess(command)
+    expect(idle.status).toBe(0)
+    expect(idle.output).toContain(
+      "No deployment is active for project project-123, environment dev.",
+    )
+
+    globalThis.fetch = createDeployFetchMock({
+      activeDeploy: { executionId: "pex-running", status: "RUNNING" },
+    })
+    const active = await runPfcliInProcess(command)
+    expect(active.status).toBe(0)
+    expect(active.output).toContain("pex-running (RUNNING)")
+
+    globalThis.fetch = Object.assign(
+      async () => new Response("unavailable", { status: 503 }),
+      { preconnect: originalFetch.preconnect },
+    )
+    const failure = await runPfcliInProcess(command)
+    expect(failure.status).toBe(1)
+    expect(failure.output).not.toContain("No deployment is active")
+  })
+
+  it.each([true, false])(
+    "reconciles a terminal receipt while another deployment is active (receipt exists: %s)",
+    async (receiptExists) => {
+      const orgPath = createTempOrg()
+      tempPaths.push(orgPath)
+      process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+        orgPath,
+        "http://mocked.test",
+        new Date(Date.now() + 60_000).toISOString(),
+      )
+      const fetchMock = createDeployFetchMock({
+        activeDeploy: { executionId: "pex-newer", status: "RUNNING" },
+      })
+      globalThis.fetch = (async (input, init) => {
+        if (init?.method === "PUT")
+          throw new Error("Receipt reconciliation must not upload")
+        if (String(init?.body).includes("deployReceipt"))
+          return Response.json({
+            data: {
+              deployReceipt: receiptExists ? "SUCCEEDED" : null,
+            },
+          })
+        if (String(init?.body).includes("startOperationsDeploy"))
+          throw new Error("Receipt reconciliation must not start a deployment")
+        return fetchMock(input, init)
+      }) as typeof fetch
+
+      const result = await Effect.runPromise(
+        (
+          await runDeployEffect(
+            orgPath,
+            "1000-2000-3000",
+            "dev",
+            { waitForCompletion: false, executionId: "pex-earlier" },
+            {
+              buildOrg: () =>
+                Effect.die("Receipt reconciliation must not build"),
+            },
+          )
+        ).pipe(Effect.result),
+      )
+      if (receiptExists) {
+        expect(result._tag).toBe("Success")
+      } else {
+        expect(result).toMatchObject({
+          failure: { message: expect.stringContaining("pex-newer") },
+        })
+      }
+    },
+  )
+
+  it("blocks retry after interrupting the local wait for an accepted deploy", async () => {
+    const orgPath = createTempOrg()
+    tempPaths.push(orgPath)
+    process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+      orgPath,
+      "http://mocked.test",
+      new Date(Date.now() + 60_000).toISOString(),
+    )
+    const waiting = await Effect.runPromise(Deferred.make<void>())
+    let starts = 0
+    const fetchMock = () =>
+      createDeployFetchMock({
+        ...(starts === 0
+          ? {}
+          : { activeDeploy: { executionId: "exec-1", status: "RUNNING" } }),
+        onStartOperationsDeploy: () => {
+          starts++
+        },
+      })
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) =>
+        fetchMock()(input, init),
+      { preconnect: originalFetch.preconnect },
+    )
+    const controller = new AbortController()
+    const source = silentSource<ExecutionSnapshot>()
+    const first = Effect.runPromiseExit(
+      await runDeployEffect(
+        orgPath,
+        "project-123",
+        "dev",
+        {},
+        {
+          createExecutionEventSource: () =>
+            Effect.succeed({
+              ...source,
+              [Symbol.asyncIterator]() {
+                const iterator = source[Symbol.asyncIterator]()
+                return {
+                  next: () =>
+                    Effect.runPromise(
+                      Deferred.succeed(waiting, undefined),
+                    ).then(() => iterator.next()),
+                }
+              },
+            }),
+        },
+      ),
+      { signal: controller.signal },
+    )
+    try {
+      await Effect.runPromise(
+        Deferred.await(waiting).pipe(Effect.timeout("2 seconds")),
+      )
+      controller.abort()
+      expect(Exit.isFailure(await first)).toBe(true)
+      const retry = await Effect.runPromise(
+        (
+          await runDeployEffect(orgPath, "project-123", "dev", {
+            waitForCompletion: false,
+          })
+        ).pipe(Effect.flip),
+      )
+      expect(retry).toMatchObject({
+        message: expect.stringContaining("exec-1"),
+      })
+      expect(starts).toBe(1)
+    } finally {
+      controller.abort()
+      await first
+    }
+  })
+
   it("fails when credentials are missing", () => {
     const orgPath = createTempOrg()
     tempPaths.push(orgPath)
@@ -390,6 +644,118 @@ describe("pfcli deploy", () => {
     const output = result.stdout + result.stderr
     expect(output).toContain('Run "pfcli auth login"')
   })
+
+  it.each(["source", "distribution"])(
+    "builds embed origins for consecutive %s deploys",
+    async (mode) => {
+      const orgPath = mkdtempSync(join(__dirname, ".deploy-build-"))
+      tempPaths.push(orgPath)
+      mkdirSync(join(orgPath, "src"))
+      writeFileSync(
+        join(orgPath, "src/form.ts"),
+        `import { Schema } from "effect"
+export const form = Schema.Struct({ email: Schema.String })
+`,
+      )
+      writeFileSync(
+        join(orgPath, "src/index.ts"),
+        `import { Form, Organisation, Process, Role } from "@pf/process"
+import { form } from "./form"
+export const org = new Organisation({ name: "Deploy environment" })
+const role = new Role(org, "Staff", { name: "Staff" })
+const process = new Process(org, "Enquiry", { name: "Enquiry", purpose: "Enquiry" })
+const entry = new Form(process, "Submit", {
+  name: "Submit", role, form,
+  browser: { entrypoint: "src/form.ts", exportName: "form" },
+  embed: {
+    externalParticipantEmailField: "email",
+    thankYou: "Thank you",
+    sites: [globalThis.process.env["PF_ENV"] === "dev" ? "https://staging.example.com" : "https://www.example.com"],
+  },
+})
+process.start(entry).end()
+`,
+      )
+      const server = Bun.serve({
+        port: 0,
+        hostname: "127.0.0.1",
+        async fetch(request) {
+          return createDeployFetchMock({
+            uploadUrl: `${new URL(request.url).origin}/put`,
+          })(request.url, {
+            method: request.method,
+            body: await request.text(),
+          })
+        },
+      })
+      writeFileSync(
+        join(orgPath, ".graphql-port.json"),
+        JSON.stringify({ port: server.port }),
+      )
+      process.env["PF_RUNTIME_ROOT"] = orgPath
+      process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+        orgPath,
+        server.url.origin,
+        new Date(Date.now() + 60_000).toISOString(),
+      )
+      globalThis.fetch = createDeployFetchMock()
+      const originalEnvironment = process.env["PF_ENV"]
+      const runDeploy = await loadRunDeploy()
+      try {
+        process.env["PF_ENV"] = "wrong-environment"
+        for (const [environment, origin] of [
+          ["dev", "https://staging.example.com"],
+          ["prd", "https://www.example.com"],
+        ]) {
+          if (mode === "source") {
+            await Effect.runPromise(
+              runDeploy(orgPath, "project-123", environment!, {
+                waitForCompletion: false,
+              }).pipe(Effect.provide(NodeServices.layer)),
+            )
+          } else {
+            const child = Bun.spawn(
+              [
+                process.execPath,
+                join(WORKSPACE_ROOT, "cli/pfcli/dist/main.mjs"),
+                "deploy",
+                orgPath,
+                "--project",
+                "project-123",
+                "--env",
+                environment!,
+                "--no-wait",
+              ],
+              { env: { ...process.env }, stdout: "pipe", stderr: "pipe" },
+            )
+            const [exitCode, stdout, stderr] = await Promise.all([
+              child.exited,
+              new Response(child.stdout).text(),
+              new Response(child.stderr).text(),
+            ])
+            expect({
+              exitCode,
+              diagnostics: exitCode === 0 ? "" : stdout + stderr,
+            }).toEqual({ exitCode: 0, diagnostics: "" })
+          }
+          expect(
+            JSON.parse(
+              readFileSync(
+                join(orgPath, "dist/frontend-manifest.json"),
+                "utf8",
+              ),
+            ),
+          ).toMatchObject({ embed: { entries: [{ sites: [origin] }] } })
+          expect(process.env["PF_ENV"]).toBe("wrong-environment")
+        }
+      } finally {
+        server.stop(true)
+        if (originalEnvironment === undefined) delete process.env["PF_ENV"]
+        else process.env["PF_ENV"] = originalEnvironment
+      }
+    },
+    120_000,
+  )
 
   it("shows a clear error when required deploy options are missing", async () => {
     const orgPath = createTempOrg()
@@ -409,7 +775,7 @@ describe("pfcli deploy", () => {
 
     expect(result.status).not.toBe(0)
     const output = result.output
-    expect(output).toContain("Missing argument <org-path>")
+    expect(output).toContain("Missing required argument: org-path")
     expect(output).not.toContain('"_tag":"MissingValue"')
     expect(output).not.toContain("ERROR (#")
   })
@@ -504,6 +870,9 @@ describe("pfcli deploy", () => {
 
         const body = JSON.parse(String(init?.body)) as { query: string }
 
+        if (body.query.includes("activeDeploy"))
+          return Response.json({ data: { activeDeploy: null } })
+
         if (body.query.includes("requestUploadUrl")) {
           return new Response(
             JSON.stringify({
@@ -564,8 +933,13 @@ describe("pfcli deploy", () => {
     process.env["PFCLI_CREDENTIALS_PATH"] = credentialsPath
     process.env["PATH"] = `${fakeZipBin}:${process.env["PATH"] ?? ""}`
 
-    globalThis.fetch = (async () =>
-      new Response("unauthorized", { status: 401 })) as unknown as typeof fetch
+    const fetchMock = createDeployFetchMock()
+    globalThis.fetch = (async (input, init) => {
+      const { query } = JSON.parse(String(init?.body))
+      return query.includes("requestUploadUrl")
+        ? new Response("unauthorized", { status: 401 })
+        : fetchMock(input, init)
+    }) as typeof fetch
 
     const error: unknown = await Effect.runPromise(
       (
@@ -599,30 +973,16 @@ describe("pfcli deploy", () => {
     process.env["PFCLI_CREDENTIALS_PATH"] = credentialsPath
     process.env["PATH"] = `${fakeZipBin}:${process.env["PATH"] ?? ""}`
 
-    let graphqlCallCount = 0
+    const fetchMock = createDeployFetchMock()
     globalThis.fetch = (async (
-      _input: string | URL | Request,
+      input: string | URL | Request,
       init?: RequestInit,
     ) => {
-      if (init?.method === "PUT") {
-        return new Response("", { status: 200 })
-      }
-      graphqlCallCount += 1
-      if (graphqlCallCount === 1) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              requestUploadUrl: {
-                fileId: "file-1",
-                uploadUrl: "http://upload.test/put",
-                expiresAt: new Date(Date.now() + 60_000).toISOString(),
-              },
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        )
-      }
-      return new Response("unauthorized", { status: 401 })
+      const query =
+        init?.method === "POST" ? JSON.parse(String(init.body)).query : ""
+      return query.includes("startOperationsDeploy")
+        ? new Response("unauthorized", { status: 401 })
+        : fetchMock(input, init)
     }) as unknown as typeof fetch
 
     const error: unknown = await Effect.runPromise(
@@ -643,6 +1003,8 @@ describe("pfcli deploy", () => {
   it("uploads artifact and starts deployment on happy path", async () => {
     const testDir = mkdtempSync(join(tmpdir(), "pfcli-deploy-test-"))
     tempPaths.push(testDir)
+    const receiptPath = join(testDir, "start.json")
+    process.env["PFCLI_START_RECEIPT_PATH"] = receiptPath
 
     const orgPath = createTempOrg()
     tempPaths.push(orgPath)
@@ -672,8 +1034,22 @@ describe("pfcli deploy", () => {
 
       const body = JSON.parse(String(init?.body)) as {
         query: string
-        variables?: { documentStore?: string; stepPath?: string }
+        variables?: {
+          documentStore?: string
+          stepPath?: string
+          executionId?: string
+        }
       }
+
+      if (body.query.includes("activeDeploy"))
+        return Response.json({
+          data: {
+            activeDeploy: {
+              executionId: "pex-durable-canary-receipt",
+              status: "RUNNING",
+            },
+          },
+        })
 
       if (body.query.includes("requestUploadUrl")) {
         expect(body.variables?.stepPath).toBe(
@@ -696,6 +1072,11 @@ describe("pfcli deploy", () => {
 
       if (body.query.includes("startOperationsDeploy")) {
         startCalled = true
+        expect(body.variables?.executionId).toBe("pex-durable-canary-receipt")
+        expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual({
+          executionId: "pex-durable-canary-receipt",
+          attempted: true,
+        })
         return new Response(
           JSON.stringify({
             data: {
@@ -717,7 +1098,7 @@ describe("pfcli deploy", () => {
         orgPath,
         "project-123",
         "env-456",
-        { waitForCompletion: false },
+        { waitForCompletion: false, executionId: "pex-durable-canary-receipt" },
         { prepareArtifact: undefined },
       ),
     )
@@ -1052,6 +1433,12 @@ describe("pfcli deploy", () => {
     expect(logs.some((log) => log.includes("Frontend URL:"))).toBe(false)
   })
 
+  const configurationFailure = [
+    "[configuration-preflight] project=1000-0000-0001 environment=test stage=Staging invalid-configuration owner=email.resend target=job-worker key=EXAMPLE_RESEND_SEND_KEY: Set a valid secret in the owning stage configuration: pfcli config set --project 1000-0000-0001 --stage Staging --secret EXAMPLE_RESEND_SEND_KEY (reads the exported variable).",
+    "[configuration-preflight] project=1000-0000-0001 environment=test stage=Staging invalid-configuration owner=email.resend target=job-worker key=RESEND_REROUTE_EMAIL: Set a valid value in the owning stage configuration: pfcli config set --project 1000-0000-0001 --stage Staging RESEND_REROUTE_EMAIL (reads the exported variable).",
+    "[configuration-preflight] project=1000-0000-0001 environment=test stage=Staging invalid-configuration owner=email.resend target=webhook key=RESEND_WEBHOOK_SECRET: Set a valid secret in the owning stage configuration: pfcli config set --project 1000-0000-0001 --stage Staging --secret RESEND_WEBHOOK_SECRET (reads the exported variable).",
+  ].join("\n")
+
   for (const timing of [
     "before subscription",
     "during snapshot",
@@ -1059,6 +1446,7 @@ describe("pfcli deploy", () => {
   ] as const) {
     it.each([
       null,
+      configurationFailure,
       "Command exited with code 1 | build status FAILED | current phase COMPLETED",
       "Insufficient project credit for project 1000-0000-0001. Remaining balance: USD -0.001. An operator must add credit before deploying.",
       "Unable to check project credit for project 1000-0000-0001. Please retry the deployment.",
@@ -1165,14 +1553,14 @@ describe("pfcli deploy", () => {
           },
         )
         const logs = await captureConsoleLogs(async () => {
-          const result = Effect.runPromise(Effect.either(effect))
+          const result = Effect.runPromise(Effect.result(effect))
           expect(queried).toBe(false)
           ready.resolve()
           await snapshotStarted.promise
           if (timing === "during snapshot") {
             // The terminal event must finish the command without awaiting this stale response.
             const outcome = await result
-            expect(outcome._tag).toBe(failure ? "Left" : "Right")
+            expect(outcome._tag).toBe(failure ? "Failure" : "Success")
             snapshotRead.resolve()
           } else if (timing === "after snapshot") {
             await snapshotRead.promise
@@ -1182,10 +1570,10 @@ describe("pfcli deploy", () => {
           }
           const outcome = await result
           if (failure) {
-            expect(outcome._tag).toBe("Left")
-            if (outcome._tag === "Left")
-              expect(String(outcome.left)).toContain(failure)
-          } else expect(outcome._tag).toBe("Right")
+            expect(outcome._tag).toBe("Failure")
+            if (outcome._tag === "Failure")
+              expect(String(outcome.failure)).toContain(failure)
+          } else expect(outcome._tag).toBe("Success")
         })
         expect(executionClosed).toBe(1)
         expect(progressClosed).toBe(1)
@@ -1196,6 +1584,128 @@ describe("pfcli deploy", () => {
       },
     )
   }
+
+  it.each(["silent", "matching", "unrelated", "failure"])(
+    "recovers silent execution updates with %s progress",
+    async (mode) => {
+      const testDir = mkdtempSync(join(tmpdir(), "pfcli-silent-deploy-"))
+      const orgPath = createTempOrg()
+      tempPaths.push(testDir, orgPath)
+      process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+        testDir,
+        "https://deploy.example.test",
+        new Date(Date.now() + 60_000).toISOString(),
+        createJwt({
+          aud: "graphql-api",
+          sub: "sub-user-456",
+          properties: { userId: "user-123" },
+        }),
+      )
+      const originalWaitTimeout = process.env["PFCLI_DEPLOY_WAIT_TIMEOUT_MS"]
+      process.env["PFCLI_DEPLOY_WAIT_TIMEOUT_MS"] =
+        mode === "silent" ? "invalid-ignored" : "200"
+      try {
+        const baseFetch = createDeployFetchMock({
+          subscriptionTransportKind: "APPSYNC_EVENTS",
+          appSyncEventsHttpHost: "appsync.test",
+        })
+        let snapshotQueries = 0
+        globalThis.fetch = Object.assign(
+          async (input: string | URL | Request, init?: RequestInit) => {
+            if (String(init?.body).includes("DeployExecutionSnapshot")) {
+              snapshotQueries += 1
+              return Response.json({
+                data: {
+                  execution: executionSnapshot(
+                    snapshotQueries <= 2
+                      ? "Running"
+                      : mode === "failure"
+                        ? "Failed"
+                        : "Completed",
+                  ),
+                },
+              })
+            }
+            return baseFetch(input, init)
+          },
+          { preconnect: baseFetch.preconnect },
+        )
+        let executionClosed = 0
+        let progressClosed = 0
+        const effect = await runDeployEffect(
+          orgPath,
+          "project-123",
+          "env-456",
+          mode === "silent" ? { waitTimeoutMs: 200 } : {},
+          {
+            createExecutionEventSource: () =>
+              Effect.succeed({
+                ...silentSource<ExecutionSnapshot>(),
+                close: async () => {
+                  executionClosed++
+                },
+              }),
+            createDeployProgressEventSource: () =>
+              Effect.succeed({
+                ...(mode !== "silent"
+                  ? {
+                      [Symbol.asyncIterator]: () => ({
+                        next: async () => {
+                          await new Promise((resolve) =>
+                            setTimeout(resolve, 10),
+                          )
+                          return {
+                            done: false as const,
+                            value: {
+                              version: 1 as const,
+                              executionId:
+                                mode === "unrelated" ? "other" : "exec-1",
+                              timestamp: new Date().toISOString(),
+                              status: "progress" as const,
+                              phase: "frontend" as const,
+                              message: "Building frontend",
+                            },
+                          }
+                        },
+                      }),
+                    }
+                  : silentSource()),
+                close: async () => {
+                  progressClosed++
+                },
+              }),
+          },
+        )
+        const logs = await captureConsoleLogs(async () => {
+          if (mode === "failure") {
+            await expect(Effect.runPromise(effect)).rejects.toThrow(
+              "Deployment failed.",
+            )
+          } else {
+            await Effect.runPromise(effect)
+          }
+        })
+
+        expect(snapshotQueries).toBeGreaterThan(2)
+        expect(
+          logs
+            .join("\n")
+            .includes("deployment is still Running; continuing to wait"),
+        ).toBe(mode === "silent" || mode === "unrelated")
+        expect(
+          logs.filter((line) => line.includes("Deployment completed.")),
+        ).toHaveLength(mode === "failure" ? 0 : 1)
+        expect(executionClosed).toBe(1)
+        expect(progressClosed).toBe(1)
+      } finally {
+        if (originalWaitTimeout === undefined) {
+          delete process.env["PFCLI_DEPLOY_WAIT_TIMEOUT_MS"]
+        } else {
+          process.env["PFCLI_DEPLOY_WAIT_TIMEOUT_MS"] = originalWaitTimeout
+        }
+      }
+    },
+  )
 
   it.each(["snapshot error", "cancel"])(
     "cleans up a silent AppSync deployment on %s",
@@ -1308,11 +1818,36 @@ describe("pfcli deploy", () => {
       },
     })
 
+    let output = ""
+    const progressDelivered = Promise.withResolvers<void>()
+    const write = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output += chunk.toString()
+      return true
+    })
     const fakeProgressSource: DeployProgressEventSource = {
       close: async () => {
         progressSourceClosed = true
       },
       async *[Symbol.asyncIterator]() {
+        for (const [executionId, phase, message] of [
+          ["another-execution", "setup", "Must not display"],
+          ["exec-1", "setup", "Setting up deployment..."],
+          ["exec-1", "setup-heartbeat", "Still setting up deployment…"],
+          ["exec-1", "setup-heartbeat", "Still setting up deployment…"],
+          ["exec-1", "runner", "Starting deployment runner..."],
+          ["exec-1", "dependencies", "Installing deployment dependencies..."],
+          ["exec-1", "build-environments", "Preparing build environments..."],
+          ["exec-1", "prepare", "Validating deployment artifact..."],
+        ] as const) {
+          yield {
+            version: 1,
+            executionId,
+            phase,
+            message,
+            status: "progress",
+            timestamp: new Date().toISOString(),
+          }
+        }
         yield {
           version: 1,
           executionId: "exec-1",
@@ -1321,6 +1856,7 @@ describe("pfcli deploy", () => {
           message: "Deploying database and document store",
           timestamp: new Date().toISOString(),
         }
+        progressDelivered.resolve()
         yield {
           version: 1,
           executionId: "exec-1",
@@ -1332,26 +1868,44 @@ describe("pfcli deploy", () => {
       },
     }
 
-    await Effect.runPromise(
-      await runDeployEffect(
-        orgPath,
-        "project-123",
-        "env-456",
-        { waitForCompletion: true },
-        {
-          createDeployProgressEventSource: () =>
-            Effect.sync(() => {
-              progressSourceCreated = true
-              expect(startCalled).toBe(true)
-              return fakeProgressSource
-            }),
-          createExecutionEventSource: () => Effect.succeed(executionSource()),
-        },
-      ),
-    )
+    try {
+      await Effect.runPromise(
+        await runDeployEffect(
+          orgPath,
+          "project-123",
+          "env-456",
+          { waitForCompletion: true },
+          {
+            createDeployProgressEventSource: () =>
+              Effect.sync(() => {
+                progressSourceCreated = true
+                expect(startCalled).toBe(true)
+                expect(output).toContain("Setting up deployment...")
+                return fakeProgressSource
+              }),
+            createExecutionEventSource: () =>
+              Effect.succeed({
+                close: async () => undefined,
+                async *[Symbol.asyncIterator]() {
+                  await progressDelivered.promise
+                  yield executionSnapshot()
+                },
+              }),
+          },
+        ),
+      )
 
-    expect(progressSourceCreated).toBe(true)
-    expect(progressSourceClosed).toBe(true)
+      expect(progressSourceCreated).toBe(true)
+      expect(progressSourceClosed).toBe(true)
+      expect(output.match(/Setting up deployment\.\.\./g)).toHaveLength(1)
+      expect(output.match(/Still setting up deployment…/g)).toHaveLength(2)
+      expect(output).not.toContain("Must not display")
+      expect(output).toMatch(
+        /Setting up deployment[\s\S]*Starting deployment runner[\s\S]*Installing deployment dependencies[\s\S]*Preparing build environments[\s\S]*Validating deployment artifact[\s\S]*Deploying database/,
+      )
+    } finally {
+      write.mockRestore()
+    }
   })
 
   it("falls back to execution updates when AppSync deploy progress disconnects", async () => {

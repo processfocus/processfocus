@@ -16,8 +16,7 @@ const sampleInput = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
     line1: "10 Customhouse Quay",
     city: "Wellington",
   },
-  productSku: "TBS-100",
-  agreedPrice: "100.00",
+  lines: [{ productSku: "TBS-100", quantity: 1, unitAmount: "100.00" }],
   currency: "NZD",
   reference: "ORD-1001",
   date: "2026-03-15",
@@ -54,6 +53,7 @@ describe("XeroInvoiceStep", () => {
     plugin.controller.seedItem({
       itemCode: "TBS-100",
       name: "TBS Product",
+      description: "TBS Product",
       taxType: "NONE",
       taxPercent: 0,
     })

@@ -1,5 +1,5 @@
 import { Construct } from "constructs"
-import type { Schema } from "effect"
+import { Data, type Effect, type Schema } from "effect"
 import DirectedGraph from "graphology"
 import type { DayOfMonth, TimeOfDay } from "@pf/business-calendar"
 import type { FlattenFields } from "@pf/form-submission-schema"
@@ -11,7 +11,7 @@ import type {
   StepMeta,
 } from "./flow-context"
 import { type FlowPath, wrapInFlowPath } from "./flow-path"
-import type { Form } from "./form"
+import type { Form, FormSubmissionError } from "./form"
 import type { OrgUnit } from "./org-unit"
 import { pathToPascalCase } from "./org-utils"
 import type { Role } from "./role"
@@ -69,6 +69,13 @@ export type ProcessCron =
   | WeeklyProcessCron
   | MonthlyProcessCron
 
+export class ProcessActivationConflict extends Data.TaggedError(
+  "ProcessActivationConflict",
+)<{
+  readonly executionId: string
+  readonly message: string
+}> {}
+
 export interface ProcessProps {
   /**
    * Name of process.
@@ -106,6 +113,22 @@ export interface ProcessProps {
    * Only supported for processes with exactly one system start step.
    */
   readonly cron?: ProcessCron
+
+  /**
+   * Check domain admission after writing the active execution, before committing
+   * or dispatching work. Also check caller-supplied receipt replays before
+   * returning the receipt or recovering dispatch. This callback must only do
+   * transactional database work.
+   */
+  readonly validateActivation?: (input: {
+    readonly kind: "activation" | "receipt"
+    readonly executionId: string
+    readonly state: Readonly<Record<string, unknown>>
+  }) => Effect.Effect<
+    void,
+    FormSubmissionError | ProcessActivationConflict,
+    unknown
+  >
 }
 
 /**
@@ -135,6 +158,8 @@ export type ScheduleFn<
 > = (state: TState, ctx: FlowContext<TSteps>) => ScheduledTime
 
 export interface EdgeAttributes<TState> {
+  deadlineName?: string | undefined
+  interrupting?: boolean | undefined
   condition?: Condition<TState> | undefined
   conditionText?: string | undefined
   // biome-ignore lint/suspicious/noExplicitAny: TSteps is erased at runtime; schedule stored for evaluation later
@@ -192,8 +217,6 @@ export type ResolveStepOutput<
 > = TIsForm extends true
   ? InferFormSchemaType<TOutput>
   : InferSchemaType<TOutput>
-
-// pathToPascalCase is imported from ./org-utils
 
 export class Process extends Construct implements IProcessHolder {
   static readonly START_NODE = "__start__"
@@ -263,6 +286,11 @@ export class Process extends Construct implements IProcessHolder {
       ? { [K in CamelCase<TId>]: FormStepMeta }
       : { [K in CamelCase<TId>]: StepMeta }
   > {
+    if (initialStep.props.sla !== undefined) {
+      throw new Error(
+        `Start step "${initialStep.node.path}" in process "${this.node.path}" cannot have an SLA`,
+      )
+    }
     this.graph.addDirectedEdge(Process.START_NODE, initialStep.node.path)
     return wrapInFlowPath(
       initialStep as Step<
@@ -352,7 +380,11 @@ export class Process extends Construct implements IProcessHolder {
     for (const nodeId of this.realNodes()) {
       if (!reachable.has(nodeId)) {
         unreachable.push(nodeId)
-      } else if (this.graph.outDegree(nodeId) === 0) {
+      } else if (
+        (this.graph.outEdges(nodeId) ?? []).every(
+          (edge) => this.graph.getEdgeAttributes(edge)["deadlineName"],
+        )
+      ) {
         dangling.push(nodeId)
       } else {
         // Check for conditional edges and else branches

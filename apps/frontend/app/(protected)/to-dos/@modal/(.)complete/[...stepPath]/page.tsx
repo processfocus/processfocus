@@ -1,7 +1,9 @@
-import { NotFound } from "@mcrovero/effect-nextjs/Navigation"
 import { Effect } from "effect"
 import CompleteTodoModalClient from "./client"
+import { NotFound } from "@/lib/effect/navigation"
 import { BasePage } from "@/lib/effect/runtime"
+
+export const instant = false
 
 /**
  * Complete todo modal - thin server wrapper that passes URL params to client.

@@ -1,13 +1,11 @@
 # @pf/layer-turso-local
 
-Effect SQL layer for the Turso local database SDK.
+An Effect SQL driver for local Turso database files, with multi-process WAL
+support so runtime processes can share a database.
 
-The Turso features we rely on for local databases are enabled by default:
+Use [`@pf/service-drizzle-sqlite`](../service-drizzle-sqlite/README.md) for typed
+Process Focus queries, or
+[`@pf/layer-turso-cloud`](../layer-turso-cloud/README.md) for remote databases.
 
-- multi-process access via `experimental: ["multiprocess_wal"]`
-- regular WAL transactions for compatibility with Turso's multi-process coordinator
-
-Every transaction opened through `SqlClient.withTransaction` uses a regular `BEGIN`.
-Turso's multi-process WAL mode is not compatible with MVCC / `BEGIN CONCURRENT`.
-
-`executeValues` uses Turso statement raw mode so Drizzle receives positional rows, including queries with duplicate result column names.
+Local transactions use WAL rather than MVCC/concurrent mode. Shared transaction
+controls are described in [`@pf/db-info`](../db-info/README.md).

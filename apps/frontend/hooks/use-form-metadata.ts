@@ -1,10 +1,8 @@
 "use client"
 
 import { useQuery } from "@tanstack/react-query"
-import {
-  type ClientFormDefinition,
-  parseNullableClientFormDefinition,
-} from "@pf/form-client-representation/client-form-definition"
+import { Schema } from "effect"
+import { FormRequestData } from "@pf/form-schema"
 import type {
   FormMetadataQuery,
   FormMetadataQueryVariables,
@@ -17,9 +15,10 @@ const formMetadataCacheTime =
 
 type ParsedFormMetadata = Omit<
   NonNullable<FormMetadataQuery["formMetadata"]>,
-  "formDefinition"
+  "pluginConfiguration"
 > & {
-  readonly formDefinition: ClientFormDefinition | null
+  readonly pluginConfiguration: Readonly<Record<string, unknown>>
+  readonly requestData: FormRequestData | null
 }
 
 interface UseFormMetadataResult {
@@ -55,10 +54,14 @@ export const useFormMetadata = (
 
       return {
         ...metadata,
-        formDefinition: parseNullableClientFormDefinition(
-          metadata.formDefinition,
-          "formMetadata.formDefinition",
-        ),
+        requestData:
+          metadata.requestData == null
+            ? null
+            : Schema.decodeUnknownSync(FormRequestData)(metadata.requestData),
+        pluginConfiguration:
+          metadata.pluginConfiguration == null
+            ? {}
+            : parsePluginConfiguration(metadata.pluginConfiguration),
       }
     },
     retry: false,
@@ -71,4 +74,12 @@ export const useFormMetadata = (
     isLoading,
     error: error ?? null,
   }
+}
+
+function parsePluginConfiguration(
+  value: unknown,
+): Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("formMetadata.pluginConfiguration must be an object")
+  return { ...value }
 }

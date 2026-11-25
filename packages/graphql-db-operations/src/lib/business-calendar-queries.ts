@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Time of day (hour 0-23, minute 0-59).
@@ -85,9 +85,7 @@ export interface OrgUnitCalendarData {
 /**
  * Service for querying business calendar configuration from the database.
  */
-export class BusinessCalendarQueries extends Context.Tag(
-  "@pf/graphql-db-operations/BusinessCalendarQueries",
-)<
+export class BusinessCalendarQueries extends Context.Service<
   BusinessCalendarQueries,
   {
     /**
@@ -109,4 +107,4 @@ export class BusinessCalendarQueries extends Context.Tag(
      */
     readonly getRootOrgUnit: () => Effect.Effect<string | null, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/BusinessCalendarQueries") {}

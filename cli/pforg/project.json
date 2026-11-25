@@ -32,7 +32,7 @@
         "cwd": "{projectRoot}",
         "commands": ["tsgo -p tsconfig.spec.json --noEmit"]
       },
-      "inputs": ["default", "{projectRoot}/tsconfig.spec.json"],
+      "inputs": ["default", "typecheck-default"],
       "dependsOn": ["^build", "build"]
     },
     "pack-check": {

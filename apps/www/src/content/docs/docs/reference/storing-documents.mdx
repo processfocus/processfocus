@@ -1,0 +1,57 @@
+---
+title: Storing documents
+---
+
+A [document store](/docs/concepts/document-store/) is a named place to keep
+files used by your organisation’s processes.
+
+## Defining a document store
+
+Define it with `DocumentStore` from `@pf/process`, then reference it
+from the form’s `FileField`.
+
+Configure accepted file types, a maximum file size, and how long to retain
+files on the store. The runtime provides the storage: the local runtime uses
+the filesystem, and the AWS runtime uses Amazon S3.
+
+## File uploads
+
+Use `FileField` from `@pf/form-schema` to collect a file in a form. For
+example, an expense claim form can include a receipt field that points to
+the organisation’s receipts document store.
+
+```typescript
+import { FileField } from "@pf/form-schema"
+import { DocumentStore, Form, Organisation, Process, Role } from "@pf/process"
+import { Schema } from "effect"
+
+export const org = new Organisation({ name: "Demo Store" })
+const employee = new Role(org, "Employee")
+const receipts = new DocumentStore(org, "receipts", {
+  acceptedTypes: ["application/pdf"],
+  maxFileSize: 5 * 1024 * 1024,
+})
+
+const expenseClaim = new Process(org, "expense-claim", {
+  name: "Expense claim",
+  purpose: "Collect a receipt for an expense claim",
+})
+
+const uploadReceipt = new Form(expenseClaim, "Upload receipt", {
+  role: employee,
+  form: Schema.Struct({
+    receiptId: FileField({
+      label: "Receipt (PDF)",
+      documentStore: receipts,
+    }),
+  }),
+})
+
+expenseClaim.start(uploadReceipt).end()
+```
+
+When someone selects a file, Process Focus provides a time-limited upload
+URL. The form submits the uploaded file’s ID as `receiptId`, not the file’s
+contents. A later step can use that reference to read the receipt or attach
+it to an email. Uploading to the store requires permission to complete the
+step, and the step must reference that store.

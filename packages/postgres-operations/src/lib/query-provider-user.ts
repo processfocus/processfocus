@@ -1,13 +1,11 @@
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Option } from "effect"
 import * as schema from "@pf/drizzle-postgres"
 import { permittedRole } from "@pf/drizzle-postgres"
 import {
-  type ProviderUserOrgUnitRow,
   ProviderUserQueries,
   type ProviderUserRow,
   type RoleRow,
-  returnedRow,
 } from "@pf/graphql-db-operations"
 import { TypedPostgresDrizzle } from "@pf/service-drizzle-postgres"
 
@@ -284,136 +282,6 @@ export const PostgresProviderUserQueriesLive = Layer.effect(
             targetWhere: eq(permittedRole._deleted, false),
             set: { updatedAt: sql`now()` },
           }),
-
-      findInvitationRoleIds: (email: string) =>
-        Effect.gen(function* () {
-          const normalizedEmail = email.toLowerCase()
-          const results = yield* db
-            .select({ roleId: schema.invitationRole.roleId })
-            .from(schema.invitation)
-            .innerJoin(
-              schema.invitationRole,
-              eq(schema.invitationRole.invitationId, schema.invitation.id),
-            )
-            .innerJoin(
-              schema.role,
-              eq(schema.role.id, schema.invitationRole.roleId),
-            )
-            .where(
-              and(
-                eq(schema.invitation.invitationPendingEmail, normalizedEmail),
-                eq(schema.invitation.invitationStatus, "pending"),
-                eq(schema.invitation._deleted, false),
-                eq(schema.invitationRole._deleted, false),
-                eq(schema.role._deleted, false),
-              ),
-            )
-          return results.map((r) => r.roleId)
-        }),
-
-      findRootOrgUnit: () =>
-        Effect.gen(function* () {
-          const results = yield* db
-            .select({ id: schema.orgUnit.id, path: schema.orgUnit.path })
-            .from(schema.orgUnit)
-            .where(
-              and(
-                isNull(schema.orgUnit.parentOrgUnitId),
-                eq(schema.orgUnit._deleted, false),
-              ),
-            )
-            .limit(1)
-
-          const result = results[0]
-          return result
-            ? Option.some<ProviderUserOrgUnitRow>({
-                id: result.id,
-                path: result.path,
-              })
-            : Option.none()
-        }),
-
-      createProviderUserFromInvitation: (input: {
-        email: string
-        orgUnitId: string
-      }) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now
-          const normalizedEmail = input.email.toLowerCase()
-          const userResult = yield* db
-            .insert(schema.user)
-            .values({
-              provider: "m2m",
-              sub: `m2m:${normalizedEmail}`,
-              lastLoggedIn: now,
-            })
-            .returning()
-          const user = yield* returnedRow(userResult)
-
-          const providerUserResult = yield* db
-            .insert(schema.providerUser)
-            .values({
-              userId: user.id,
-              email: normalizedEmail,
-              name: normalizedEmail.split("@")[0] ?? normalizedEmail,
-              firstName: "",
-              lastName: "",
-              picture: "",
-              locale: "",
-              orgUnitId: input.orgUnitId,
-            })
-            .returning()
-
-          const providerUser = yield* returnedRow(providerUserResult)
-
-          return { userId: user.id, providerUserId: providerUser.id }
-        }),
-
-      acceptPendingInvitationForProviderUser: (input) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now
-          const normalizedEmail = input.email.toLowerCase()
-          const accepted = yield* db
-            .update(schema.invitation)
-            .set({
-              invitationStatus: "accepted",
-              invitationPendingEmail: null,
-              invitationAcceptedAt: now,
-              invitationAcceptedByProvider: input.provider,
-              invitationAcceptedBySubject: input.subject,
-              acceptedByProviderUserId: input.providerUserId,
-              registrationTokenHash: null,
-              registrationEncryptionVersion: null,
-              registrationEncryptionNonce: null,
-              registrationAuthenticationTag: null,
-              registrationEncryptedToken: null,
-              registrationLinkExpiresAt: null,
-              registrationLinkGeneration: sql`coalesce(${schema.invitation.registrationLinkGeneration}, 0) + 1`,
-              updatedAt: now,
-              updatedBy: "SYSTEM",
-            })
-            .where(
-              and(
-                eq(schema.invitation.invitationPendingEmail, normalizedEmail),
-                eq(schema.invitation.invitationStatus, "pending"),
-                eq(schema.invitation._deleted, false),
-              ),
-            )
-            .returning({ id: schema.invitation.id })
-
-          return accepted.length > 0
-        }),
-
-      assignProviderUserRoles: (
-        providerUserId: string,
-        roleIds: readonly string[],
-      ) =>
-        Effect.gen(function* () {
-          if (roleIds.length === 0) return
-          yield* db
-            .insert(schema.providerUserRole)
-            .values(roleIds.map((roleId) => ({ providerUserId, roleId })))
-        }),
     }
   }),
 )

@@ -24,9 +24,6 @@
     },
     {
       "path": "../../packages/form-schema/tsconfig.lib.json"
-    },
-    {
-      "path": "../../packages/form-client-representation/tsconfig.lib.json"
     }
   ],
   "exclude": [

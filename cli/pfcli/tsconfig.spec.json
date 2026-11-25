@@ -7,6 +7,7 @@
     "rootDir": "."
   },
   "include": [
+    "scripts/generate-reference.ts",
     "src/**/*.test.ts",
     "src/**/*.spec.ts",
     "src/**/*.test.tsx",

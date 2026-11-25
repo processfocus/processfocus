@@ -3,143 +3,19 @@
 import { useQuery } from "@tanstack/react-query"
 import { useSearchParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
-import type { FormComponent } from "@pf/form-client-representation/types"
-import { FormComponentType } from "@pf/form-client-representation/types"
 import {
   collectMetricControlUrlState,
-  isGraphqlName,
   keepPreviousMetricDetail,
 } from "./metric-control-url-state"
 import { useSession } from "@/components/auth-provider"
 import { getActiveRoleCacheKey } from "@/lib/auth/session-role"
+import { loadBrowserFormDefinition } from "@/lib/frontend-form-loaders"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 import {
   fetchAvailableLists,
   fetchListFormMetadata,
 } from "@/lib/graphql/list-queries"
-
-// Keep this selection aligned with MetricBreakdownData in @pf/form-schema.
-const metricBreakdownSelection = (field: string) => `${field} {
-              total
-              currency
-              badge
-              fields {
-                label
-                value
-              }
-              buckets {
-                label
-                amount
-                description
-                color
-              }
-            }`
-
-const addSelection = (
-  selections: Map<string, string>,
-  field: string,
-  selection: string = field,
-) => {
-  if (isGraphqlName(field) && !selections.has(field)) {
-    selections.set(field, selection)
-  }
-}
-
-const selectionFieldName = (field: string) =>
-  field.includes(".") ? field.slice(field.lastIndexOf(".") + 1) : field
-
-const addItemComponentSelection = (
-  selections: Map<string, string>,
-  component: FormComponent,
-) => {
-  switch (component._tag) {
-    case FormComponentType.FieldSet:
-      Object.values(component.children).forEach((child) => {
-        addItemComponentSelection(selections, child)
-      })
-      return
-
-    case FormComponentType.Static:
-    case FormComponentType.MetricBreakdown:
-      return
-
-    default:
-      if ("field" in component) {
-        addSelection(selections, selectionFieldName(component.field))
-      }
-  }
-}
-
-const listItemSelection = (component: {
-  readonly field: string
-  readonly itemChildren: Record<string, FormComponent>
-}) => {
-  const nestedSelectionIndent = "                "
-  const closingSelectionIndent = "              "
-  const selections = new Map<string, string>()
-  Object.values(component.itemChildren).forEach((child) => {
-    addItemComponentSelection(selections, child)
-  })
-
-  return `${component.field} {
-${nestedSelectionIndent}${Array.from(selections.values()).join(`\n${nestedSelectionIndent}`)}
-${closingSelectionIndent}}`
-}
-
-const addComponentSelection = (
-  selections: Map<string, string>,
-  component: FormComponent,
-) => {
-  switch (component._tag) {
-    case FormComponentType.FieldSet:
-      Object.values(component.children).forEach((child) => {
-        addComponentSelection(selections, child)
-      })
-      return
-
-    case FormComponentType.MetricBreakdown:
-      if (component.dataSource === "item") {
-        addSelection(
-          selections,
-          component.field,
-          metricBreakdownSelection(component.field),
-        )
-      }
-      return
-
-    case FormComponentType.List:
-    case FormComponentType.Table:
-      addSelection(selections, component.field, listItemSelection(component))
-      return
-
-    case FormComponentType.Static:
-      return
-
-    default:
-      if ("field" in component) {
-        addSelection(selections, component.field)
-      }
-  }
-}
-
-const buildDetailSelection = (
-  outputFields: readonly string[],
-  components: Record<string, FormComponent> | null,
-) => {
-  const selections = new Map<string, string>()
-
-  for (const field of outputFields) {
-    addSelection(selections, field)
-  }
-
-  if (components) {
-    Object.values(components).forEach((component) => {
-      addComponentSelection(selections, component)
-    })
-  }
-
-  return Array.from(selections.values()).join("\n              ")
-}
+import { listDetailSelection } from "@/lib/list-detail-selection"
 
 /**
  * Shared hook for fetching list item detail data.
@@ -175,13 +51,18 @@ export function useListItemDetail(listPath: string, itemId: string) {
   }, [searchParamsKey])
 
   // Fetch list metadata to get the query name
-  const { data: availableLists, isLoading: listsLoading } = useQuery({
+  const {
+    data: availableLists,
+    isLoading: listsLoading,
+    isFetching: listsFetching,
+    error: listsError,
+    refetch: refetchLists,
+  } = useQuery({
     queryKey: ["availableLists", session.userId, currentRole],
     queryFn: () => fetchAvailableLists(client),
     staleTime: 60 * 1000,
   })
 
-  // Find the current list from available lists
   const currentList = useMemo(() => {
     if (!availableLists || !listPath) return null
     return availableLists.find((l) => l.path === listPath) ?? null
@@ -190,8 +71,10 @@ export function useListItemDetail(listPath: string, itemId: string) {
   const {
     data: formMetadata,
     isLoading: formMetadataLoading,
+    isFetching: metadataFetching,
     isFetched: formMetadataFetched,
     error: formMetadataError,
+    refetch: refetchMetadata,
   } = useQuery({
     queryKey: ["listFormMetadata", listPath, session.userId, currentRole],
     queryFn: () => fetchListFormMetadata(client, listPath),
@@ -202,29 +85,36 @@ export function useListItemDetail(listPath: string, itemId: string) {
       process.env["NODE_ENV"] === "development" ? 0 : Number.POSITIVE_INFINITY,
   })
 
-  const formComponents = formMetadata?.formDefinition?.components ?? null
+  const formComponents = null
 
-  const fieldsSelection = useMemo(() => {
-    if (!currentList) return ""
-
-    return buildDetailSelection(
-      currentList.outputColumns.map((column) => column.field),
-      formComponents,
-    )
-  }, [currentList, formComponents])
+  const {
+    data: fieldsSelection = "",
+    isLoading: schemaLoading,
+    isFetching: schemaFetching,
+    error: schemaError,
+    refetch: refetchSchema,
+  } = useQuery({
+    queryKey: ["listDetailSelection", listPath],
+    queryFn: async () =>
+      listDetailSelection(await loadBrowserFormDefinition(`${listPath}/edit`)),
+    enabled: !!currentList?.itemQueryName,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
   const metricControlUrlState = useMemo(
     () =>
       collectMetricControlUrlState(
         formComponents,
         new URLSearchParams(controlSearch),
       ),
-    [formComponents, controlSearch],
+    [controlSearch],
   )
   const metricControlValues = metricControlUrlState.values
   const metricControlValuesKey = JSON.stringify(metricControlValues)
   const hasEmptyItemSelection =
     !!currentList?.itemQueryName &&
     formMetadataFetched &&
+    !schemaLoading &&
+    !schemaError &&
     fieldsSelection.length === 0
 
   useEffect(() => {
@@ -245,10 +135,10 @@ export function useListItemDetail(listPath: string, itemId: string) {
     })
   }, [currentList?.itemQueryName, hasEmptyItemSelection, listPath])
 
-  // Fetch item details
   const {
     data: itemDetail,
     isLoading: itemLoading,
+    isFetching: itemFetching,
     error,
     refetch,
   } = useQuery({
@@ -302,14 +192,27 @@ export function useListItemDetail(listPath: string, itemId: string) {
       fieldsSelection.length > 0,
   })
 
-  const isLoading = listsLoading || formMetadataLoading || itemLoading
+  const isLoading =
+    listsLoading ||
+    formMetadataLoading ||
+    schemaLoading ||
+    itemLoading ||
+    !!(listsError && listsFetching) ||
+    !!(formMetadataError && metadataFetching) ||
+    !!(schemaError && schemaFetching) ||
+    !!(error && itemFetching)
 
   return {
     currentList,
     formMetadata,
     itemDetail,
     isLoading,
-    error: formMetadataError ?? error,
-    refetch,
+    error: listsError ?? formMetadataError ?? schemaError ?? error,
+    refetch: () => {
+      if (listsError) return refetchLists()
+      if (formMetadataError) return refetchMetadata()
+      if (schemaError) return refetchSchema()
+      return refetch()
+    },
   }
 }

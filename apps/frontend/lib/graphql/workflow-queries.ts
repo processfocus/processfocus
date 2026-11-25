@@ -35,6 +35,7 @@ export const processWorkflowQuery = graphql(`
         condition
         isElse
         isOnError
+        deadlineName
         taggedErrors
         schedule
       }

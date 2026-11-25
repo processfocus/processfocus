@@ -1,6 +1,8 @@
 import { Suspense } from "react"
 import ExecutionDetailModalClient from "./client"
 
+export const instant = false
+
 interface PageProps {
   params: Promise<{ executionId: string }>
 }

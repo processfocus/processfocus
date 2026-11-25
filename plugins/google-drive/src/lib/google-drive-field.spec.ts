@@ -1,16 +1,5 @@
-import { Schema as ES, Effect } from "effect"
-import {
-  asClientRepresentation,
-  registerWalkerPlugin,
-  unregisterWalkerPlugin,
-} from "@pf/form-client-representation"
-import type { PluginField } from "@pf/form-client-representation/types"
-import { FormComponentType } from "@pf/form-client-representation/types"
-import {
-  FormComponentPluginType,
-  FormFileInput,
-  FormLabel,
-} from "@pf/form-schema"
+import { Schema as ES, SchemaAST } from "effect"
+import { FormComponentPluginType, FormFileInput } from "@pf/form-schema"
 import {
   FormGoogleDriveGeneratePdf,
   FormGoogleDriveInput,
@@ -19,45 +8,22 @@ import {
   parseGoogleDriveGeneratedPdf,
   parseGoogleDriveValue,
 } from "./google-drive-field"
-import { afterEach, beforeEach, describe, expect, it } from "bun:test"
+import { describe, expect, it } from "bun:test"
 
-const PLUGIN_TYPE = "google-drive"
 /** Sentinel that must never appear in serialized process-state field values. */
 const SENTINEL_TOKEN = "ya29.sentinel-access-token-must-not-appear-in-state"
-
-// Register the walker plugin the same way the real register module does
-beforeEach(() => {
-  registerWalkerPlugin({
-    type: PLUGIN_TYPE,
-    matchAnnotation: (a) => a[FormGoogleDriveInput] === true,
-  })
-})
-
-afterEach(() => {
-  unregisterWalkerPlugin(PLUGIN_TYPE)
-})
 
 describe("GoogleDriveField schema constructor", () => {
   it("creates a string schema with the GoogleDriveInput annotation", () => {
     const field = GoogleDriveField()
     const ast = field.ast
 
-    // Walk up through Transformation to find the annotation on the inner type
-    const annotations =
-      ast._tag === "Transformation" ? ast.from.annotations : ast.annotations
-    expect(annotations[FormGoogleDriveInput]).toBe(true)
-    expect(annotations[FormComponentPluginType]).toEqual({
+    const annotations = SchemaAST.resolve(ast) ?? {}
+    expect(Reflect.get(annotations, FormGoogleDriveInput)).toBe(true)
+    expect(Reflect.get(annotations, FormComponentPluginType)).toEqual({
       module: "@processfocus/plugin-google-drive/register-client",
       type: "google-drive",
     })
-  })
-
-  it("accepts and applies a custom label", () => {
-    const field = GoogleDriveField({ label: "Select document" })
-    const ast = field.ast
-    const annotations =
-      ast._tag === "Transformation" ? ast.from.annotations : ast.annotations
-    expect(annotations[FormLabel]).toBe("Select document")
   })
 
   it("declares the document store used by browser-generated PDFs", () => {
@@ -65,13 +31,12 @@ describe("GoogleDriveField schema constructor", () => {
       generatePdf: { node: { path: "School/journey-pdfs" } },
     })
     const ast = field.ast
-    const annotations =
-      ast._tag === "Transformation" ? ast.from.annotations : ast.annotations
+    const annotations = SchemaAST.resolve(ast) ?? {}
 
-    expect(annotations[FormGoogleDriveGeneratePdf]).toEqual({
+    expect(Reflect.get(annotations, FormGoogleDriveGeneratePdf)).toEqual({
       documentStore: "/School/journey-pdfs",
     })
-    expect(annotations[FormFileInput]).toEqual({
+    expect(Reflect.get(annotations, FormFileInput)).toEqual({
       documentStore: "/School/journey-pdfs",
     })
   })
@@ -127,17 +92,6 @@ describe("parseGoogleDriveValue", () => {
     expect(result.url).toBe("https://drive.google.com/file/d/file-123")
   })
 
-  it("round-trips with JSON.stringify", () => {
-    const original = {
-      id: "abc",
-      name: "test.txt",
-      mimeType: "text/plain",
-      url: "https://example.com",
-    }
-    const parsed = parseGoogleDriveValue(JSON.stringify(original))
-    expect(parsed).toEqual(original)
-  })
-
   it("rejects credential handoff metadata", () => {
     const json = JSON.stringify({
       id: "file-123",
@@ -184,38 +138,6 @@ describe("parseGoogleDriveGeneratedPdf", () => {
 
     expect(() => parseGoogleDriveGeneratedPdf(withToken)).toThrow()
     expect(() => parseGoogleDriveGeneratedPdf(withReference)).toThrow()
-  })
-})
-
-describe("GoogleDriveField walker integration", () => {
-  it("produces a PluginField through asClientRepresentation", () => {
-    const schema = ES.Struct({
-      document: GoogleDriveField({ label: "Upload document" }),
-    })
-
-    const result = Effect.runSync(asClientRepresentation(schema))
-    const field = result.document as unknown as PluginField
-
-    expect(field._tag).toBe(FormComponentType.Plugin)
-    expect(field.pluginType).toBe(PLUGIN_TYPE)
-    expect(field.field).toBe("document")
-    expect(field.label).toBe("Upload document")
-  })
-
-  it("coexists with standard fields in a struct", () => {
-    const schema = ES.Struct({
-      title: ES.String,
-      attachment: GoogleDriveField({ label: "Attachment" }),
-      count: ES.Number,
-    })
-
-    const result = Effect.runSync(asClientRepresentation(schema))
-
-    expect(result.title._tag).toBe(FormComponentType.Text)
-    expect((result.attachment as unknown as PluginField)._tag).toBe(
-      FormComponentType.Plugin,
-    )
-    expect(result.count._tag).toBe(FormComponentType.Number)
   })
 })
 

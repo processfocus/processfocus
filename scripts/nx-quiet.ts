@@ -13,8 +13,14 @@
  * - Drain stdout/stderr while Nx runs so a large log cannot deadlock the child
  */
 
-import { readFileSync, readdirSync, statSync } from "node:fs"
-import { join } from "node:path"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
+import { join, relative, resolve } from "node:path"
 import { stripVTControlCharacters } from "node:util"
 
 const args = process.argv.slice(2)
@@ -28,22 +34,24 @@ if (args.length === 0) {
 const startTime = Date.now()
 
 const inheritIo = process.env["NX_QUIET_INHERIT"] === "1"
+const tracingEnabled =
+  process.env["GITHUB_ACTIONS"] === "true" &&
+  process.env["PF_NX_CI_TRACING"] === "true"
 
 const isProgressLine = (line: string): boolean => {
   const plain = stripVTControlCharacters(line)
   return (
     /^\s*> nx run /.test(plain) ||
     /^ NX {3}Running target /.test(plain) ||
-    /^ NX {3}Successfully ran /.test(plain) ||
-    /^ NX {3}Failed tasks:/.test(plain) ||
-    /^\s*-\s+\S+:\S+/.test(plain)
+    /^ NX {3}Successfully ran /.test(plain)
   )
 }
 
 const collectStream = async (
-  stream: ReadableStream<Uint8Array>,
+  stream: ReadableStream<Uint8Array> | undefined,
   forwardProgress: boolean,
 ): Promise<string> => {
+  if (!stream) return ""
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   let full = ""
@@ -79,12 +87,46 @@ const nxArgs = [
   ...(isRelease ? [] : ["--outputStyle=stream"]),
   ...args,
 ]
-if (!isRelease && !inheritIo && !args.includes("--batch"))
+if (
+  !isRelease &&
+  !inheritIo &&
+  !args.some((arg) => arg === "--batch" || arg.startsWith("--batch="))
+)
   nxArgs.push("--batch")
+
+// A unique profile per invocation preserves nested and sequential task/cache
+// observations without capturing command arguments, environment or test output.
+const evidenceDirectory = process.env["PR_REVIEW_EVIDENCE_DIR"]
+let evidenceProfile: string | undefined
+if (evidenceDirectory) {
+  mkdirSync(evidenceDirectory, { recursive: true })
+  const profileLabel = (
+    process.env["PR_REVIEW_PROFILE_LABEL"] ?? "tasks"
+  ).replace(/[^a-zA-Z0-9_-]/g, "_")
+  evidenceProfile = join(
+    evidenceDirectory,
+    `nx-${profileLabel}-${process.pid}-${startTime}.json`,
+  )
+}
+
+const diagnosticsRoot = resolve(".nx/workspace-data/nx-quiet")
+if (!inheritIo) mkdirSync(diagnosticsRoot, { recursive: true })
+const diagnosticsDirectory = inheritIo
+  ? ""
+  : mkdtempSync(join(diagnosticsRoot, "run-"))
 
 const proc = Bun.spawn(nxArgs, {
   env: {
     ...process.env,
+    ...(!inheritIo
+      ? {
+          NX_QUIET_RESULTS: join(diagnosticsDirectory, "failures.json"),
+          NX_QUIET_COMMAND: JSON.stringify(nxArgs.slice(2)),
+        }
+      : {}),
+    ...(evidenceProfile
+      ? { NX_PROFILE: relative(process.cwd(), resolve(evidenceProfile)) }
+      : {}),
     NX_NO_CLOUD: "true",
     NX_DAEMON: "false",
   },
@@ -106,76 +148,104 @@ if (inheritIo) {
 
 const [stdoutRaw, stderrRaw, rawExitCode] = await Promise.all([
   collectStream(proc.stdout, true),
-  collectStream(proc.stderr, false),
+  collectStream(proc.stderr, true),
   proc.exited,
 ])
 clearInterval(heartbeat)
 
-const exitCode = rawExitCode ?? 1
-const stdoutText = stdoutRaw
-  .split("\n")
-  .filter(
-    (line) =>
-      !line.includes(
-        'Your AI agent configuration is outdated. Run "nx configure-ai-agents" to update.',
-      ),
-  )
-  .join("\n")
-const stderrText = stderrRaw
+// Do not hide the hook's fixed, sanitized annotations in captured stderr.
+const traceWarning =
+  /^::warning::Nx CI (?:trace upload failed or timed out|tracing has missing or invalid OTLP configuration)\.$/gm
+if (tracingEnabled) {
+  const warnings = new Set(stderrRaw.match(traceWarning))
+  for (const warning of warnings) console.error(warning)
+}
 
+const exitCode = rawExitCode ?? 1
 if (exitCode === 0) {
+  rmSync(diagnosticsDirectory, { recursive: true, force: true })
   console.log("completed successfully")
   process.exit(0)
 }
 
-const failedTasksMatch = stdoutText.match(
-  /Failed tasks:\s*((?:\s*-\s*.+\n?)+)/m,
-)
-const failedTasks: string[] = []
+writeFileSync(join(diagnosticsDirectory, "stdout.log"), stdoutRaw)
+writeFileSync(join(diagnosticsDirectory, "stderr.log"), stderrRaw)
 
-if (failedTasksMatch) {
-  const taskLines = failedTasksMatch[1].trim().split("\n")
-  for (const line of taskLines) {
-    const taskMatch = line.match(/^\s*-\s*(.+)$/)
-    if (taskMatch) {
-      failedTasks.push(taskMatch[1].trim())
+const failures = new Map<string, string | null>()
+// Summary parsing is a fallback for a missing hook (e.g. an Nx startup error).
+// Normalize before matching: Nx colors both the heading and the list markers.
+for (const raw of [stdoutRaw, stderrRaw]) {
+  const plain = stripVTControlCharacters(raw)
+  for (const match of plain.matchAll(
+    /Failed tasks:\s*((?:\s*-\s*[^\n]+\n?)+)/g,
+  )) {
+    for (const line of (match[1] ?? "").split("\n")) {
+      const id = line.match(/^\s*-\s*(\S+:\S+)\s*$/)?.[1]
+      if (id) failures.set(id, null)
     }
   }
 }
-
-const terminalOutputsDir = ".nx/cache/terminalOutputs"
-let terminalOutputFiles: string[] = []
 
 try {
-  const files = readdirSync(terminalOutputsDir)
-  terminalOutputFiles = files.filter((file) => {
-    const filePath = join(terminalOutputsDir, file)
-    const stats = statSync(filePath)
-    return stats.mtimeMs >= startTime - 1000
-  })
-} catch (_error) {
-  // .nx/cache/terminalOutputs might not exist
-}
-
-if (failedTasks.length > 0 && terminalOutputFiles.length > 0) {
-  console.log("\n NX   Failed tasks:\n")
-
-  for (const task of failedTasks) {
-    console.log(`\n> ${task}\n`)
-
-    for (const file of terminalOutputFiles) {
-      const filePath = join(terminalOutputsDir, file)
-      const output = readFileSync(filePath, "utf-8")
-      console.log(output)
+  const results: unknown = JSON.parse(
+    readFileSync(join(diagnosticsDirectory, "failures.json"), "utf8"),
+  )
+  if (Array.isArray(results)) {
+    const reported = new Map<string, string | null>()
+    for (const result of results) {
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        "id" in result &&
+        typeof result.id === "string" &&
+        "output" in result &&
+        (typeof result.output === "string" || result.output === null)
+      ) {
+        reported.set(result.id, result.output)
+      } else {
+        throw new Error("Invalid Nx task result")
+      }
     }
+    // The hook is authoritative; summaries can also occur inside task output.
+    failures.clear()
+    for (const [id, output] of reported) failures.set(id, output)
   }
-} else {
-  if (stdoutText.trim()) {
-    console.log(stdoutText)
-  }
-  if (stderrText.trim()) {
-    console.error(stderrText)
-  }
+} catch {
+  // The summary still identifies tasks if Nx could not run its completion hook.
 }
+
+const bounded = (raw: string, limit: number): string => {
+  const text = stripVTControlCharacters(raw)
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit / 2)}\n... [truncated; full diagnostics below] ...\n${text.slice(-limit / 2)}`
+}
+
+for (const [id, output] of failures) {
+  console.log(`\n> ${id}\n`)
+  console.log(
+    output === null
+      ? "Task output unavailable: Nx did not supply exact task diagnostics."
+      : output.length === 0
+        ? "Nx supplied no terminal output."
+        : bounded(output, 32_768),
+  )
+}
+if (
+  failures.size === 0 ||
+  [...failures.values()].some((output) => output === null)
+) {
+  console.error(
+    "Exact failed-task diagnostics unavailable. Bounded Nx stdout/stderr excerpts follow (may include other tasks):",
+  )
+  console.log(bounded(stdoutRaw, 4_096))
+  const stderrExcerpt = tracingEnabled
+    ? stderrRaw.replace(traceWarning, "")
+    : stderrRaw
+  console.error(bounded(stderrExcerpt, 4_096))
+  console.error("Re-run with NX_QUIET_INHERIT=1 for live diagnostics.")
+}
+console.error(
+  `Full diagnostics retained in ${diagnosticsDirectory} (failures.json, stdout.log, stderr.log when available).`,
+)
 
 process.exit(exitCode)

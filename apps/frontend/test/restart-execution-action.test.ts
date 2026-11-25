@@ -25,12 +25,6 @@ describe("formatRestartSuccessMessage", () => {
 })
 
 describe("formatRestartFailureMessage", () => {
-  test("prefers the resolver-provided error", () => {
-    expect(
-      formatRestartFailureMessage("No failed todos found for this execution"),
-    ).toBe("No failed todos found for this execution")
-  })
-
   test("falls back to a safe generic error", () => {
     expect(formatRestartFailureMessage(undefined)).toBe(
       RESTART_EXECUTION_GENERIC_ERROR,

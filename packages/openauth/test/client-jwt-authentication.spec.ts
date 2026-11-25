@@ -116,156 +116,18 @@ describe("client_jwt issuer matching", () => {
 })
 
 describe("issuerMatchesIgnoringLoopbackPort", () => {
-  test("accepts loopback issuers with different ports", () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    process.env["NODE_ENV"] = "development"
-
-    try {
-      expect(
-        issuerMatchesIgnoringLoopbackPort(
-          "http://localhost:3000",
-          "http://localhost:3001",
-        ),
-      ).toBe(true)
-    } finally {
-      if (originalNodeEnv === undefined) {
-        delete process.env["NODE_ENV"]
-      } else {
-        process.env["NODE_ENV"] = originalNodeEnv
-      }
-    }
-  })
-
-  test("accepts IPv6 loopback issuers in development", () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    process.env["NODE_ENV"] = "development"
-
-    try {
-      expect(
-        issuerMatchesIgnoringLoopbackPort(
-          "http://[::1]:3000",
-          "http://[::1]:3001",
-        ),
-      ).toBe(true)
-    } finally {
-      if (originalNodeEnv === undefined) {
-        delete process.env["NODE_ENV"]
-      } else {
-        process.env["NODE_ENV"] = originalNodeEnv
-      }
-    }
-  })
-
-  test("rejects loopback port drift when NODE_ENV is unset", () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    delete process.env["NODE_ENV"]
-
-    try {
-      expect(
-        issuerMatchesIgnoringLoopbackPort(
-          "http://localhost:3000",
-          "http://localhost:3001",
-        ),
-      ).toBe(false)
-    } finally {
-      if (originalNodeEnv === undefined) {
-        delete process.env["NODE_ENV"]
-      } else {
-        process.env["NODE_ENV"] = originalNodeEnv
-      }
-    }
-  })
-
-  test("rejects loopback port drift outside development", () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    process.env["NODE_ENV"] = "test"
-
-    try {
-      expect(
-        issuerMatchesIgnoringLoopbackPort(
-          "http://localhost:3000",
-          "http://localhost:3001",
-        ),
-      ).toBe(false)
-    } finally {
-      if (originalNodeEnv === undefined) {
-        delete process.env["NODE_ENV"]
-      } else {
-        process.env["NODE_ENV"] = originalNodeEnv
-      }
-    }
-  })
-
-  test("rejects pathname mismatches", () => {
-    expect(
-      issuerMatchesIgnoringLoopbackPort(
-        "http://localhost:3000/auth",
-        "http://localhost:3001/other",
-      ),
-    ).toBe(false)
-  })
-
-  test("rejects loopback hostname mismatches", () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    process.env["NODE_ENV"] = "development"
-
-    try {
-      expect(
-        issuerMatchesIgnoringLoopbackPort(
-          "http://localhost:3000",
-          "http://127.0.0.1:3001",
-        ),
-      ).toBe(false)
-    } finally {
-      if (originalNodeEnv === undefined) {
-        delete process.env["NODE_ENV"]
-      } else {
-        process.env["NODE_ENV"] = originalNodeEnv
-      }
-    }
-  })
-
-  test("rejects protocol mismatches", () => {
-    expect(
-      issuerMatchesIgnoringLoopbackPort(
-        "https://localhost:3000",
-        "http://localhost:3001",
-      ),
-    ).toBe(false)
-  })
-
-  test("rejects loopback port drift in production", () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    process.env["NODE_ENV"] = "production"
-
-    try {
-      expect(
-        issuerMatchesIgnoringLoopbackPort(
-          "http://localhost:3000",
-          "http://localhost:3001",
-        ),
-      ).toBe(false)
-    } finally {
-      if (originalNodeEnv === undefined) {
-        delete process.env["NODE_ENV"]
-      } else {
-        process.env["NODE_ENV"] = originalNodeEnv
-      }
-    }
-  })
-
-  test("rejects loopback to public host mismatches", () => {
-    expect(
-      issuerMatchesIgnoringLoopbackPort(
-        "http://localhost:3000",
-        "https://auth.example.com",
-      ),
-    ).toBe(false)
-  })
-
-  test("rejects malformed issuer URLs", () => {
-    expect(
-      issuerMatchesIgnoringLoopbackPort("not a url", "http://localhost:3001"),
-    ).toBe(false)
+  test.each([
+    ["http://localhost:3000", "http://localhost:3001", "development", true],
+    ["http://[::1]:3000", "http://[::1]:3001", "development", true],
+    ["http://localhost:3000", "http://localhost:3001", "", false],
+    ["http://localhost:3000", "http://localhost:3001", "test", false],
+    ["http://localhost:3000", "http://localhost:3001", "production", false],
+    ["http://localhost:3000/auth", "http://localhost:3001/other", "development", false],
+    ["http://localhost:3000", "http://127.0.0.1:3001", "development", false],
+    ["https://localhost:3000", "http://localhost:3001", "development", false],
+    ["http://localhost:3000", "https://auth.example.com", "development", false],
+    ["not a url", "http://localhost:3001", "development", false],
+  ])("matches %s against %s in %s: %s", (tokenIssuer, requestIssuer, nodeEnv, expected) => {
+    expect(issuerMatchesIgnoringLoopbackPort(tokenIssuer, requestIssuer, nodeEnv)).toBe(expected)
   })
 })

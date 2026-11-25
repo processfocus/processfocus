@@ -1,0 +1,133 @@
+---
+title: GraphQL
+---
+
+Process Focus generates a GraphQL API from your organisation and its
+processes. The Dashboard and external systems use this API, with access
+controlled by Cedar policies.
+
+## Start a process
+
+Process Focus generates a start mutation for each process. Send these
+operations to your organisation environment's `/graphql` endpoint.
+
+For an **Audit** process with no required input, call `startAudit` without
+arguments:
+
+```graphql
+mutation StartAudit {
+  startAudit {
+    executionId
+  }
+}
+```
+
+If the start step requires input, the mutation takes an `input` argument
+whose fields come from that step. For example, if **New Order** starts with
+a form that asks for a product code and quantity:
+
+```graphql
+mutation StartNewOrder {
+  startNewOrder(input: { productCode: "SKU-123", quantity: 2 }) {
+    executionId
+  }
+}
+```
+
+Both examples return `executionId`, the ID of the process execution.
+
+### Authorise the caller
+
+Cedar checks whether the caller can complete the process's start step. For
+example, a website backend can authenticate as the `website-orders` [system
+identity](/docs/reference/authentication/system-identities/). Grant that
+service account `complete` on the start step:
+
+```cedar
+permit (
+    principal == PF::ServiceAccount::"website-orders",
+    action == PF::Action::"complete",
+    resource == PF::Step::"/new-order/Capture order"
+) when {
+    resource.startsProcess && !(context has todoId)
+};
+```
+
+## Add a custom GraphQL operation
+
+Export `CustomGraphqlSchema` from your organisation's entry point. Add the
+field to `typeDefs` and implement its resolver under the matching root type.
+Process Focus merges these definitions with the generated schema.
+
+```typescript
+import type { CustomGraphqlSchemaDefinition } from "@pf/process"
+
+export const CustomGraphqlSchema: CustomGraphqlSchemaDefinition = {
+  typeDefs: `
+    extend type Query {
+      orderApiVersion: String!
+    }
+  `,
+  resolvers: {
+    Query: {
+      orderApiVersion: () => "1",
+    },
+  },
+}
+```
+
+Build and deploy the organisation, then call the field on the same endpoint:
+
+```graphql
+query OrderApiVersion {
+  orderApiVersion
+}
+```
+
+Unlike a generated process start mutation, a custom GraphQL query or
+mutation needs a Cedar field grant. To let `website-orders` call this
+query, grant `query` on `PF::GraphQLField::"Query.orderApiVersion"`:
+
+```cedar
+permit (
+    principal == PF::ServiceAccount::"website-orders",
+    action == PF::Action::"query",
+    resource == PF::GraphQLField::"Query.orderApiVersion"
+);
+```
+
+### Add a custom mutation
+
+Extend `Mutation` and add the resolver under `resolvers.Mutation`. This
+example echoes an order reference without saving anything. If you already
+export `CustomGraphqlSchema`, add the type definition and resolver to that
+export rather than creating a second one.
+
+```typescript
+import type { CustomGraphqlSchemaDefinition } from "@pf/process"
+
+export const CustomGraphqlSchema: CustomGraphqlSchemaDefinition = {
+  typeDefs: `
+    extend type Mutation {
+      echoOrderReference(reference: String!): String!
+    }
+  `,
+  resolvers: {
+    Mutation: {
+      echoOrderReference: (_parent: unknown, args: { reference: string }) =>
+        args.reference,
+    },
+  },
+}
+```
+
+To let `website-orders` call the mutation, grant `mutation` on
+`PF::GraphQLField::"Mutation.echoOrderReference"`:
+
+```cedar
+permit (
+    principal == PF::ServiceAccount::"website-orders",
+    action == PF::Action::"mutation",
+    resource == PF::GraphQLField::"Mutation.echoOrderReference"
+);
+```

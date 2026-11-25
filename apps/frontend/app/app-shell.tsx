@@ -3,8 +3,10 @@
 import { QueryClientProvider } from "@tanstack/react-query"
 import dynamic from "next/dynamic"
 import { usePathname } from "next/navigation"
+import { ListRefreshProvider } from "@/app/(protected)/lists/lib/list-refresh-provider"
 import { AppSidebar } from "@/components/app-sidebar"
 import { useSession } from "@/components/auth-provider"
+import { BrowserOnly } from "@/components/browser-only"
 import { FeaturePermissionsProvider } from "@/components/feature-permissions-provider"
 import { Header, navigation } from "@/components/Header"
 import { MocksProvider } from "@/components/mocks-provider"
@@ -53,14 +55,17 @@ export function AppShell({
   // Get the singleton QueryClient for browser, or a fresh one for SSR
   const queryClient = getQueryClient(getSessionCacheScope(session))
 
-  // Map pathname to navigation section
   const currentSection = navigation.find((item) => {
     if (item.id === "dashboard") return pathname === "/"
     if (item.id === "todos") return pathname === "/to-dos"
     if (item.id === "processes") return pathname === "/processes"
     if (item.id === "executions") return isExecutionsPath(pathname)
     if (item.id === "orgchart") return pathname === "/org-chart"
-    if (item.id === "settings") return pathname === "/settings"
+    if (item.id === "settings")
+      return (
+        (pathname === "/settings" || pathname.startsWith("/settings/")) &&
+        !pathname.startsWith("/settings/cedar")
+      )
     if (item.id === "authorization")
       return pathname.startsWith("/settings/cedar")
     return false
@@ -72,7 +77,9 @@ export function AppShell({
       <FeaturePermissionsProvider value={featurePermissions}>
         <OrgSettingsProvider startDayOfWeek={orgIdentity?.startDayOfWeek ?? 0}>
           <MocksProvider>
-            <TodoNotificationsRuntime />
+            <BrowserOnly>
+              <TodoNotificationsRuntime />
+            </BrowserOnly>
             <div className="m-0 min-h-svh peer-[:not(:empty)]:hidden md:m-12">
               <SidebarProvider>
                 <AppSidebar
@@ -87,7 +94,7 @@ export function AppShell({
                     initialProviderUser={providerUser}
                   />
                   <main className="flex-1 px-4 pt-4 pb-10 sm:px-8 sm:pt-6 sm:pb-16 lg:px-12">
-                    {children}
+                    <ListRefreshProvider>{children}</ListRefreshProvider>
                   </main>
                 </div>
               </SidebarProvider>

@@ -1,14 +1,18 @@
-import { Headers, HttpClient, HttpClientRequest } from "@effect/platform"
+import { createHash, randomUUID } from "node:crypto"
+import { readConfiguration } from "@processfocus/runtime"
 import {
+  BigDecimal,
   Clock,
-  Config,
   Context,
   Effect,
   Layer,
   Option,
   Redacted,
   Schema,
+  SchemaGetter,
+  Semaphore,
 } from "effect"
+import { Headers, HttpClient, HttpClientRequest } from "effect/http"
 import { CurrentStepJobContext } from "@pf/process"
 import {
   type ResolvedXeroContact,
@@ -49,6 +53,7 @@ import {
   reconcileExistingInvoices,
   wireAmountToMoney,
 } from "./invoice-reconciliation"
+import { XeroConfiguration } from "./xero-configuration"
 import {
   type DraftInvoiceResult,
   DraftSalesInvoice,
@@ -61,7 +66,22 @@ import {
   waitForRetryAfter,
 } from "./xero-http"
 import { XeroInvoice } from "./xero-invoice"
+import {
+  type CancelSalesInvoiceInput,
+  type CancelledSalesInvoice,
+  XeroInvoiceCancellation,
+  decodeCancelSalesInvoiceInput,
+} from "./xero-invoice-cancellation"
 import { type InvoiceDirectory, XeroInvoiceLookup } from "./xero-invoice-lookup"
+import {
+  type SalesItemResult,
+  XeroInvoicePreparation,
+} from "./xero-invoice-preparation"
+import {
+  CreatedRepeatedDraft,
+  RepeatedDraftSalesInvoice,
+  XeroRepeatedDraftInvoice,
+} from "./xero-repeated-draft-invoice"
 import {
   type XeroAccess,
   type XeroAccessCache,
@@ -70,6 +90,7 @@ import {
 } from "./xero-token"
 import {
   XeroConnectionsResponse,
+  XeroContactDetailsResponse,
   XeroContactsResponse,
   XeroErrorResponse,
   type XeroInvoiceWire,
@@ -83,20 +104,17 @@ export { XERO_TOKEN_REFRESH_BUFFER_MS } from "./xero-token"
 const TOKEN_URL = "https://identity.xero.com/connect/token"
 const CONNECTIONS_URL = "https://api.xero.com/connections"
 const ACCOUNTING_URL = "https://api.xero.com/api.xro/2.0"
-const DEFAULT_SCOPES = "accounting.invoices accounting.contacts"
 
-export const XERO_DEFAULT_SCOPES = DEFAULT_SCOPES
+export { XERO_DEFAULT_SCOPES } from "./xero-configuration"
 
-export class XeroInvoiceConfig extends Context.Tag(
-  "@processfocus/plugin-xero/XeroInvoiceConfig",
-)<
+export class XeroInvoiceConfig extends Context.Service<
   XeroInvoiceConfig,
   {
     readonly clientId: string
     readonly clientSecret: Redacted.Redacted<string>
     readonly scopes: string
   }
->() {}
+>()("@processfocus/plugin-xero/XeroInvoiceConfig") {}
 
 const requireXeroInvoiceConfig = (config: {
   readonly clientId: string
@@ -119,38 +137,27 @@ const requireXeroInvoiceConfig = (config: {
 
 export const XeroInvoiceConfigFromEnv = Layer.effect(
   XeroInvoiceConfig,
-  Effect.gen(function* () {
-    return yield* requireXeroInvoiceConfig({
-      clientId: (yield* Config.string("XERO_CLIENT_ID")).trim(),
-      clientSecret: yield* Config.redacted("XERO_CLIENT_SECRET"),
-      scopes: (yield* Config.withDefault(
-        Config.string("XERO_SCOPES"),
-        DEFAULT_SCOPES,
-      )).trim(),
-    })
-  }).pipe(
-    Effect.mapError((error) =>
-      error instanceof XeroInvoiceError
-        ? error
-        : xeroDeploymentError(
-            "Xero Custom Connection configuration is missing or malformed",
-          ),
+  readConfiguration(XeroConfiguration).pipe(
+    Effect.mapError(() =>
+      xeroDeploymentError(
+        "Xero Custom Connection configuration is missing or malformed",
+      ),
     ),
   ),
 )
 
 const decodeJson = <A, I>(
-  schema: Schema.Schema<A, I>,
+  schema: Schema.Codec<A, I>,
   bodyText: string,
   message: string,
 ): Effect.Effect<A, XeroInvoiceError> =>
-  Schema.decodeUnknown(Schema.parseJson(schema))(bodyText).pipe(
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(bodyText).pipe(
     Effect.mapError(() => xeroMalformedResponseError(message)),
   )
 
 const validationMessages = (bodyText: string): readonly string[] => {
   const decoded = Schema.decodeUnknownOption(
-    Schema.parseJson(XeroErrorResponse),
+    Schema.fromJsonString(XeroErrorResponse),
   )(bodyText)
   return Option.match(decoded, {
     onNone: () => [],
@@ -250,7 +257,7 @@ const tokenFailure = (status: number, bodyText: string): XeroInvoiceError => {
   }
 
   const decoded = Schema.decodeUnknownOption(
-    Schema.parseJson(XeroTokenErrorResponse),
+    Schema.fromJsonString(XeroTokenErrorResponse),
   )(bodyText)
   const description = Option.match(decoded, {
     onNone: () => undefined,
@@ -302,28 +309,38 @@ const failRateLimited = (
 const interpretXeroResult = (
   result: XeroHttpResult,
   productSku: string,
+  invoiceWrite = false,
 ): Effect.Effect<XeroHttpResult, XeroInvoiceError> => {
   if (result.status === 429) {
     return failRateLimited(result.retryAfter)
   }
   if (result.status < 200 || result.status >= 300) {
+    const error = providerFailure(result.status, result.bodyText, productSku)
     return Effect.fail(
-      providerFailure(result.status, result.bodyText, productSku),
+      invoiceWrite &&
+        result.status === 400 &&
+        validationMessages(result.bodyText).length > 0 &&
+        (error.code === "validation" || error.code === "unknown_item_code")
+        ? new XeroInvoiceError({
+            ...error,
+            message: error.message,
+            externalWriteRejected: true,
+          })
+        : error,
     )
   }
   return Effect.succeed(result)
 }
 
 const accountingRequest = (
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PUT",
   path: string,
   accessToken: Redacted.Redacted<string>,
   tenantId: string,
   idempotencyKey?: string,
 ): HttpClientRequest.HttpClientRequest => {
   const url = `${ACCOUNTING_URL}${path}`
-  const base =
-    method === "GET" ? HttpClientRequest.get(url) : HttpClientRequest.post(url)
+  const base = HttpClientRequest.make(method)(url)
   const headers = base.pipe(
     HttpClientRequest.bearerToken(accessToken),
     HttpClientRequest.setHeader("Xero-tenant-id", tenantId),
@@ -353,13 +370,24 @@ export const xeroContactWritePayload = (
   input: IssueAuthorisedSalesInvoiceInput,
   name: string,
   contactId: string | undefined,
+  defaultBilling: boolean,
 ) => ({
   Contacts: [
     {
       ...(contactId !== undefined && { ContactID: contactId }),
       Name: name,
       EmailAddress: input.customer.email,
-      Addresses: [xeroStreetAddress(input.shippingAddress)],
+      Addresses: [
+        xeroStreetAddress(input.shippingAddress),
+        ...(defaultBilling
+          ? [
+              {
+                ...xeroStreetAddress(input.shippingAddress),
+                AddressType: "POBOX",
+              },
+            ]
+          : []),
+      ],
     },
   ],
 })
@@ -378,14 +406,12 @@ export const xeroInvoiceWritePayload = (
       LineAmountTypes: "Inclusive",
       CurrencyCode: input.currency,
       Reference: input.reference,
-      LineItems: [
-        {
-          ItemCode: input.productSku,
-          Description: input.productSku,
-          Quantity: 1,
-          UnitAmount: input.agreedPrice,
-        },
-      ],
+      LineItems: input.lines.map((line) => ({
+        ItemCode: line.productSku,
+        // Let Xero snapshot the Item's sales description onto the invoice.
+        Quantity: line.quantity,
+        UnitAmount: line.unitAmount,
+      })),
     },
   ],
 })
@@ -395,7 +421,7 @@ const xeroWhereEquals = (field: string, value: string): string =>
 
 const requestAccessToken = (
   httpClient: HttpClient.HttpClient,
-  config: Context.Tag.Service<typeof XeroInvoiceConfig>,
+  config: Context.Service.Shape<typeof XeroInvoiceConfig>,
 ): Effect.Effect<
   {
     readonly accessToken: Redacted.Redacted<string>
@@ -463,7 +489,7 @@ const requestTenantId = (
 
 const fetchXeroAccess = (
   httpClient: HttpClient.HttpClient,
-  config: Context.Tag.Service<typeof XeroInvoiceConfig>,
+  config: Context.Service.Shape<typeof XeroInvoiceConfig>,
 ): Effect.Effect<XeroAccess, XeroInvoiceError> =>
   Effect.gen(function* () {
     const token = yield* requestAccessToken(httpClient, config)
@@ -481,17 +507,18 @@ const sendAccounting = (
   access: XeroAccessCache,
   build: (current: XeroAccess) => HttpClientRequest.HttpClientRequest,
   productSku: string,
+  invoiceWrite = false,
 ): Effect.Effect<XeroHttpResult, XeroInvoiceError> =>
   Effect.gen(function* () {
     const firstAccess = yield* access.get()
     const first = yield* execute(httpClient, build(firstAccess))
     if (first.status !== 401) {
-      return yield* interpretXeroResult(first, productSku)
+      return yield* interpretXeroResult(first, productSku, invoiceWrite)
     }
     yield* access.invalidate()
     const secondAccess = yield* access.get()
     const second = yield* execute(httpClient, build(secondAccess))
-    return yield* interpretXeroResult(second, productSku)
+    return yield* interpretXeroResult(second, productSku, invoiceWrite)
   })
 
 const findContacts = (
@@ -538,7 +565,56 @@ const writeContact = (
   idempotencyKey: string,
 ): Effect.Effect<ResolvedXeroContact, XeroInvoiceError> =>
   Effect.gen(function* () {
-    const payload = xeroContactWritePayload(input, name, contactId)
+    let defaultBilling = true
+    if (contactId !== undefined) {
+      const detail = yield* sendAccounting(
+        httpClient,
+        access,
+        (current) =>
+          accountingRequest(
+            "GET",
+            `/Contacts/${contactId}`,
+            current.accessToken,
+            current.tenantId,
+          ),
+        "",
+      )
+      if (detail.status !== 200 || detail.partial) {
+        return yield* xeroMalformedResponseError(
+          "Incomplete Xero contact address response",
+        )
+      }
+      const decoded = yield* decodeJson(
+        XeroContactDetailsResponse,
+        detail.bodyText,
+        "Malformed Xero contact address response",
+      )
+      const contact = decoded.Contacts[0]
+      if (decoded.Contacts.length !== 1 || contact?.ContactID !== contactId) {
+        return yield* xeroMalformedResponseError(
+          "Unexpected Xero contact in address response",
+        )
+      }
+      defaultBilling = !contact.Addresses.some(
+        ({ AddressType, ...content }) =>
+          AddressType === "POBOX" &&
+          Object.values(content).some(
+            (value) => (value?.trim().length ?? 0) > 0,
+          ),
+      )
+    }
+    const payload = xeroContactWritePayload(
+      input,
+      name,
+      contactId,
+      defaultBilling,
+    )
+    // Once read-back confirms billing was filled, retries omit it. Keep that
+    // STREET-only update distinct from the original fallback payload.
+    const writeKey =
+      contactId !== undefined && defaultBilling
+        ? `${idempotencyKey}:billing-default`
+        : idempotencyKey
     const result = yield* sendAccounting(
       httpClient,
       access,
@@ -548,9 +624,9 @@ const writeContact = (
           "/Contacts",
           current.accessToken,
           current.tenantId,
-          idempotencyKey,
-        ).pipe(HttpClientRequest.bodyUnsafeJson(payload)),
-      input.productSku,
+          writeKey,
+        ).pipe(HttpClientRequest.bodyJsonUnsafe(payload)),
+      input.lines.map((line) => line.productSku).join(", "),
     )
     const decoded = yield* decodeJson(
       XeroContactsResponse,
@@ -585,7 +661,6 @@ const writeContact = (
 const toReconcilableInvoice = (
   invoice: typeof XeroInvoiceWire.Type,
 ): ReconcilableInvoice => {
-  const line = invoice.LineItems?.[0]
   return {
     invoiceId: invoice.InvoiceID,
     invoiceNumber: invoice.InvoiceNumber,
@@ -595,10 +670,13 @@ const toReconcilableInvoice = (
     date: invoice.Date ?? "",
     dueDate: invoice.DueDate ?? "",
     contactId: invoice.Contact?.ContactID ?? "",
-    itemCode: line?.ItemCode ?? "",
-    unitAmount: wireAmountToMoney(line?.UnitAmount) ?? "",
+    lines: (invoice.LineItems ?? []).map((line) => ({
+      itemCode: line.ItemCode ?? "",
+      description: line.Description ?? "",
+      quantity: Number(line.Quantity),
+      unitAmount: wireAmountToMoney(line.UnitAmount) ?? "",
+    })),
     total: wireAmountToMoney(invoice.Total) ?? "",
-    lineCount: invoice.LineItems?.length ?? 0,
   }
 }
 
@@ -651,9 +729,10 @@ const createInvoice = (
           idempotencyKey,
         ).pipe(
           HttpClientRequest.appendUrlParam("SummarizeErrors", "true"),
-          HttpClientRequest.bodyUnsafeJson(payload),
+          HttpClientRequest.bodyJsonUnsafe(payload),
         ),
-      input.productSku,
+      input.lines.map((line) => line.productSku).join(", "),
+      true,
     )
     const decoded = yield* decodeJson(
       XeroInvoicesResponse,
@@ -674,6 +753,7 @@ const createInvoice = (
     const issued = yield* decodeIssuedSalesInvoice(
       invoice.InvoiceID,
       invoice.InvoiceNumber,
+      toReconcilableInvoice(invoice).lines,
     )
     yield* Effect.log("Issued Xero Sales Invoice").pipe(
       Effect.annotateLogs({
@@ -682,7 +762,7 @@ const createInvoice = (
         invoiceNumber: issued.invoiceNumber,
         customerName: input.customer.name,
         customerEmail: input.customer.email,
-        productSku: input.productSku,
+        productSkus: input.lines.map((line) => line.productSku),
         contactId,
       }),
     )
@@ -703,6 +783,77 @@ const logInvoiceFailure = (
     }),
   )
 
+const ensureInvoiceNote = (
+  httpClient: HttpClient.HttpClient,
+  access: XeroAccessCache,
+  invoiceId: string,
+  note: string,
+): Effect.Effect<void, XeroInvoiceError> =>
+  Effect.gen(function* () {
+    const path = `/Invoices/${invoiceId}/History`
+    const history = Schema.Struct({
+      HistoryRecords: Schema.Array(
+        Schema.Struct({
+          Details: Schema.String,
+          ValidationErrors: Schema.optional(
+            Schema.Array(Schema.Struct({ Message: Schema.String })),
+          ),
+        }),
+      ),
+    })
+    const result = yield* sendAccounting(
+      httpClient,
+      access,
+      (current) =>
+        accountingRequest("GET", path, current.accessToken, current.tenantId),
+      "",
+    )
+    const existing = yield* decodeJson(
+      history,
+      result.bodyText,
+      "Malformed Xero invoice history response",
+    )
+    if (existing.HistoryRecords.some((record) => record.Details === note))
+      return
+    const written = yield* sendAccounting(
+      httpClient,
+      access,
+      (current) =>
+        accountingRequest(
+          "PUT",
+          path,
+          current.accessToken,
+          current.tenantId,
+          `pf-invoice-note:${createHash("sha256")
+            .update(JSON.stringify([current.tenantId, invoiceId, note]))
+            .digest("hex")}`,
+        ).pipe(
+          HttpClientRequest.bodyJsonUnsafe({
+            HistoryRecords: [{ Details: note }],
+          }),
+        ),
+      "",
+    )
+    const decoded = yield* decodeJson(
+      history,
+      written.bodyText,
+      "Malformed Xero invoice history response",
+    )
+    const validationErrors = decoded.HistoryRecords.flatMap(
+      (record) => record.ValidationErrors ?? [],
+    )
+    if (validationErrors.length > 0) {
+      return yield* xeroValidationError(
+        validationErrors.map((error) => error.Message).join("; "),
+      )
+    }
+    if (!decoded.HistoryRecords.some((record) => record.Details === note)) {
+      return yield* xeroMalformedResponseError(
+        "Xero did not confirm the invoice history note",
+      )
+    }
+  })
+
 export const XeroInvoiceLive = Layer.effect(
   XeroInvoice,
   Effect.gen(function* () {
@@ -716,7 +867,7 @@ export const XeroInvoiceLive = Layer.effect(
       "XeroInvoice.issueAuthorisedSalesInvoice",
     )(function* (input: IssueAuthorisedSalesInvoiceInput) {
       return yield* Effect.gen(function* () {
-        const { todoId } = yield* CurrentStepJobContext
+        const { todoId, externalWriteAttemptId } = yield* CurrentStepJobContext
         const contactId = yield* resolveInvoiceContact(
           {
             findByName: (name) =>
@@ -745,12 +896,12 @@ export const XeroInvoiceLive = Layer.effect(
                 undefined,
                 idempotencyKey,
               ),
-            update: (contact, invoiceInput, idempotencyKey) =>
+            update: (contact, invoiceInput, idempotencyKey, name) =>
               writeContact(
                 httpClient,
                 access,
                 invoiceInput,
-                invoiceInput.customer.name,
+                name,
                 contact.contactId,
                 idempotencyKey,
               ),
@@ -758,26 +909,46 @@ export const XeroInvoiceLive = Layer.effect(
           input,
           todoId,
         )
-        const existing = yield* findInvoicesByReference(
-          httpClient,
-          access,
-          input.reference,
-        )
+        const references = [
+          ...new Set([
+            input.reference,
+            ...(input.legacyReference ? [input.legacyReference] : []),
+          ]),
+        ]
+        const existing = (yield* Effect.forEach(references, (reference) =>
+          findInvoicesByReference(httpClient, access, reference),
+        )).flat()
         const reconciled = yield* reconcileExistingInvoices(
           existing,
           input,
           contactId,
         )
-        if (reconciled !== undefined) {
-          return reconciled
+        if (reconciled === undefined && input.recoveryOnly) {
+          return yield* xeroValidationError(
+            "No existing invoice found; a customer-facing reference is required before creation",
+          )
         }
-        return yield* createInvoice(
-          httpClient,
-          access,
-          contactId,
-          input,
-          xeroIdempotencyKey(todoId, "invoice.create"),
-        )
+        const issued =
+          reconciled ??
+          (yield* createInvoice(
+            httpClient,
+            access,
+            contactId,
+            input,
+            xeroIdempotencyKey(
+              externalWriteAttemptId ?? todoId,
+              "invoice.create",
+            ),
+          ))
+        if (input.internalNote !== undefined) {
+          yield* ensureInvoiceNote(
+            httpClient,
+            access,
+            issued.invoiceId,
+            input.internalNote,
+          )
+        }
+        return issued
       }).pipe(Effect.tapError((error) => logInvoiceFailure(input, error)))
     })
 
@@ -785,21 +956,142 @@ export const XeroInvoiceLive = Layer.effect(
   }),
 )
 
+const CancellationInvoiceWire = Schema.Struct({
+  InvoiceID: XeroInvoiceId,
+  InvoiceNumber: XeroInvoiceNumber,
+  Type: Schema.Literal("ACCREC"),
+  Status: Schema.String,
+  HasErrors: Schema.optional(Schema.Boolean),
+  ValidationErrors: Schema.optional(
+    Schema.Array(Schema.Struct({ Message: Schema.String })),
+  ),
+})
+
+export const XeroInvoiceCancellationLive = Layer.effect(
+  XeroInvoiceCancellation,
+  Effect.gen(function* () {
+    const httpClient = yield* HttpClient.HttpClient
+    const config = yield* requireXeroInvoiceConfig(yield* XeroInvoiceConfig)
+    const access = yield* makeXeroAccessCache(
+      fetchXeroAccess(httpClient, config),
+    )
+
+    const cancel = (
+      input: CancelSalesInvoiceInput,
+    ): Effect.Effect<CancelledSalesInvoice, XeroInvoiceError> =>
+      Effect.gen(function* () {
+        const { invoiceId } = yield* decodeCancelSalesInvoiceInput(input)
+        const path = `/Invoices/${invoiceId}`
+        const readResponse = (response: XeroHttpResult) =>
+          Effect.gen(function* () {
+            if (response.status !== 200 || response.partial)
+              return yield* xeroMalformedResponseError(
+                "Incomplete Xero cancellation response",
+              )
+            const decoded = yield* decodeJson(
+              Schema.Struct({
+                Invoices: Schema.Array(CancellationInvoiceWire),
+              }),
+              response.bodyText,
+              "Malformed Xero cancellation response",
+            )
+            const invoice = decoded.Invoices[0]
+            if (
+              decoded.Invoices.length !== 1 ||
+              !invoice ||
+              invoice.InvoiceID !== invoiceId
+            )
+              return yield* xeroMalformedResponseError(
+                "Xero cancellation returned an unexpected invoice",
+              )
+            if (
+              invoice.HasErrors ||
+              (invoice.ValidationErrors?.length ?? 0) > 0
+            )
+              return yield* xeroValidationError(
+                "Xero rejected invoice cancellation",
+              )
+            return invoice
+          })
+        const existing = yield* sendAccounting(
+          httpClient,
+          access,
+          (current) =>
+            accountingRequest(
+              "GET",
+              path,
+              current.accessToken,
+              current.tenantId,
+            ),
+          "",
+        ).pipe(Effect.flatMap(readResponse))
+        // Reconcile provider state even after the idempotency window expires.
+        if (existing.Status !== "VOIDED" && existing.Status !== "AUTHORISED")
+          return yield* xeroValidationError(
+            "Only an authorised Sales Invoice can be cancelled",
+          )
+        const cancelled =
+          existing.Status === "VOIDED"
+            ? existing
+            : yield* sendAccounting(
+                httpClient,
+                access,
+                (current) =>
+                  accountingRequest(
+                    "POST",
+                    path,
+                    current.accessToken,
+                    current.tenantId,
+                    `pf-invoice-void:${createHash("sha256")
+                      .update(JSON.stringify([current.tenantId, invoiceId]))
+                      .digest("hex")}`,
+                  ).pipe(
+                    HttpClientRequest.bodyJsonUnsafe({
+                      Invoices: [{ InvoiceID: invoiceId, Status: "VOIDED" }],
+                    }),
+                  ),
+                "",
+              ).pipe(Effect.flatMap(readResponse))
+        if (
+          cancelled.Status !== "VOIDED" ||
+          cancelled.InvoiceNumber !== existing.InvoiceNumber
+        )
+          return yield* xeroMalformedResponseError(
+            "Xero did not confirm cancellation of the original invoice",
+          )
+        return {
+          invoiceId: cancelled.InvoiceID,
+          invoiceNumber: cancelled.InvoiceNumber,
+          status: "VOIDED",
+        }
+      })
+    return { cancel }
+  }),
+)
+
+// Xero represents absent optional properties as either missing or null.
+const optionalNullable = <S extends Schema.Constraint>(schema: S) =>
+  Schema.optional(Schema.NullOr(schema)).pipe(
+    Schema.decodeTo(Schema.optional(Schema.toType(schema)), {
+      decode: SchemaGetter.transformOptional(
+        Option.filter((value) => value !== null),
+      ),
+      encode: SchemaGetter.passthrough(),
+    }),
+  )
+
 const DirectoryContact = Schema.Struct({
   ContactID: XeroContactId,
   Name: Schema.String,
-  ContactStatus: Schema.Literal("ACTIVE", "ARCHIVED", "GDPRREQUEST"),
-  EmailAddress: Schema.optionalWith(Schema.String, { nullable: true }),
-  ContactPersons: Schema.optionalWith(
+  ContactStatus: Schema.Literals(["ACTIVE", "ARCHIVED", "GDPRREQUEST"]),
+  EmailAddress: optionalNullable(Schema.String),
+  ContactPersons: optionalNullable(
     Schema.Array(
       Schema.Struct({
-        EmailAddress: Schema.optionalWith(Schema.String, { nullable: true }),
-        IncludeInEmails: Schema.optionalWith(Schema.Boolean, {
-          nullable: true,
-        }),
+        EmailAddress: optionalNullable(Schema.String),
+        IncludeInEmails: optionalNullable(Schema.Boolean),
       }),
     ),
-    { nullable: true },
   ),
 })
 const DirectoryInvoice = Schema.Struct({
@@ -826,77 +1118,99 @@ const enabledInvoiceEmails = (
   ),
 ]
 
+const invoiceContact = (
+  contact: typeof DirectoryContact.Type,
+): InvoiceDirectory["contacts"][number] => ({
+  contactId: contact.ContactID,
+  name: contact.Name,
+  active: contact.ContactStatus === "ACTIVE",
+  emails: [
+    ...new Set(
+      [
+        contact.EmailAddress,
+        ...(contact.ContactPersons ?? []).map((person) => person.EmailAddress),
+      ].flatMap((email) =>
+        email ? email.split(/[;,]/).map(normalizeEmail).filter(Boolean) : [],
+      ),
+    ),
+  ],
+  invoiceRecipientEmails: enabledInvoiceEmails(contact),
+})
+
+const makeDirectoryReader = Effect.gen(function* () {
+  const httpClient = yield* HttpClient.HttpClient
+  const config = yield* requireXeroInvoiceConfig(yield* XeroInvoiceConfig)
+  const access = yield* makeXeroAccessCache(fetchXeroAccess(httpClient, config))
+
+  const readPages = <A, I>(
+    path: string,
+    schema: Schema.Codec<A, I>,
+    rows: (value: A) => readonly { readonly id: string }[],
+  ): Effect.Effect<readonly A[], XeroInvoiceError> =>
+    Effect.gen(function* () {
+      const pages: A[] = []
+      const seen = new Set<string>()
+      for (let page = 1; page <= 1000; page++) {
+        const result = yield* sendAccounting(
+          httpClient,
+          access,
+          (current) =>
+            accountingRequest(
+              "GET",
+              `${path}&page=${page}&pageSize=100`,
+              current.accessToken,
+              current.tenantId,
+            ),
+          "",
+        )
+        // A partial or malformed response must never imply absence of an invoice.
+        if (result.status !== 200 || result.partial)
+          return yield* xeroMalformedResponseError(
+            "Incomplete Xero invoice directory response",
+          )
+        const decoded = yield* decodeJson(
+          schema,
+          result.bodyText,
+          "Malformed Xero invoice directory response",
+        )
+        const items = rows(decoded)
+        for (const item of items) {
+          if (seen.has(item.id))
+            return yield* xeroMalformedResponseError(
+              "Repeated Xero directory page or identity",
+            )
+          seen.add(item.id)
+        }
+        pages.push(decoded)
+        if (items.length < 100) return pages
+      }
+      return yield* xeroMalformedResponseError(
+        "Xero directory pagination limit exceeded",
+      )
+    })
+
+  return { readPages, httpClient, access }
+})
+
 /** Read-only companion: shares authentication/error handling, never writes. */
 export const XeroInvoiceLookupLive = Layer.effect(
   XeroInvoiceLookup,
   Effect.gen(function* () {
-    const httpClient = yield* HttpClient.HttpClient
-    const config = yield* requireXeroInvoiceConfig(yield* XeroInvoiceConfig)
-    const access = yield* makeXeroAccessCache(
-      fetchXeroAccess(httpClient, config),
-    )
-
-    const readPages = <A, I>(
-      path: string,
-      schema: Schema.Schema<A, I>,
-      rows: (value: A) => readonly { readonly id: string }[],
-    ): Effect.Effect<readonly A[], XeroInvoiceError> =>
-      Effect.gen(function* () {
-        const pages: A[] = []
-        const seen = new Set<string>()
-        for (let page = 1; page <= 1000; page++) {
-          const result = yield* sendAccounting(
-            httpClient,
-            access,
-            (current) =>
-              accountingRequest(
-                "GET",
-                `${path}&page=${page}&pageSize=100`,
-                current.accessToken,
-                current.tenantId,
-              ),
-            "",
-          )
-          // A partial or malformed response must never imply absence of an invoice.
-          if (result.status !== 200 || result.partial)
-            return yield* xeroMalformedResponseError(
-              "Incomplete Xero invoice directory response",
-            )
-          const decoded = yield* decodeJson(
-            schema,
-            result.bodyText,
-            "Malformed Xero invoice directory response",
-          )
-          const items = rows(decoded)
-          for (const item of items) {
-            if (seen.has(item.id))
-              return yield* xeroMalformedResponseError(
-                "Repeated Xero directory page or identity",
-              )
-            seen.add(item.id)
-          }
-          pages.push(decoded)
-          if (items.length < 100) return pages
-        }
-        return yield* xeroMalformedResponseError(
-          "Xero directory pagination limit exceeded",
-        )
-      })
-
+    const { readPages } = yield* makeDirectoryReader
     const readDirectory = (
       reference: string,
       previousReference?: string,
     ): Effect.Effect<InvoiceDirectory, XeroInvoiceError> =>
       Effect.gen(function* () {
-        const text = yield* Schema.decodeUnknown(
-          Schema.Trim.pipe(Schema.minLength(1)),
+        const text = yield* Schema.decodeUnknownEffect(
+          Schema.Trim.pipe(Schema.check(Schema.isMinLength(1))),
         )(reference).pipe(
           Effect.mapError(() =>
             xeroValidationError("An invoice reference is required"),
           ),
         )
-        const references = yield* Schema.decodeUnknown(
-          Schema.Array(Schema.Trim.pipe(Schema.minLength(1))),
+        const references = yield* Schema.decodeUnknownEffect(
+          Schema.Array(Schema.Trim.pipe(Schema.check(Schema.isMinLength(1)))),
         )(
           previousReference === undefined ? [text] : [text, previousReference],
         ).pipe(
@@ -917,26 +1231,7 @@ export const XeroInvoiceLookupLive = Layer.effect(
         )
         return {
           contacts: contactPages.flatMap((page) =>
-            page.Contacts.map((contact) => ({
-              contactId: contact.ContactID,
-              name: contact.Name,
-              active: contact.ContactStatus === "ACTIVE",
-              emails: [
-                ...new Set(
-                  [
-                    contact.EmailAddress,
-                    ...(contact.ContactPersons ?? []).map(
-                      (person) => person.EmailAddress,
-                    ),
-                  ].flatMap((email) =>
-                    email
-                      ? email.split(/[;,]/).map(normalizeEmail).filter(Boolean)
-                      : [],
-                  ),
-                ),
-              ],
-              invoiceRecipientEmails: enabledInvoiceEmails(contact),
-            })),
+            page.Contacts.map(invoiceContact),
           ),
           invoices: invoicePages.flatMap((page) =>
             page.Invoices.map((invoice) => ({
@@ -950,6 +1245,100 @@ export const XeroInvoiceLookupLive = Layer.effect(
         }
       })
     return { readDirectory }
+  }),
+)
+
+const SalesItemWire = Schema.Struct({
+  Code: Schema.String,
+  Description: optionalNullable(Schema.String),
+  IsSold: optionalNullable(Schema.Boolean),
+  SalesDetails: optionalNullable(
+    Schema.Struct({ UnitPrice: Schema.optional(Schema.Unknown) }),
+  ),
+})
+
+export const XeroInvoicePreparationLive = Layer.effect(
+  XeroInvoicePreparation,
+  Effect.gen(function* () {
+    const { readPages, httpClient, access } = yield* makeDirectoryReader
+    return {
+      read: (codes: readonly string[]) =>
+        Effect.gen(function* () {
+          const contactPages = yield* readPages(
+            "/Contacts?includeArchived=true",
+            Schema.Struct({ Contacts: Schema.Array(DirectoryContact) }),
+            (page) =>
+              page.Contacts.map((contact) => ({ id: contact.ContactID })),
+          )
+          const items = yield* Effect.forEach([...new Set(codes)], (code) =>
+            Effect.gen(function* () {
+              const result = yield* sendAccounting(
+                httpClient,
+                access,
+                (current) =>
+                  accountingRequest(
+                    "GET",
+                    `/Items?unitdp=4&where=${encodeURIComponent(`Code=="${code.replaceAll('"', '\\"')}"`)}`,
+                    current.accessToken,
+                    current.tenantId,
+                  ),
+                "",
+              )
+              if (result.status !== 200 || result.partial)
+                return yield* xeroMalformedResponseError(
+                  `Incomplete Xero item response for ${code}`,
+                )
+              const decoded = yield* decodeJson(
+                Schema.Struct({ Items: Schema.Array(SalesItemWire) }),
+                result.bodyText,
+                `Malformed Xero item response for ${code}`,
+              )
+              const matches = decoded.Items.filter((item) => item.Code === code)
+              const item = matches.length === 1 ? matches[0] : undefined
+              const price = item?.SalesDetails?.UnitPrice
+              const invalid = (problem: string): SalesItemResult => ({
+                kind: "invalid",
+                code,
+                problem: `${code}: ${problem}`,
+              })
+              if (!item)
+                return invalid(
+                  "item missing or ambiguous in Xero; configure an existing item code",
+                )
+              if (item.IsSold !== true)
+                return invalid("item is not available for sales in Xero")
+              if (
+                typeof price !== "number" ||
+                !Number.isFinite(price) ||
+                price < 0 ||
+                !Number.isSafeInteger(Math.round(price * 100))
+              )
+                return invalid(
+                  "set a valid non-negative sales price in Xero (zero is allowed)",
+                )
+              if (!item.Description?.trim())
+                return invalid("set a sales description in Xero")
+              return {
+                kind: "available",
+                code,
+                description: item.Description,
+                unitAmountCents: BigDecimal.toNumberUnsafe(
+                  BigDecimal.multiply(
+                    BigDecimal.fromNumberUnsafe(price),
+                    BigDecimal.make(100n, 0),
+                  ),
+                ),
+              } satisfies SalesItemResult
+            }),
+          )
+          return {
+            contacts: contactPages.flatMap((page) =>
+              page.Contacts.map(invoiceContact),
+            ),
+            items,
+          }
+        }),
+    }
   }),
 )
 
@@ -983,47 +1372,75 @@ const CreatedDraftWire = Schema.Struct({
     }),
   ),
 })
+const CreatedRepeatedDraftWire = Schema.Struct({
+  ...CreatedDraftWire.fields,
+  LineItems: Schema.Array(
+    Schema.Struct({
+      Description: Schema.String,
+      ItemCode: Schema.optional(Schema.String),
+      Quantity: Schema.optional(Schema.Number),
+      UnitAmount: Schema.optional(Schema.Number),
+      LineAmount: Schema.optional(Schema.Number),
+      TaxAmount: Schema.optional(Schema.Number),
+      TaxType: Schema.optional(Schema.String),
+      AccountCode: Schema.optional(Schema.String),
+      Tracking: Schema.optional(
+        Schema.Array(
+          Schema.Struct({ Name: Schema.String, Option: Schema.String }),
+        ),
+      ),
+    }),
+  ),
+})
 const ContactInvoiceWire = Schema.Struct({
   ...DirectoryInvoice.fields,
-  Reference: Schema.optionalWith(Schema.String, { nullable: true }),
+  Reference: optionalNullable(Schema.String),
 })
 
-export const XeroDraftInvoiceLive = Layer.effect(
-  XeroDraftInvoice,
+export const XeroDraftInvoiceLive = Layer.effectContext(
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient
     const config = yield* requireXeroInvoiceConfig(yield* XeroInvoiceConfig)
     const access = yield* makeXeroAccessCache(
       fetchXeroAccess(httpClient, config),
     )
-    const serial = yield* Effect.makeSemaphore(1)
+    const serial = yield* Semaphore.make(1)
     // Pace the lookup/write pair below the tenant's minute budget. Xero's
     // Retry-After handling still applies when other clients share the tenant.
     const request = (
       build: (current: XeroAccess) => HttpClientRequest.HttpClientRequest,
     ) =>
       Effect.sleep("2 seconds").pipe(
-        Effect.zipRight(
+        Effect.andThen(
           sendAccounting(httpClient, access, build, "").pipe(
-            Effect.timeoutFail({
+            Effect.timeoutOrElse({
               duration: "30 seconds",
-              onTimeout: () =>
-                xeroTimeoutError(
-                  "Xero draft request timed out; reconcile before retry",
+              orElse: () =>
+                Effect.fail(
+                  xeroTimeoutError(
+                    "Xero draft request timed out; reconcile before retry",
+                  ),
                 ),
             }),
           ),
         ),
       )
 
-    const createIfAbsent = (
-      input: DraftSalesInvoice,
-    ): Effect.Effect<DraftInvoiceResult, XeroInvoiceError> =>
-      serial.withPermits(1)(
+    const create = (
+      input: DraftSalesInvoice | RepeatedDraftSalesInvoice,
+      writeKey?: string,
+    ): Effect.Effect<DraftInvoiceResult, XeroInvoiceError> => {
+      // The repeated operation constructs this effect once per invocation.
+      let writeAttempted = false
+      return serial.withPermits(1)(
         Effect.gen(function* () {
-          const invoice = yield* Schema.decodeUnknown(DraftSalesInvoice)(
-            input,
-          ).pipe(
+          const validated: Effect.Effect<
+            DraftSalesInvoice | RepeatedDraftSalesInvoice,
+            Schema.SchemaError
+          > = writeKey
+            ? Schema.decodeUnknownEffect(RepeatedDraftSalesInvoice)(input)
+            : Schema.decodeUnknownEffect(DraftSalesInvoice)(input)
+          const invoice = yield* validated.pipe(
             Effect.mapError(() =>
               xeroValidationError(
                 "Invalid draft invoice input or inconsistent amounts",
@@ -1031,74 +1448,77 @@ export const XeroDraftInvoiceLive = Layer.effect(
             ),
           )
           const duplicateReference =
-            invoice.duplicateReference ?? invoice.reference
-          // Read this contact's invoices, not a potentially stale batch snapshot.
-          // Filtering references locally also handles whitespace/case and suffixes.
-          const matches: (typeof ContactInvoiceWire.Type)[] = []
-          const seen = new Set<string>()
-          let complete = false
-          for (let page = 1; page <= 1000; page++) {
-            const response = yield* request((current) =>
-              accountingRequest(
-                "GET",
-                `/Invoices?ContactIDs=${invoice.contactId}&where=${encodeURIComponent('Type=="ACCREC"')}&Statuses=DRAFT,SUBMITTED,AUTHORISED,PAID,VOIDED,DELETED&page=${page}&pageSize=100`,
-                current.accessToken,
-                current.tenantId,
-              ),
-            )
-            if (response.status !== 200 || response.partial)
-              return yield* xeroMalformedResponseError(
-                "Incomplete draft duplicate check",
+            ("duplicateReference" in invoice
+              ? invoice.duplicateReference
+              : undefined) ?? invoice.reference
+          if (!writeKey) {
+            // Read this contact's invoices, not a potentially stale batch snapshot.
+            // Filtering references locally also handles whitespace/case and suffixes.
+            const matches: (typeof ContactInvoiceWire.Type)[] = []
+            const seen = new Set<string>()
+            let complete = false
+            for (let page = 1; page <= 1000; page++) {
+              const response = yield* request((current) =>
+                accountingRequest(
+                  "GET",
+                  `/Invoices?ContactIDs=${invoice.contactId}&where=${encodeURIComponent('Type=="ACCREC"')}&Statuses=DRAFT,SUBMITTED,AUTHORISED,PAID,VOIDED,DELETED&page=${page}&pageSize=100`,
+                  current.accessToken,
+                  current.tenantId,
+                ),
               )
-            const decoded = yield* decodeJson(
-              Schema.Struct({ Invoices: Schema.Array(ContactInvoiceWire) }),
-              response.bodyText,
-              "Malformed draft duplicate check",
-            )
-            for (const existing of decoded.Invoices) {
-              if (
-                seen.has(existing.InvoiceID) ||
-                existing.Contact.ContactID !== invoice.contactId
-              )
+              if (response.status !== 200 || response.partial)
                 return yield* xeroMalformedResponseError(
-                  "Repeated identity or unrelated contact in draft duplicate check",
+                  "Incomplete draft duplicate check",
                 )
-              seen.add(existing.InvoiceID)
-              if (
-                matchesInvoiceReference(
-                  existing.Reference ?? "",
-                  duplicateReference,
-                )
+              const decoded = yield* decodeJson(
+                Schema.Struct({ Invoices: Schema.Array(ContactInvoiceWire) }),
+                response.bodyText,
+                "Malformed draft duplicate check",
               )
-                matches.push(existing)
+              for (const existing of decoded.Invoices) {
+                if (
+                  seen.has(existing.InvoiceID) ||
+                  existing.Contact.ContactID !== invoice.contactId
+                )
+                  return yield* xeroMalformedResponseError(
+                    "Repeated identity or unrelated contact in draft duplicate check",
+                  )
+                seen.add(existing.InvoiceID)
+                if (
+                  matchesInvoiceReference(
+                    existing.Reference ?? "",
+                    duplicateReference,
+                  )
+                )
+                  matches.push(existing)
+              }
+              if (decoded.Invoices.length < 100) {
+                complete = true
+                break
+              }
             }
-            if (decoded.Invoices.length < 100) {
-              complete = true
-              break
-            }
+            if (!complete)
+              return yield* xeroMalformedResponseError(
+                "Draft duplicate-check pagination limit exceeded",
+              )
+            const [first, ...rest] = matches
+            if (first)
+              return {
+                kind: "skipped-existing",
+                existingInvoices: [
+                  {
+                    invoiceId: first.InvoiceID,
+                    invoiceNumber: first.InvoiceNumber,
+                    status: first.Status,
+                  },
+                  ...rest.map((value) => ({
+                    invoiceId: value.InvoiceID,
+                    invoiceNumber: value.InvoiceNumber,
+                    status: value.Status,
+                  })),
+                ],
+              } satisfies DraftInvoiceResult
           }
-          if (!complete)
-            return yield* xeroMalformedResponseError(
-              "Draft duplicate-check pagination limit exceeded",
-            )
-          const [first, ...rest] = matches
-          if (first)
-            return {
-              kind: "skipped-existing",
-              existingInvoices: [
-                {
-                  invoiceId: first.InvoiceID,
-                  invoiceNumber: first.InvoiceNumber,
-                  status: first.Status,
-                },
-                ...rest.map((value) => ({
-                  invoiceId: value.InvoiceID,
-                  invoiceNumber: value.InvoiceNumber,
-                  status: value.Status,
-                })),
-              ],
-            }
-
           if (!invoice.expectedRecipientEmails?.length)
             return yield* xeroValidationError(
               "Draft recipient intent is missing; prepare the invoice again before creating it",
@@ -1143,11 +1563,14 @@ export const XeroDraftInvoiceLive = Layer.effect(
             )
           }
           const currentAccess = yield* access.get()
-          const key = xeroDraftIdempotencyKey(
-            currentAccess.tenantId,
-            invoice.contactId,
-            duplicateReference,
-          )
+          const key =
+            writeKey ??
+            xeroDraftIdempotencyKey(
+              currentAccess.tenantId,
+              invoice.contactId,
+              duplicateReference,
+            )
+          writeAttempted = true
           const response = yield* request((current) =>
             accountingRequest(
               "POST",
@@ -1157,7 +1580,11 @@ export const XeroDraftInvoiceLive = Layer.effect(
               key,
             ).pipe(
               HttpClientRequest.appendUrlParam("SummarizeErrors", "true"),
-              HttpClientRequest.bodyUnsafeJson({
+              (request) =>
+                writeKey
+                  ? HttpClientRequest.appendUrlParam(request, "unitdp", "4")
+                  : request,
+              HttpClientRequest.bodyJsonUnsafe({
                 Invoices: [
                   {
                     Type: "ACCREC",
@@ -1168,28 +1595,45 @@ export const XeroDraftInvoiceLive = Layer.effect(
                     DueDate: invoice.dueDate,
                     CurrencyCode: invoice.currency,
                     LineAmountTypes: invoice.lineAmountType,
-                    LineItems: invoice.lines.map((line) => ({
-                      ItemCode: line.itemCode,
-                      Description: line.description,
-                      Quantity: line.quantity,
-                      UnitAmount: line.unitAmountCents / 100,
-                      LineAmount: line.lineAmountCents / 100,
-                      TaxAmount: line.taxCents / 100,
-                      TaxType: line.taxType,
-                      ...(line.tracking && {
-                        Tracking: line.tracking.map((tracking) => ({
-                          Name: tracking.category,
-                          Option: tracking.option,
-                        })),
-                      }),
-                    })),
+                    LineItems: invoice.lines.map((line) =>
+                      "itemCode" in line
+                        ? {
+                            ItemCode: line.itemCode,
+                            Description: line.description,
+                            Quantity: line.quantity,
+                            UnitAmount: line.unitAmountCents / 100,
+                            LineAmount: line.lineAmountCents / 100,
+                            TaxAmount: line.taxCents / 100,
+                            TaxType: line.taxType,
+                            ...("accountCode" in line && {
+                              AccountCode: line.accountCode,
+                            }),
+                            ...("tracking" in line &&
+                              line.tracking && {
+                                Tracking: line.tracking.map((tracking) => ({
+                                  Name: tracking.category,
+                                  Option: tracking.option,
+                                })),
+                              }),
+                          }
+                        : { Description: line.description },
+                    ),
                   },
                 ],
               }),
             ),
+          ).pipe(
+            Effect.retry({
+              times: writeKey ? 2 : 0,
+              while: (error) => error.retryable,
+            }),
           )
           const decoded = yield* decodeJson(
-            Schema.Struct({ Invoices: Schema.Array(CreatedDraftWire) }),
+            Schema.Struct({
+              Invoices: Schema.Array(
+                writeKey ? CreatedRepeatedDraftWire : CreatedDraftWire,
+              ),
+            }),
             response.bodyText,
             "Malformed Xero draft creation response",
           )
@@ -1207,8 +1651,30 @@ export const XeroDraftInvoiceLive = Layer.effect(
             created.LineItems.length !== invoice.lines.length ||
             created.LineItems.some((line, index) => {
               const expected = invoice.lines[index]
+              if (!expected) return true
+              if (!("itemCode" in expected))
+                return (
+                  line.Description !== expected.description ||
+                  ("ItemCode" in line &&
+                    line.ItemCode !== undefined &&
+                    line.ItemCode !== "") ||
+                  ("Quantity" in line &&
+                    line.Quantity !== undefined &&
+                    line.Quantity !== 0) ||
+                  ("UnitAmount" in line &&
+                    line.UnitAmount !== undefined &&
+                    line.UnitAmount !== 0) ||
+                  ("LineAmount" in line &&
+                    line.LineAmount !== undefined &&
+                    line.LineAmount !== 0) ||
+                  ("TaxAmount" in line &&
+                    line.TaxAmount !== undefined &&
+                    line.TaxAmount !== 0) ||
+                  (line.Tracking ?? []).length !== 0
+                )
+              const tracking =
+                "tracking" in expected ? (expected.tracking ?? []) : []
               return (
-                !expected ||
                 line.ItemCode !== expected.itemCode ||
                 line.Description !== expected.description ||
                 line.Quantity !== expected.quantity ||
@@ -1216,9 +1682,12 @@ export const XeroDraftInvoiceLive = Layer.effect(
                 line.LineAmount !== expected.lineAmountCents / 100 ||
                 line.TaxAmount !== expected.taxCents / 100 ||
                 line.TaxType !== expected.taxType ||
-                (line.Tracking ?? []).length !==
-                  (expected.tracking ?? []).length ||
-                (expected.tracking ?? []).some(
+                (writeKey &&
+                  "accountCode" in expected &&
+                  (!("AccountCode" in line) ||
+                    line.AccountCode !== expected.accountCode)) ||
+                (line.Tracking ?? []).length !== tracking.length ||
+                tracking.some(
                   (tracking) =>
                     !line.Tracking?.some(
                       (actual) =>
@@ -1246,9 +1715,40 @@ export const XeroDraftInvoiceLive = Layer.effect(
             invoiceId: created.InvoiceID,
             invoiceNumber: created.InvoiceNumber,
             status: "DRAFT",
-          }
-        }),
+          } satisfies DraftInvoiceResult
+        }).pipe(
+          Effect.mapError((error) =>
+            writeKey
+              ? new XeroInvoiceError({
+                  ...error,
+                  message: error.message,
+                  draftCreationOutcome: writeAttempted
+                    ? "unconfirmed"
+                    : "not-created",
+                })
+              : error,
+          ),
+        ),
       )
-    return { createIfAbsent }
+    }
+    return Context.make(XeroDraftInvoice, {
+      createIfAbsent: (invoice) => create(invoice),
+    }).pipe(
+      Context.add(XeroRepeatedDraftInvoice, {
+        create: (invoice) =>
+          Effect.suspend(() =>
+            create(invoice, `pf-repeat-draft:${randomUUID()}`),
+          ).pipe(
+            Effect.flatMap((result) =>
+              Schema.decodeUnknownEffect(CreatedRepeatedDraft)(result),
+            ),
+            Effect.mapError((error) =>
+              error instanceof Schema.SchemaError
+                ? xeroMalformedResponseError("Unexpected repeated draft result")
+                : error,
+            ),
+          ),
+      }),
+    )
   }),
 )

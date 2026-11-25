@@ -1,0 +1,55 @@
+---
+title: Configuration
+description: Set configuration values and secrets for a cloud project stage.
+---
+
+Cloud configuration is scoped to a project and stage. Set values separately
+for each stage, such as Development and Production, using `pfcli`. Use the
+same key names that your organisation or plugins read.
+
+## Set a value
+
+Sign in with `pfcli`, then provide the project number, stage name, and a key
+and value. Replace the example project number and values with your own:
+
+```bash
+pfcli config set --project 0000-0000-0002 --stage Development SUPPORT_EMAIL=support@example.com
+pfcli config set --project 0000-0000-0002 --stage Production SUPPORT_EMAIL=help@example.com
+```
+
+Running `config set` again for the same key updates its value in that stage.
+You can also pass the key and value as separate arguments, quoting values that
+contain spaces:
+
+```bash
+pfcli config set --project 0000-0000-0002 --stage Production NOTIFICATION_SENDER_NAME "Example School"
+```
+
+## Set a secret
+
+Use `--secret` for credentials such as API keys and client secrets. To avoid
+exposing a secret in command arguments, follow the
+[pfcli guidance for secrets](/docs/reference/pfcli/#environment-variables).
+Keep secret values out of source code, shell history, and logs.
+
+## Inspect and remove entries
+
+List a stage's configuration or retrieve an entry by key:
+
+```bash
+pfcli config list --project 0000-0000-0002 --stage Development
+pfcli config get --project 0000-0000-0002 --stage Development SUPPORT_EMAIL
+```
+
+Secret values are masked in both `config list` and `config get`; you cannot
+retrieve the original value with these commands. To replace a secret, run
+`config set --secret` again with the new value.
+
+Remove an entry when it is no longer needed:
+
+```bash
+pfcli config delete --project 0000-0000-0002 --stage Development SUPPORT_EMAIL
+```
+
+For how to read these keys in your organisation, including required values and
+defaults, see [Configuration](/docs/reference/configuration/).

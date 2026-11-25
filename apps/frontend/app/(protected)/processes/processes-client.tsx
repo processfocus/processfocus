@@ -2,174 +2,19 @@
 
 import type { Collection } from "@tanstack/db"
 import { useLiveQuery } from "@tanstack/react-db"
-import { formatDistanceToNow } from "date-fns"
 import Link from "next/link"
 import { Suspense, use, useMemo, useState } from "react"
+import { deepEqual } from "rxdb/plugins/utils"
 import {
   type MobileProcessCatalogItem,
   createMobileProcessCatalog,
 } from "./lib/mobile-process-catalog"
 import { ProcessWorkflowLink } from "@/components/process-workflow-link"
-import type { DraftProcessExecutionDocType } from "@/lib/collections/draft-process-execution"
-import { useDraftProcessCollection } from "@/lib/collections/draft-process-execution-collection-provider"
 import {
   type ProcessDocType,
   useProcessCollection,
 } from "@/lib/collections/process-collection-provider"
 import { cn } from "@/lib/utils"
-
-function formatLastSaved(lastSaved: string): string {
-  try {
-    const date = new Date(lastSaved)
-    if (Number.isNaN(date.getTime())) {
-      return "Recently saved"
-    }
-    return formatDistanceToNow(date, { addSuffix: true })
-  } catch {
-    return "Recently saved"
-  }
-}
-
-interface DraftCardData {
-  id: string
-  processId: string
-  name: string
-  startStepPath: string
-  fieldsCompleted: number
-  totalFields: number
-  lastSaved: string
-}
-
-function DraftProcessExecutionCard({
-  draft,
-  onDiscard,
-}: {
-  draft: DraftCardData
-  onDiscard: (id: string) => void
-}) {
-  // Construct the continue URL with draftId query param
-  const continueUrl = `/processes/start/${draft.startStepPath}?draftId=${encodeURIComponent(draft.id)}`
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="font-semibold text-slate-900 dark:text-slate-100">
-            {draft.name}
-          </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {draft.fieldsCompleted} of {draft.totalFields} fields complete
-          </p>
-        </div>
-        <span className="text-xs text-slate-500 dark:text-slate-400">
-          {formatLastSaved(draft.lastSaved)}
-        </span>
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <div className="h-2 w-48 rounded-full bg-slate-200 dark:bg-slate-700">
-          <div
-            className="h-2 rounded-full bg-blue-500"
-            style={{
-              width: `${(draft.fieldsCompleted / draft.totalFields) * 100}%`,
-            }}
-          />
-        </div>
-        <div className="flex gap-2">
-          <Link
-            href={continueUrl}
-            prefetch={false}
-            className="cursor-pointer rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800"
-          >
-            Continue
-          </Link>
-          <button
-            type="button"
-            onClick={() => onDiscard(draft.id)}
-            className="cursor-pointer text-xs font-semibold text-rose-500 transition-colors hover:text-rose-600 dark:hover:text-rose-400"
-          >
-            Discard
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function DraftsSkeleton() {
-  return (
-    <div className="flex items-center justify-center py-6">
-      <output
-        className="inline-block h-6 w-6 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent motion-reduce:animate-[spin_1.5s_linear_infinite]"
-        aria-label="Loading drafts"
-      />
-    </div>
-  )
-}
-
-function DraftsListInner({
-  collectionPromise,
-}: {
-  collectionPromise: Promise<Collection<DraftProcessExecutionDocType, string>>
-}) {
-  const draftProcessExecutionCollection = use(collectionPromise)
-
-  const draftsQuery = useLiveQuery((q) =>
-    q.from({ draft: draftProcessExecutionCollection }).select(({ draft }) => ({
-      id: draft.id,
-      processId: draft.processId,
-      name: draft.name,
-      startStepPath: draft.startStepPath,
-      fieldsCompleted: draft.fieldsCompleted,
-      totalFields: draft.totalFields,
-      lastSaved: draft.lastSaved,
-    })),
-  )
-
-  const handleDiscard = async (draftId: string) => {
-    try {
-      draftProcessExecutionCollection.delete(draftId)
-    } catch (error) {
-      console.error("Failed to discard draft:", error)
-      alert(
-        `Failed to discard draft: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-  }
-
-  if (!draftsQuery.isReady) {
-    return <DraftsSkeleton />
-  }
-
-  if (draftsQuery.data.length === 0) {
-    return (
-      <p className="text-sm text-slate-500 dark:text-slate-400">
-        No drafts yet. Start a process and your progress will autosave here.
-      </p>
-    )
-  }
-
-  return (
-    <>
-      {draftsQuery.data.map((draft) => (
-        <DraftProcessExecutionCard
-          key={draft.id}
-          draft={draft}
-          onDiscard={handleDiscard}
-        />
-      ))}
-    </>
-  )
-}
-
-function DraftsList() {
-  const { collectionPromise } = useDraftProcessCollection()
-
-  return (
-    <Suspense fallback={<DraftsSkeleton />}>
-      <DraftsListInner collectionPromise={collectionPromise} />
-    </Suspense>
-  )
-}
 
 function ProcessesSkeleton() {
   return (
@@ -203,28 +48,23 @@ function ProcessesPageInner({
   const [query, setQuery] = useState("")
   const [filterFavorites, setFilterFavorites] = useState(false)
 
-  // Suspend until collection is ready
   const processesCollection = use(collectionPromise)
 
-  // Query processes from RxDB collection
-  const processesQuery = useLiveQuery((q) =>
-    q.from({ process: processesCollection }).select(({ process }) => ({
-      id: process.id,
-      updatedAt: process.updatedAt,
-      name: process.name,
-      path: process.path,
-      activeInstances: process.activeInstances,
-      category: process.category,
-      duration: process.duration,
-      formFieldCount: process.formFieldCount,
-      purpose: process.purpose,
-      isFavorite: process.isFavorite,
-      orgUnit: process.orgUnit,
-      startStepPath: process.startStepPath,
-    })),
-  )
+  const { initialSync, retryInitialSync } = useProcessCollection()
 
-  const isLoadingProcesses = !processesQuery.isReady
+  const processesQuery = useLiveQuery({
+    query: (q) => q.from({ process: processesCollection }),
+  })
+
+  // The provider confirms persistence and adapter commits. A live query can
+  // still be applying those commits; compare its full local snapshot before
+  // authorizing empty/filter-empty wording. Keep its existing rows visible.
+  const isLoadingProcesses =
+    !processesQuery.isReady ||
+    processesQuery.data.length !== processesCollection.size ||
+    !processesQuery.data.every((process) =>
+      deepEqual(process, processesCollection.get(process.id)),
+    )
 
   const filtered = useMemo(() => {
     const processes = processesQuery.data ?? []
@@ -259,14 +99,45 @@ function ProcessesPageInner({
     [filtered],
   )
 
-  // Show loading state while initial data is being fetched from RxDB
-  if (isLoadingProcesses) {
+  const hasRows = (processesQuery.data?.length ?? 0) > 0
+  const emptyTitle =
+    query.trim() || filterFavorites
+      ? "No matching processes"
+      : "No processes found"
+  const emptyDescription =
+    query.trim() || filterFavorites
+      ? "Try a different search or turn off Favorites."
+      : "There are no processes for your organisational unit or role."
+  const syncError =
+    initialSync.status === "error" ? (
+      <div role="alert" className="rounded-2xl border border-amber-300 p-4">
+        <p>
+          Processes could not finish loading. Check your connection and retry.
+        </p>
+        <button
+          type="button"
+          onClick={retryInitialSync}
+          className="mt-2 font-semibold text-blue-600"
+        >
+          Retry loading processes
+        </button>
+      </div>
+    ) : null
+
+  if (!hasRows && syncError) return syncError
+  if (!hasRows && (isLoadingProcesses || initialSync.status !== "complete")) {
     return <ProcessesSkeleton />
   }
 
   return (
     <div className="flex-1 overflow-y-auto">
       <section className="space-y-6">
+        {syncError}
+        {initialSync.status === "loading" && (
+          <p role="status" className="text-sm text-slate-500">
+            Loading processes…
+          </p>
+        )}
         <div className="hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/60 md:block">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <h2 className="text-2xl font-semibold text-slate-900 dark:text-slate-50">
@@ -298,22 +169,20 @@ function ProcessesPageInner({
           </div>
           <p className="mt-3 max-w-3xl text-sm text-slate-500 dark:text-slate-400">
             Processes are grouped by department. Start immediately if no intake
-            form is required, or launch the kickoff wizard with autosave and
-            schema driven validation.
+            form is required, or open the form to enter or pick up your details.
           </p>
         </div>
         <div className="space-y-4 md:hidden">
           {mobileCatalog.map((process) => (
             <MobileProcessRow key={process.id} process={process} />
           ))}
-          {mobileCatalog.length === 0 && (
-            <EmptyState
-              title="No processes found"
-              description="There are no processes for your organisational unit or role."
-            />
-          )}
+          {mobileCatalog.length === 0 &&
+            initialSync.status === "complete" &&
+            !isLoadingProcesses && (
+              <EmptyState title={emptyTitle} description={emptyDescription} />
+            )}
         </div>
-        <div className="hidden gap-6 lg:grid-cols-[2fr_1fr] md:grid">
+        <div className="hidden gap-6 md:grid lg:grid-cols-[2fr_1fr]">
           <div className="space-y-5">
             {categoryEntries.map(([category, categoryProcesses]) => (
               <div key={category} className="space-y-3">
@@ -335,26 +204,13 @@ function ProcessesPageInner({
                 </div>
               </div>
             ))}
-            {categoryEntries.length === 0 && (
-              <EmptyState
-                title="No processes found"
-                description="There are no processes for your organisational unit or role."
-              />
-            )}
+            {categoryEntries.length === 0 &&
+              initialSync.status === "complete" &&
+              !isLoadingProcesses && (
+                <EmptyState title={emptyTitle} description={emptyDescription} />
+              )}
           </div>
           <div className="space-y-5">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
-              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                Draft process starts
-              </h3>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Resume where you left off. Drafts autosave every 30 seconds and
-                can be shared for collaboration.
-              </p>
-              <div className="mt-4 space-y-3">
-                <DraftsList />
-              </div>
-            </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
               <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                 Help & resources

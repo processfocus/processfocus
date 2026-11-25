@@ -1,4 +1,5 @@
 import {
+  Clock,
   DateTime,
   Effect,
   Layer,
@@ -32,6 +33,7 @@ import type { JWTPayload } from "../../../../packages/graphql-api/src/lib/types"
 import { createClient } from "../../../../packages/openauth/src/client"
 import { DummyProvider } from "../../../../packages/openauth/src/provider/dummy"
 import dashboard from "../../grafana/dashboards/customer-dau.json"
+import { makeClock } from "../test-support/clock"
 import { expect, test } from "bun:test"
 
 const logsUrl = process.env["PF_DAU_OTLP_URL"]
@@ -41,8 +43,8 @@ const resultSchema = Schema.Struct({
   data: Schema.Struct({
     result: Schema.Array(
       Schema.Struct({
-        metric: Schema.Record({ key: Schema.String, value: Schema.String }),
-        value: Schema.Tuple(Schema.Number, Schema.String),
+        metric: Schema.Record(Schema.String, Schema.String),
+        value: Schema.Tuple([Schema.Number, Schema.String]),
       }),
     ),
   }),
@@ -92,7 +94,7 @@ async function login(properties: ProviderUserSession): Promise<JWTPayload> {
     ),
   )
   const auth = createTestApp(await authRuntime.runPromise(issuer), {
-    runtime: await authRuntime.runtime(),
+    runtime: await authRuntime.context(),
   })
   try {
     const client = createClient({
@@ -140,8 +142,8 @@ const query = async (expr: string) => {
   const response = await fetch(url)
   const body = await response.text()
   if (!response.ok) throw new Error(body)
-  return Schema.decodeUnknownSync(Schema.parseJson(resultSchema))(body).data
-    .result
+  return Schema.decodeUnknownSync(Schema.fromJsonString(resultSchema))(body)
+    .data.result
 }
 
 const panelQuery = (
@@ -179,8 +181,8 @@ integration(
       email: "machine@example.com",
       humanSession: undefined,
     })
-    const yesterday = DateTime.unsafeMake(
-      Math.floor(DateTime.toEpochMillis(DateTime.unsafeNow()) / 86400000) *
+    const yesterday = DateTime.makeUnsafe(
+      Math.floor(DateTime.toEpochMillis(DateTime.nowUnsafe()) / 86400000) *
         86400000 -
         1,
     )
@@ -220,12 +222,12 @@ integration(
       const two = runtimeFor("222222222222", "two", "staging")
       await dev.runPromise(
         recordDashboardActivity(request, alice).pipe(
-          Effect.withClock({
-            ...(await Effect.runPromise(Effect.clockWith(Effect.succeed))),
+          Effect.provideService(Clock.Clock, {
+            ...makeClock(),
             currentTimeMillis: Effect.succeed(
               DateTime.toEpochMillis(yesterday),
             ),
-            unsafeCurrentTimeMillis: () => DateTime.toEpochMillis(yesterday),
+            currentTimeMillisUnsafe: () => DateTime.toEpochMillis(yesterday),
           }),
         ),
       )
@@ -234,12 +236,12 @@ integration(
         dev.runPromise(recordDashboardActivity(request, alice)),
         prod.runPromise(
           recordDashboardActivity(request, normalized).pipe(
-            Effect.withClock({
-              ...(await Effect.runPromise(Effect.clockWith(Effect.succeed))),
+            Effect.provideService(Clock.Clock, {
+              ...makeClock(),
               currentTimeMillis: Effect.succeed(
                 DateTime.toEpochMillis(yesterday) + 1,
               ),
-              unsafeCurrentTimeMillis: () =>
+              currentTimeMillisUnsafe: () =>
                 DateTime.toEpochMillis(yesterday) + 1,
             }),
           ),
@@ -373,7 +375,7 @@ scaleTest(
     // Representative store/query load, not an auth simulation. The preceding test
     // proves signed activity -> real OTLP -> this same store and panel queries.
     const prefix = `scale-${crypto.randomUUID()}`
-    const now = DateTime.unsafeNow()
+    const now = DateTime.nowUnsafe()
     const day = 86400000
     const end = DateTime.toEpochMillis(now)
     for (let offset = 0; offset < 3000; offset += 50) {
@@ -396,7 +398,7 @@ scaleTest(
               String(BigInt(time) * 1000000n),
               JSON.stringify({
                 identity: `synthetic-hash-${project % 100}`,
-                day: DateTime.formatIsoDate(DateTime.unsafeMake(time)),
+                day: DateTime.formatIsoDate(DateTime.makeUnsafe(time)),
               }),
             ]
           }),

@@ -1,6 +1,7 @@
 import { ResendClient, ResendStep } from "@processfocus/plugin-resend"
 import { ResendClientLive } from "@processfocus/plugin-resend/runtime"
 import { makeMockResendPlugin } from "@processfocus/plugin-resend/testing"
+import { EmailSender, NotificationDeliveryConfig } from "@processfocus/runtime"
 import { Effect } from "effect"
 import { OrgUnit, Organisation, Process } from "processfocus"
 
@@ -30,3 +31,28 @@ if (
 ) {
   throw new Error("Resend plugin public surfaces failed")
 }
+
+await Effect.runPromise(
+  Effect.gen(function* () {
+    const config = yield* NotificationDeliveryConfig
+    const sender = yield* EmailSender
+    const message = {
+      to: "user@example.com",
+      from: "noreply@example.com",
+      subject: "Packed notification",
+      html: "<p>Hi</p>",
+    }
+    const receipt = yield* sender.send(message, {
+      idempotencyKey: "packed-notification",
+    })
+    if (
+      config.getEnvironment() !== "fixture" ||
+      !receipt?.providerMessageId ||
+      receipt.providerSentTo !== message.to ||
+      mock.controller.listSentMessages()[0]?.originalRequest.idempotencyKey !==
+        "packed-notification" ||
+      mock.controller.listSentMessages().length !== 1
+    )
+      throw new Error("Packed runtime notification contract failed")
+  }).pipe(Effect.provide(mock.layer)),
+)

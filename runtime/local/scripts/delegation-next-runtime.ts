@@ -8,18 +8,23 @@ import {
   Context,
   DateTime,
   Effect,
-  FiberRef,
   Layer,
   ManagedRuntime,
   Option,
   Schema,
+  Semaphore,
 } from "effect"
 import { GraphQLError } from "graphql"
 import { handleProtocols, makeHandler } from "graphql-ws/use/bun"
 import {
-  AuthenticationDatabase,
+  DelegationCredentialServiceLive,
   DelegationDatabase,
-  DelegationSessionServiceIsolated,
+} from "@pf/delegation"
+import { DelegationSessionServiceIsolated } from "@pf/delegation/authorization"
+import { NumberFromString } from "@pf/form-schema"
+import { issueRegistrationLinkForEmail } from "@pf/identity-management"
+import {
+  AuthenticationDatabase,
   createAuthenticationServer,
   createClientJwt,
 } from "../../../packages/auth-api/src/index"
@@ -27,17 +32,14 @@ import {
   LocalCedarAuthorizationLive,
   LocalCedarConfigHotReload,
 } from "../../../packages/auth-local-cedar/src/index"
-import {
-  CurrentPrincipal,
-  type ProviderUserPrincipal,
-} from "../../../packages/auth-policy/src/index"
+import { CurrentPrincipal } from "../../../packages/auth-policy/src/index"
 import * as schema from "../../../packages/drizzle-sqlite/src/index"
 import { TextField } from "../../../packages/form-schema/src/index"
 import * as Graphql from "../../../packages/graphql-api/src/index"
 import {
+  SettingsQueries,
   UserDetails,
   decodeDelegationAudit,
-  issueRegistrationLinkForEmail,
 } from "../../../packages/graphql-db-operations/src/index"
 import {
   ExecutionFromJobPublishError,
@@ -118,7 +120,10 @@ writeFileSync(
   `permit (principal is PF::Delegation in PF::ProviderUser::"administration-admin@example.test", action in [PF::Action::"listDelegationTokens", PF::Action::"revokeDelegation"], resource);\n`,
 )
 const frontendPort = Schema.decodeUnknownSync(
-  Schema.NumberFromString.pipe(Schema.int(), Schema.between(1024, 65535)),
+  NumberFromString.pipe(
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isBetween({ minimum: 1024, maximum: 65535 })),
+  ),
 )(process.env["DELEGATION_PROBE_PORT"] ?? "3398")
 const passkeyProbe = process.env["PASSKEY_MANAGEMENT_PROBE"] === "true"
 const org = new Organisation({
@@ -133,12 +138,12 @@ const processModel = new Process(org, "DelegatedReview", {
 const submit = new Form(processModel, "Submit", {
   name: "Submit request",
   role: tester,
-  form: () => ({ request: TextField() }),
+  form: Schema.Struct({ request: TextField() }),
 })
 const review = new Form(processModel, "Review", {
   name: "Review request",
   role: tester,
-  form: () => ({ decision: TextField() }),
+  form: Schema.Struct({ decision: TextField() }),
 })
 processModel.start(submit).next(review).end()
 const orgLayer = OrganisationProviderTest(
@@ -173,18 +178,12 @@ const base = Layer.mergeAll(
     ),
   ),
   orgLayer,
-  Layer.succeed(RequestTime, FiberRef.unsafeMake(DateTime.unsafeNow())),
-  Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake<{ by: string; id: string | null }>({
-      by: "SYSTEM",
-      id: null,
-    }),
-  ),
-  Layer.succeed(
-    CurrentPrincipal,
-    FiberRef.unsafeMake<ProviderUserPrincipal | null>(null),
-  ),
+  Layer.succeed(RequestTime, DateTime.nowUnsafe()),
+  Layer.succeed(UserDetails, {
+    by: "SYSTEM",
+    id: null,
+  }),
+  Layer.succeed(CurrentPrincipal, null),
 )
 const documentStore = LocalDocumentStoreServiceLive.pipe(
   Layer.provide(
@@ -198,6 +197,7 @@ const documentStore = LocalDocumentStoreServiceLive.pipe(
 )
 const operations = Layer.mergeAll(
   DelegationSessionServiceIsolated,
+  DelegationCredentialServiceLive,
   KeyManagementServiceLive,
   SqliteQueueServiceLive,
   Graphql.DraftProcessExecutionCollectionOpsLive,
@@ -291,8 +291,8 @@ const frontendJwt = await runtime.runPromise(
       verifier: createHash("sha256")
         .update(`pfds_${"a".repeat(43)}`)
         .digest("base64url"),
-      issuedAt: DateTime.unsafeMake(Date.now()),
-      expiresAt: DateTime.unsafeMake(Date.now() + 3_600_000),
+      issuedAt: DateTime.makeUnsafe(Date.now()),
+      expiresAt: DateTime.makeUnsafe(Date.now() + 3_600_000),
     })
     const [invitation] = yield* db
       .insert(schema.invitation)
@@ -309,7 +309,7 @@ const frontendJwt = await runtime.runPromise(
       invitationId: invitation.id,
       roleId: role.id,
     })
-    const link = yield* issueRegistrationLinkForEmail({
+    const link = yield* issueRegistrationLinkForEmail(yield* SettingsQueries, {
       email: invitation.email,
       rotate: false,
       actor: "SYSTEM",
@@ -339,14 +339,17 @@ const frontendJwt = await runtime.runPromise(
       { invitationId: adminInvitation.id, roleId: adminRole.id },
       { invitationId: adminInvitation.id, roleId: role.id },
     ])
-    const adminLink = yield* issueRegistrationLinkForEmail({
-      email: adminInvitation.email,
-      rotate: false,
-      actor: "SYSTEM",
-      organisationScope: "isolated-delegation-probe",
-      frontendOrigin: `http://localhost:${frontendPort}`,
-      secret: "isolated-registration-probe-key-not-for-deployment",
-    })
+    const adminLink = yield* issueRegistrationLinkForEmail(
+      yield* SettingsQueries,
+      {
+        email: adminInvitation.email,
+        rotate: false,
+        actor: "SYSTEM",
+        organisationScope: "isolated-delegation-probe",
+        frontendOrigin: `http://localhost:${frontendPort}`,
+        secret: "isolated-registration-probe-key-not-for-deployment",
+      },
+    )
     if (!adminLink.ok)
       throw new Error("Administrator registration link missing")
     administratorRegistrationUrl = adminLink.registrationLinkUrl
@@ -382,7 +385,7 @@ const yoga = await runtime.runPromise(
 )
 // Same Yoga/envelop boundary as the local runtime: preserve upgrade cookies,
 // connection parameters and resolver context, never synthesize a human actor.
-const contextFactoryLock = await Effect.runPromise(Effect.makeSemaphore(1))
+const contextFactoryLock = await Effect.runPromise(Semaphore.make(1))
 const websocket = makeHandler({
   execute: (args: ExecutionArgs) => args.rootValue.execute(args),
   subscribe: (args: ExecutionArgs) => args.rootValue.subscribe(args),
@@ -452,7 +455,7 @@ const controlServer = Bun.serve({
       return new Response(null, { status: 401 })
     if (request.method !== "POST") return new Response(null, { status: 405 })
     const input = Schema.decodeUnknownSync(
-      Schema.Union(
+      Schema.Union([
         Schema.Struct({ operation: Schema.Literal("history") }),
         Schema.Struct({
           operation: Schema.Literal("issuance-policy"),
@@ -470,10 +473,13 @@ const controlServer = Bun.serve({
           operation: Schema.Literal("expire"),
           generationId: Schema.NonEmptyString,
           remainingSeconds: Schema.optional(
-            Schema.Number.pipe(Schema.int(), Schema.between(1, 43_200)),
+            Schema.Number.pipe(
+              Schema.check(Schema.isInt()),
+              Schema.check(Schema.isBetween({ minimum: 1, maximum: 43_200 })),
+            ),
           ),
         }),
-      ),
+      ]),
     )(await request.json())
     return runtime.runPromise(
       Effect.gen(function* () {
@@ -563,7 +569,7 @@ const controlServer = Bun.serve({
         )
         yield* db
           .update(schema.secretGeneration)
-          .set({ secretExpiresAt: DateTime.unsafeMake(expiresAt) })
+          .set({ secretExpiresAt: DateTime.makeUnsafe(expiresAt) })
           .where(eq(schema.secretGeneration.id, input.generationId))
         const store = yield* DelegationDatabase
         const stored = yield* store.findGeneration({
@@ -601,7 +607,7 @@ console.info(
   `Private browser handoff: ${join(runtimeRoot, "browser-handoff.json")}`,
 )
 const workerServices = await runtime.runPromise(
-  Effect.context<Layer.Layer.Success<typeof appLayer>>(),
+  Effect.context<Layer.Success<typeof appLayer>>(),
 )
 // Worker and GraphQL share a process here, so publish straight into the same
 // real local hubs instead of exposing an unauthenticated callback endpoint.
@@ -691,87 +697,90 @@ const publishers = await runtime.runPromise(
     )
   }),
 )
-const workerContext = Context.unsafeMake<unknown>(
-  Context.merge(workerServices, publishers).unsafeMap,
+const workerContext = Context.makeUnsafe<unknown>(
+  Context.merge(workerServices, publishers).mapUnsafe,
 )
 let stopping = false
 const worker = (async () => {
   while (!stopping) {
     await runtime
       .runPromise(
-        Effect.gen(function* () {
-          yield* FiberRef.set(yield* RequestTime, yield* DateTime.now)
-          const queue = yield* QueueService
-          const db = yield* TypedSqliteDrizzle
-          const executions = yield* db
-            .select({
-              id: schema.processExecution.id,
-              createdBy: schema.processExecution.createdBy,
-            })
-            .from(schema.processExecution)
-          if (passkeyProbe) {
+        Effect.flatMap(DateTime.now, (now) =>
+          Effect.gen(function* () {
+            const queue = yield* QueueService
+            const db = yield* TypedSqliteDrizzle
+            const executions = yield* db
+              .select({
+                id: schema.processExecution.id,
+                createdBy: schema.processExecution.createdBy,
+              })
+              .from(schema.processExecution)
+            if (passkeyProbe) {
+              writeFileSync(
+                join(runtimeRoot, "passkey-audit.json"),
+                JSON.stringify({
+                  users: yield* db.select().from(schema.user),
+                  providerUsers: yield* db.select().from(schema.providerUser),
+                  roles: yield* db.select().from(schema.providerUserRole),
+                  invitations: yield* db.select().from(schema.invitation),
+                  credentials: yield* db
+                    .select({
+                      id: schema.passkeyCredential.id,
+                      userId: schema.passkeyCredential.userId,
+                      credentialId:
+                        schema.passkeyCredential.passkeyCredentialId,
+                      name: schema.passkeyCredential.passkeyName,
+                      lastUsedAt: schema.passkeyCredential.passkeyLastUsedAt,
+                      deleted: schema.passkeyCredential._deleted,
+                    })
+                    .from(schema.passkeyCredential),
+                }),
+                { mode: 0o600 },
+              )
+            }
             writeFileSync(
-              join(runtimeRoot, "passkey-audit.json"),
-              JSON.stringify({
-                users: yield* db.select().from(schema.user),
-                providerUsers: yield* db.select().from(schema.providerUser),
-                roles: yield* db.select().from(schema.providerUserRole),
-                invitations: yield* db.select().from(schema.invitation),
-                credentials: yield* db
-                  .select({
-                    id: schema.passkeyCredential.id,
-                    userId: schema.passkeyCredential.userId,
-                    credentialId: schema.passkeyCredential.passkeyCredentialId,
-                    name: schema.passkeyCredential.passkeyName,
-                    lastUsedAt: schema.passkeyCredential.passkeyLastUsedAt,
-                    deleted: schema.passkeyCredential._deleted,
-                  })
-                  .from(schema.passkeyCredential),
-              }),
+              auditPath,
+              JSON.stringify(
+                executions.map((row) => ({
+                  id: row.id,
+                  actor: Option.getOrNull(decodeDelegationAudit(row.createdBy)),
+                })),
+              ),
               { mode: 0o600 },
             )
-          }
-          writeFileSync(
-            auditPath,
-            JSON.stringify(
-              executions.map((row) => ({
-                id: row.id,
-                actor: Option.getOrNull(decodeDelegationAudit(row.createdBy)),
-              })),
-            ),
-            { mode: 0o600 },
-          )
-          for (const [name, handler] of [
-            ["flow-execution", flowExecutionHandler],
-            ["todo-event", todoEventHandler],
-            ["process-event", processEventHandler],
-            ["execution-event", executionEventHandler],
-          ] as const) {
-            const claimed = yield* queue.rawClaim(name)
-            if (Option.isNone(claimed)) continue
-            const job = claimed.value
-            // Decode and dispatch together to retain each handler's payload type.
-            const run = <A>(selected: {
-              schema: Schema.Schema<A>
-              handle: (
-                queuedJob: typeof job & { payload: A },
-              ) => Effect.Effect<unknown, unknown, unknown>
-            }) =>
-              Schema.decodeUnknown(selected.schema)(job.payload).pipe(
-                Effect.flatMap((payload) =>
-                  selected.handle({ ...job, payload }),
-                ),
-                Effect.provide(workerContext),
-              )
-            if (handler === flowExecutionHandler)
-              yield* run(flowExecutionHandler)
-            else if (handler === todoEventHandler) yield* run(todoEventHandler)
-            else if (handler === processEventHandler)
-              yield* run(processEventHandler)
-            else yield* run(executionEventHandler)
-            yield* queue.acknowledge(job.jobId, job.receipt)
-          }
-        }),
+            for (const [name, handler] of [
+              ["flow-execution", flowExecutionHandler],
+              ["todo-event", todoEventHandler],
+              ["process-event", processEventHandler],
+              ["execution-event", executionEventHandler],
+            ] as const) {
+              const claimed = yield* queue.rawClaim(name)
+              if (Option.isNone(claimed)) continue
+              const job = claimed.value
+              // Decode and dispatch together to retain each handler's payload type.
+              const run = <A>(selected: {
+                schema: Schema.Schema<A>
+                handle: (
+                  queuedJob: typeof job & { payload: A },
+                ) => Effect.Effect<unknown, unknown, unknown>
+              }) =>
+                Schema.decodeUnknownEffect(selected.schema)(job.payload).pipe(
+                  Effect.flatMap((payload) =>
+                    selected.handle({ ...job, payload }),
+                  ),
+                  Effect.provide(workerContext),
+                )
+              if (handler === flowExecutionHandler)
+                yield* run(flowExecutionHandler)
+              else if (handler === todoEventHandler)
+                yield* run(todoEventHandler)
+              else if (handler === processEventHandler)
+                yield* run(processEventHandler)
+              else yield* run(executionEventHandler)
+              yield* queue.acknowledge(job.jobId, job.receipt)
+            }
+          }).pipe(Effect.provideService(RequestTime, now)),
+        ),
       )
       .catch((error) => console.error("Isolated worker failed", error))
     await Bun.sleep(250)

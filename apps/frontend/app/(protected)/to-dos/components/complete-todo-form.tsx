@@ -1,26 +1,27 @@
 "use client"
 
 import { ClientError } from "graphql-request"
-import { useCallback, useMemo } from "react"
+import { Suspense, use, useCallback, useMemo } from "react"
+import type { FieldError, FormActionsContext } from "@pf/form"
 import {
-  type FieldError,
-  type FormActionsContext,
-  type JsonSchemaRoot,
-  dynamicForm,
-} from "@pf/form"
-import type { ClientFormDefinition } from "@pf/form-client-representation/client-form-definition"
-import { Button } from "@pf/shadcn-components"
+  type BrowserFormSchema,
+  EffectSchemaForm,
+} from "@pf/form/effect-schema-form"
+import type { FormRequestData } from "@pf/form-schema"
+import { submissionSchemaSync } from "@pf/form-submission-schema"
 import { TodoFormActions } from "./todo-form-actions"
+import { loadBrowserFormDefinition } from "@/lib/frontend-form-loaders"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 
 interface CompleteTodoFormProps {
+  pluginConfiguration?: Readonly<Record<string, unknown>>
+
+  requestData?: FormRequestData | null | undefined
   todoId: string | undefined
   stepPath: string
   inputTypeName: string
   completeMutationName: string
   defaultValues: Record<string, unknown> | null
-  formDefinition: ClientFormDefinition | null
-  jsonSchema: JsonSchemaRoot | null
   /** Called when form is cancelled or submitted successfully */
   onClose: () => void
 }
@@ -37,16 +38,17 @@ export function FormSkeleton() {
   )
 }
 
-export function CompleteTodoForm({
+function CompleteTodoFormInner({
+  schema,
+  requestData,
+  pluginConfiguration = {},
   todoId,
   stepPath,
   inputTypeName,
   completeMutationName,
   defaultValues,
-  formDefinition,
-  jsonSchema,
   onClose,
-}: CompleteTodoFormProps) {
+}: CompleteTodoFormProps & { schema: BrowserFormSchema }) {
   const graphqlClient = useGraphqlClient()
   const lookupOptions = useMemo(
     () => (todoId ? { todoId } : undefined),
@@ -63,15 +65,8 @@ export function CompleteTodoForm({
         return
       }
 
-      // Build the GraphQL mutation based on whether there are submittable fields
-      // Check jsonSchema properties (not components) since read-only fields
-      // appear in components for display but are excluded from submission schema
-      const schemaProperties = (
-        jsonSchema as { properties?: Record<string, unknown> } | null
-      )?.properties
       const hasInput =
-        schemaProperties !== undefined &&
-        Object.keys(schemaProperties).length > 0
+        Object.keys(submissionSchemaSync(schema).fields).length > 0
       const mutation = hasInput
         ? `mutation Complete($todoId: ID!, $input: ${inputTypeName}!) {
           ${completeMutationName}(todoId: $todoId, input: $input) {
@@ -94,7 +89,6 @@ export function CompleteTodoForm({
         } else {
           await graphqlClient.request(mutation, { todoId })
         }
-        // Success - close the form
         onClose()
         return
       } catch (error) {
@@ -102,12 +96,11 @@ export function CompleteTodoForm({
         if (error instanceof ClientError) {
           const gqlError = error.response.errors?.[0]
           if (gqlError?.extensions?.["code"] === "InputValidationError") {
-            // Extract structured validation errors
             const validationErrors = gqlError.extensions["errors"] as
               | FieldError[]
               | undefined
             if (validationErrors && validationErrors.length > 0) {
-              // Return field errors to dynamicForm for setting on fields
+              // Return field errors to EffectSchemaForm for setting on fields
               return validationErrors
             }
           }
@@ -133,40 +126,40 @@ export function CompleteTodoForm({
       todoId,
       completeMutationName,
       inputTypeName,
-      jsonSchema,
+      schema,
       onClose,
     ],
   )
 
-  // Render action buttons
-  const renderActions = useCallback(
-    (context: FormActionsContext) => {
-      // For simple forms (no jsonSchema), render basic buttons
-      if (!jsonSchema) {
-        return (
-          <div className="flex justify-end gap-3">
-            <Button type="submit">
-              {context.formState.isSubmitting ? "..." : "Done"}
-            </Button>
-          </div>
-        )
-      }
+  const renderActions = useCallback((context: FormActionsContext) => {
+    return <TodoFormActions context={context} />
+  }, [])
 
-      return <TodoFormActions context={context} />
-    },
-    [jsonSchema],
+  return (
+    <EffectSchemaForm
+      stepPath={stepPath}
+      lookupOptions={lookupOptions}
+      schema={schema}
+      requestData={requestData}
+      pluginConfiguration={pluginConfiguration}
+      draftId={`todo-complete-${todoId ?? stepPath}`}
+      defaultValues={defaultValues ?? {}}
+      onSubmit={handleSubmit}
+    >
+      {renderActions}
+    </EffectSchemaForm>
   )
+}
 
-  // Render the form using dynamicForm
-  return dynamicForm({
-    draftId: `todo-complete-${todoId ?? stepPath}`,
-    formDefinition,
-    defaultValues,
-    handleCancel: onClose,
-    handleSubmit,
-    jsonSchema,
-    renderActions,
-    stepPath,
-    lookupOptions,
-  })
+function BrowserTodoForm(props: CompleteTodoFormProps) {
+  const schema = use(loadBrowserFormDefinition(props.stepPath))
+  return <CompleteTodoFormInner {...props} schema={schema} />
+}
+
+export function CompleteTodoForm(props: CompleteTodoFormProps) {
+  return (
+    <Suspense fallback={<FormSkeleton />}>
+      <BrowserTodoForm {...props} />
+    </Suspense>
+  )
 }

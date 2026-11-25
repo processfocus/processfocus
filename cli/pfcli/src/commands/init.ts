@@ -1,7 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import * as path from "node:path"
-import { FileSystem } from "@effect/platform"
-import { Console, Effect, Schema } from "effect"
+import { Console, Effect, FileSystem, Schema } from "effect"
 import {
   DEFAULT_OAUTH_PROVIDER_SCOPES,
   OAUTH_PROVIDER_NAMES,
@@ -22,9 +21,9 @@ export const SUPPORTED_PROVIDERS = OAUTH_PROVIDER_NAMES
 const INDEX_TS = `export * from "./org"
 `
 
-const EFFECT_VERSION = "^3.19.13"
+const EFFECT_VERSION = "4.1.4"
 const DRIZZLE_KIT_VERSION = "^1.0.0-rc.4-ca0f029"
-const JsonObject = Schema.Record({ key: Schema.String, value: Schema.Unknown })
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown)
 
 const toLiteral = (value: string) => JSON.stringify(value)
 
@@ -40,8 +39,8 @@ const providerDisplayName = (provider: OAuthProviderName) =>
 const makeProviderConfig = (providers: readonly OAuthProviderName[]) => {
   const entries = providers.map((provider) => {
     return `  ${provider}: {
-    clientID: process.env[${toLiteral(providerEnvVar(provider, "CLIENT_ID"))}] ?? "",
-    clientSecret: process.env[${toLiteral(providerEnvVar(provider, "CLIENT_SECRET"))}] ?? "",
+    clientID: yield* authenticationConfiguration.fields[${toLiteral(providerEnvVar(provider, "CLIENT_ID"))}].config,
+    clientSecret: yield* authenticationConfiguration.fields[${toLiteral(providerEnvVar(provider, "CLIENT_SECRET"))}].config,
     scopes: [${DEFAULT_OAUTH_PROVIDER_SCOPES[provider].map(toLiteral).join(", ")}],
   },`
   })
@@ -107,9 +106,18 @@ const makePackageJson = (packageName: string) =>
 /**
  * Template content for src/todo.ts
  */
-const TODO_TS = `import { Schema as ES } from "effect"
-import { Form, type OrgUnit, Process, type Role } from "processfocus"
+const TODO_FORMS_TS = `import { Schema as ES } from "effect"
 import { FormLabel } from "processfocus/forms"
+
+export const createTodoForm = ES.Struct({
+  title: ES.String.annotate({ [FormLabel]: "Title" }),
+  description: ES.String.annotate({ [FormLabel]: "Description" }),
+})
+export const completeTodoForm = ES.Struct({})
+`
+
+const TODO_TS = `import { createTodoForm, completeTodoForm } from "./todo-forms"
+import { Form, type OrgUnit, Process, type Role } from "processfocus"
 
 export class Todo extends Process {
   constructor(
@@ -132,16 +140,15 @@ export class Todo extends Process {
      */
     const create_todo = new Form(this, "Create todo", {
       name: "Create new todo",
-      form: () => ({
-        title: ES.String.annotations({ [FormLabel]: "Title" }),
-        description: ES.String.annotations({ [FormLabel]: "Description" }),
-      }),
+      form: createTodoForm,
+      browser: { entrypoint: "src/todo-forms.ts", exportName: "createTodoForm" },
       role: employeeRole,
     })
 
     const complete_todo = new Form(this, "Complete todo", {
       name: "Complete and acknowledge",
-      form: () => ({}),
+      form: completeTodoForm,
+      browser: { entrypoint: "src/todo-forms.ts", exportName: "completeTodoForm" },
       role: managerRole,
     })
 
@@ -159,7 +166,9 @@ const ORG_TS = (
   timeZone: string,
   providers: readonly OAuthProviderName[],
   adminEmail: string,
-) => `import {
+) => `import { Config, Effect } from "effect"
+import { configurationField, type ConfigurationContract } from "@processfocus/runtime"
+import {
   AuthenticationConfig,
   type AuthenticationConfigProps,
   PoliciesConfig,
@@ -241,13 +250,31 @@ const operations_manager = new Role(operations, "Manager", {
  */
 new Todo(operations, "todo", employee, operations_manager)
 
+const authenticationConfiguration = {
+  owner: ${toLiteral(orgName)}, target: "authentication", rules: [],
+  fields: {
+${providers
+  .flatMap((provider) =>
+    ["CLIENT_ID", "CLIENT_SECRET"].map((suffix) => {
+      const key = toLiteral(providerEnvVar(provider, suffix))
+      return `    ${key}: configurationField(${key}, Config.String(${key}), { secret: ${suffix === "CLIENT_SECRET"} }),`
+    }),
+  )
+  .join("\n")}
+  },
+}
+export const Configuration = { version: 1, groups: [authenticationConfiguration] } satisfies ConfigurationContract
+
 ${makeIdentityProviderComment(providers)}
+export const configureOrg: Effect.Effect<Organisation, Config.ConfigError> = Effect.gen(function* () {
 const identityProviders: AuthenticationConfigProps["identityProviders"] = ${makeProviderConfig(providers)}
 
 new AuthenticationConfig(org, "auth", {
   inviteOnly: true,
   identityProviders,
   secretClients: {},
+})
+return org
 })
 
 /*
@@ -514,16 +541,13 @@ export const runInit = (
       .map((s) => s.charAt(0).toUpperCase())
       .join("")
 
-    // Get system timezone
     const timeZone = getSystemTimeZone()
 
     yield* Console.log(`Initialising organisation at: ${absolutePath}`)
 
-    // Step 1: Validate directory
     const exists = yield* fs.exists(absolutePath)
 
     if (exists) {
-      // Check if directory is empty
       const entries = yield* fs.readDirectory(absolutePath).pipe(
         Effect.mapError(
           (error) =>
@@ -541,7 +565,6 @@ export const runInit = (
       }
     }
 
-    // Step 2: Create directory structure
     yield* Console.log("\n[1/3] Creating directory structure...")
 
     yield* fs.makeDirectory(absolutePath, { recursive: true })
@@ -550,7 +573,6 @@ export const runInit = (
       recursive: true,
     })
 
-    // Step 3: Write template files
     yield* Console.log("[2/3] Writing template files...")
 
     yield* fs.writeFileString(
@@ -564,6 +586,11 @@ export const runInit = (
       TODO_TS,
     )
     yield* Console.log("  ✅ src/todo.ts")
+    yield* fs.writeFileString(
+      path.join(absolutePath, "src", "todo-forms.ts"),
+      TODO_FORMS_TS,
+    )
+    yield* Console.log("  ✅ src/todo-forms.ts")
 
     yield* fs.writeFileString(
       path.join(absolutePath, "src", "org.ts"),

@@ -11,6 +11,7 @@ const artifact = {
   format: RUNTIME_ARTIFACT_FORMAT,
   version: RUNTIME_ARTIFACT_VERSION,
   organisation: {},
+  configuration: { version: 1, groups: [] },
 }
 
 describe("runtime artifact", () => {

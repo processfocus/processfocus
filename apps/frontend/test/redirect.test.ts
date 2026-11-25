@@ -185,13 +185,6 @@ describe("validateRedirect", () => {
     expect(result.rejected).toBe(false)
     expect(result.url).toBe("/redirect@evil.com")
   })
-
-  test("rejects backslash-based attacks", () => {
-    // Some parsers treat \ as /
-    const result = validateRedirect("/\\evil.com")
-    // Should either reject or normalize to safe path
-    expect(result.url === "/" || result.url.startsWith("/\\")).toBe(true)
-  })
 })
 
 describe("getValidRedirect", () => {

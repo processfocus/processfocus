@@ -125,9 +125,17 @@ if (exitCode === 0) {
     }
   }
 } else {
+  // Failure output is private step-owned data. Hosts must validate an explicitly
+  // safe contract before exposing any of it to a user.
+  let failureOutput = null
+  try {
+    failureOutput = JSON.parse(await readFile(outputPath, "utf8"))
+  } catch {
+    // Most failures do not produce structured output.
+  }
   result = {
     status: "failure",
-    output: null,
+    output: failureOutput,
     error: `Command exited with code ${exitCode}`,
     exitCode,
     stdoutTail: stdout,

@@ -54,9 +54,12 @@ export interface OrganisationFrontendManifestPublicFormBranding {
   readonly footerHtml?: string | undefined
 }
 
-export interface OrganisationFrontendManifestClientFormDefinition {
-  readonly components: Readonly<Record<string, unknown>>
-  readonly rules: readonly unknown[]
+export interface EmbedLookupDefinition {
+  readonly type: "lookup" | "calendarSlot"
+  readonly field: string
+  readonly normalizedField: string
+  readonly dependencies: readonly string[]
+  readonly queryName?: string | undefined
 }
 
 export interface OrganisationFrontendManifestEmbedEntry {
@@ -66,9 +69,8 @@ export interface OrganisationFrontendManifestEmbedEntry {
   readonly mutationName: string
   readonly inputTypeName: string
   readonly totalFields: number
-  readonly formDefinition: OrganisationFrontendManifestClientFormDefinition | null
-  readonly defaultValues: Record<string, unknown> | null
-  readonly jsonSchema: Record<string, unknown> | null
+  readonly formPath: string
+  readonly lookups: readonly EmbedLookupDefinition[]
   readonly sites: readonly string[]
   readonly thankYou: string
 }
@@ -133,19 +135,6 @@ const ensureArray = (value: unknown, path: string): ReadonlyArray<unknown> => {
   }
 
   return value
-}
-
-const parseTransportFormDefinition = (
-  value: unknown,
-  path: string,
-): OrganisationFrontendManifestClientFormDefinition | null => {
-  if (value === null) return null
-
-  const definition = ensureRecord(value, path)
-  return {
-    components: ensureRecord(definition["components"], `${path}.components`),
-    rules: ensureArray(definition["rules"], `${path}.rules`),
-  }
 }
 
 const ensureStringArray = (value: unknown, path: string): string[] => {
@@ -226,14 +215,33 @@ const parseEmbedEntry = (
     throw new Error(`${path}.totalFields must be a number`)
   }
 
-  const optionalRecord = (
-    key: "defaultValues" | "jsonSchema",
-  ): Record<string, unknown> | null =>
-    entry[key] === null ? null : ensureRecord(entry[key], `${path}.${key}`)
-
-  const formDefinition = parseTransportFormDefinition(
-    entry["formDefinition"],
-    `${path}.formDefinition`,
+  const lookups = ensureArray(entry["lookups"], `${path}.lookups`).map(
+    (value, index): EmbedLookupDefinition => {
+      const item = ensureRecord(value, `${path}.lookups[${index}]`)
+      const type = item["type"]
+      if (type !== "lookup" && type !== "calendarSlot")
+        throw new Error(`${path}.lookups[${index}].type is invalid`)
+      return {
+        type,
+        field: ensureString(item["field"], `${path}.lookups[${index}].field`),
+        normalizedField: ensureString(
+          item["normalizedField"],
+          `${path}.lookups[${index}].normalizedField`,
+        ),
+        dependencies: ensureStringArray(
+          item["dependencies"],
+          `${path}.lookups[${index}].dependencies`,
+        ),
+        ...(item["queryName"] !== undefined
+          ? {
+              queryName: ensureString(
+                item["queryName"],
+                `${path}.lookups[${index}].queryName`,
+              ),
+            }
+          : {}),
+      }
+    },
   )
 
   return {
@@ -246,9 +254,8 @@ const parseEmbedEntry = (
       `${path}.inputTypeName`,
     ),
     totalFields,
-    formDefinition,
-    defaultValues: optionalRecord("defaultValues"),
-    jsonSchema: optionalRecord("jsonSchema"),
+    formPath: ensureString(entry["formPath"], `${path}.formPath`),
+    lookups,
     sites: ensureStringArray(entry["sites"], `${path}.sites`),
     thankYou: ensureString(entry["thankYou"], `${path}.thankYou`),
   }

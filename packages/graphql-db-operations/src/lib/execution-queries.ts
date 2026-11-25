@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { PullCheckpoint } from "./draft-process-execution"
 
 /**
@@ -15,10 +15,18 @@ export interface TodoStepRow {
   stepName: string
   stepPath: string
   completed: boolean // from _deleted flag
+  interrupted?: boolean
   failureReason: string | null
   notStartedReason?: string | null
   correctionRequiredAt: number | null
   correctionFailureReason: string | null
+  deadlines?: ReadonlyArray<{
+    id: string
+    name: string
+    dueAt: string
+    triggeredAt: string | null
+    disarmedAt: string | null
+  }>
   /** Durable user id that completed the todo (to_do.completed_by_user). */
   completedByUserId: string | null
   providerUserId: string | null
@@ -78,6 +86,7 @@ export interface ExecutionRow {
   processStateCreatedAt: string // ISO date-time string (process_state.created_at = start step started)
   // Who started the process (from process_state.started_by_user -> provider_user)
   startedByEmail: string | null // user.email - used for authorization checks
+  startedByServiceAccountId?: string | null
   startedById: string | null // provider user id
   startedByFirstName: string | null
   startedByLastName: string | null
@@ -105,9 +114,7 @@ export interface ExecutionListQuery {
 /**
  * Service providing execution query operations for RxDB replication.
  */
-export class ExecutionQueries extends Context.Tag(
-  "@pf/graphql-db-operations/ExecutionQueries",
-)<
+export class ExecutionQueries extends Context.Service<
   ExecutionQueries,
   {
     /**
@@ -149,6 +156,25 @@ export class ExecutionQueries extends Context.Tag(
       executionIds: string[],
     ) => Effect.Effect<TodoStepRow[], SqlError>
 
+    /** Undeleted Todo and scheduled-flow rows for a batch of executions. */
+    readonly getUnfinishedWorkForExecutions: (
+      executionIds: string[],
+    ) => Effect.Effect<
+      {
+        readonly todos: ReadonlyArray<{
+          readonly executionId: string
+          readonly stepPath: string
+          readonly failureReason: string | null
+        }>
+        readonly scheduledFlows: ReadonlyArray<{
+          readonly executionId: string
+          readonly sourceStepPath: string
+          readonly targetStepPath: string | null
+        }>
+      },
+      SqlError
+    >
+
     /**
      * Get the process state JSON for an execution.
      * Joins process_execution to process_state and returns the state data.
@@ -158,4 +184,4 @@ export class ExecutionQueries extends Context.Tag(
       executionId: string,
     ) => Effect.Effect<Record<string, unknown> | null, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/ExecutionQueries") {}

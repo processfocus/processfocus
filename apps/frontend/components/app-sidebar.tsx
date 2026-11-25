@@ -11,6 +11,7 @@ import dynamic from "next/dynamic"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@pf/shadcn-components"
+import { BrowserOnly } from "@/components/browser-only"
 import {
   Sidebar,
   SidebarContent,
@@ -56,7 +57,6 @@ interface AppSidebarProps {
   showAuthorization: boolean
 }
 
-// Menu items.
 const items: Array<{
   id: ShellSectionKey
   title: string
@@ -97,8 +97,8 @@ const items: Array<{
   },
   {
     id: "settings",
-    title: "Profile & Settings",
-    description: "Preferences, notifications, and roles",
+    title: "Users & Sign-in",
+    description: "Manage users, invitations, roles, and sign-in providers.",
     url: "/settings",
     icon: UserCog,
   },
@@ -135,7 +135,6 @@ export function AppSidebar({
 
   const handleLogout = () => performClientLogout()
 
-  // Filter menu items based on permissions
   const visibleItems = items.filter((item) => {
     if (item.id === "settings") return showSettings
     if (item.id === "authorization") return showAuthorization
@@ -168,6 +167,9 @@ export function AppSidebar({
               {visibleItems.map((item) => {
                 const isActive =
                   pathname === item.url ||
+                  (item.id === "settings" &&
+                    pathname.startsWith("/settings/") &&
+                    !pathname.startsWith("/settings/cedar")) ||
                   (item.id === "executions" && isExecutionsPath(pathname)) ||
                   (item.id === "authorization" &&
                     pathname.startsWith("/settings/cedar/"))
@@ -215,13 +217,25 @@ export function AppSidebar({
                           </p>
                         </div>
                       </div>
-                      {item.id === "todos" && <TodoCountBadge />}
+                      {item.id === "todos" && (
+                        <BrowserOnly>
+                          <TodoCountBadge />
+                        </BrowserOnly>
+                      )}
                     </div>
                   </Link>
                 )
               })}
-              <SidebarLists />
-              <SidebarStatsViews />
+              <BrowserOnly
+                fallback={
+                  <p role="status" className="px-4 py-3 text-sm text-slate-500">
+                    Loading navigation…
+                  </p>
+                }
+              >
+                <SidebarLists />
+                <SidebarStatsViews />
+              </BrowserOnly>
             </nav>
           </SidebarGroupContent>
         </SidebarGroup>

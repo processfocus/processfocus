@@ -60,7 +60,6 @@ When("I open the profile dropdown", async ({ page }) => {
   const headerProfileButton = page.getByTestId("header-profile-button")
   await headerProfileButton.click()
 
-  // Wait for dropdown to be visible
   await expect(
     page.locator('[data-slot="dropdown-menu-content"]'),
   ).toBeVisible()

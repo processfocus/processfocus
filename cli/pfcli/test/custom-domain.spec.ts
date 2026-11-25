@@ -427,6 +427,6 @@ describe("pfcli custom-domain", () => {
     ])
 
     expect(result.status).not.toBe(0)
-    expect(result.output).toContain("Received unknown argument: '--region'")
+    expect(result.output).toContain("Unrecognized flag: --region")
   })
 })

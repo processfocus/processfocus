@@ -14,11 +14,11 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
-    "effect": "^3.22.2",
     "@pf/business-calendar": "workspace:*",
     "@pf/graphql-schema": "workspace:*",
-    "@pf/request-time": "workspace:*"
+    "@pf/identity-management": "workspace:*",
+    "@pf/request-time": "workspace:*",
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

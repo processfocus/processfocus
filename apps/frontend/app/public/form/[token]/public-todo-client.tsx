@@ -1,9 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { Suspense, use, useEffect, useMemo, useRef, useState } from "react"
+import { EffectSchemaForm } from "@pf/form/effect-schema-form"
 import { PublicTodoStateContent } from "./public-todo-state-content"
 import { useActiveFrontendClientPlugins } from "@/components/frontend-client-plugin-provider"
 import { reportClientException } from "@/lib/client-plugin-error-reporting"
+import { loadBrowserFormDefinition } from "@/lib/frontend-form-loaders"
 import {
   type CalendarSlotItem,
   type FieldError,
@@ -11,17 +13,14 @@ import {
   LookupProvider,
   type LookupService,
   type LookupSuggestion,
-  dynamicForm,
 } from "@/lib/public-todo-form-runtime"
 import {
   type PublicTodoCompletionResult,
   type PublicTodoFormMetadata,
   type PublicTodoStatus,
-  publicTodoDefaultValues,
-  publicTodoJsonSchema,
   publicTodoStateCopy,
   publicTodoTerminalStatusFromResult,
-  publicTodoUnsupportedMetadataTypes,
+  publicTodoUnsupportedFields,
 } from "@/lib/public-todo-model"
 
 interface PublicTodoClientProps {
@@ -275,12 +274,13 @@ const requestPublicTodoCalendarSlotsUncached = async (
   return Array.isArray(payload?.items) ? payload.items : []
 }
 
-export function PublicTodoClient({
+function PublicTodoClientInner({
   token,
   todoId,
   submittedTitle,
   formMetadata,
 }: PublicTodoClientProps) {
+  const schema = use(loadBrowserFormDefinition(formMetadata.stepPath))
   const activePlugins = useActiveFrontendClientPlugins()
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null)
   const [terminalStatus, setTerminalStatus] = useState<Exclude<
@@ -289,6 +289,19 @@ export function PublicTodoClient({
   > | null>(null)
   const lookupService = useMemo<LookupService>(
     () => ({
+      resolveSelection: async (_stepPath, field, selectedValue) =>
+        (await requestPublicTodoLookup({ token, field, selectedValue }))[0] ??
+        null,
+      search: async (_stepPath, field, filter, requestedLimit) => {
+        const limit = Math.max(1, Math.min(requestedLimit, 99))
+        const items = await requestPublicTodoLookup({
+          token,
+          field,
+          filter,
+          limit: limit + 1,
+        })
+        return { items: items.slice(0, limit), hasMore: items.length > limit }
+      },
       fetchSuggestions: async (_stepPath, field, filter, limit) => {
         try {
           return await requestPublicTodoLookup({ token, field, filter, limit })
@@ -325,11 +338,10 @@ export function PublicTodoClient({
       token,
     ],
   )
-  const unsupportedTypes = useMemo(
-    () => publicTodoUnsupportedMetadataTypes(formMetadata),
-    [formMetadata],
+  const unsupportedTypes = publicTodoUnsupportedFields(
+    schema,
+    formMetadata.requestData,
   )
-
   if (submittedMessage) {
     return (
       <PublicTodoStateContent
@@ -345,7 +357,7 @@ export function PublicTodoClient({
     return <PublicTodoStateContent {...copy} />
   }
 
-  if (unsupportedTypes.length > 0) {
+  if (unsupportedTypes.length > 0)
     return (
       <UnsupportedPublicTodoState
         activePlugins={activePlugins}
@@ -355,7 +367,6 @@ export function PublicTodoClient({
         unsupportedTypes={unsupportedTypes}
       />
     )
-  }
 
   const handleSubmit = async (
     values: Record<string, unknown>,
@@ -430,6 +441,7 @@ export function PublicTodoClient({
   const renderActions = (context: FormActionsContext) => (
     <div className="flex justify-end border-t border-slate-200 pt-6">
       <button
+        disabled={context.formState.isSubmitting}
         type="submit"
         className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
       >
@@ -438,19 +450,18 @@ export function PublicTodoClient({
     </div>
   )
 
-  const form = dynamicForm({
-    // The shared form renderer persists drafts by key. Use the todo id instead
-    // of the capability token so localStorage never stores the bearer token.
-    draftId: `public-todo-${todoId}`,
-    formDefinition: formMetadata.formDefinition,
-    defaultValues: publicTodoDefaultValues(formMetadata.defaultValues),
-    enableProviderUserLookup: false,
-    handleCancel: () => undefined,
-    handleSubmit,
-    jsonSchema: publicTodoJsonSchema(formMetadata.jsonSchema),
-    renderActions,
-    stepPath: formMetadata.stepPath,
-  })
+  const form = (
+    <EffectSchemaForm
+      draftId={`public-todo-${todoId}`}
+      schema={schema}
+      requestData={formMetadata.requestData}
+      defaultValues={formMetadata.defaultValues ?? {}}
+      onSubmit={handleSubmit}
+      stepPath={formMetadata.stepPath}
+    >
+      {renderActions}
+    </EffectSchemaForm>
+  )
   const title = formMetadata.publicFormTitle ?? formMetadata.processName
   const description =
     formMetadata.publicFormDescription ??
@@ -549,5 +560,13 @@ export function ExpiredPublicTodoClient({ token }: { readonly token: string }) {
         </button>
       ) : null}
     </>
+  )
+}
+
+export function PublicTodoClient(props: PublicTodoClientProps) {
+  return (
+    <Suspense fallback={<p role="status">Loading form…</p>}>
+      <PublicTodoClientInner {...props} />
+    </Suspense>
   )
 }

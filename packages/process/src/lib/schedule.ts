@@ -223,12 +223,12 @@ export const Schedule = {
    */
   clockTime(
     from: DateTime.DateTime,
-    duration: Duration.DurationInput,
+    duration: Duration.Input,
   ): ClockTimeSchedule {
     return {
       _tag: "ClockTime",
       from,
-      duration: Duration.decode(duration),
+      duration: Duration.fromInputUnsafe(duration),
     }
   },
 

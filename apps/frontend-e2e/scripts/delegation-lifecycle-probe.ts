@@ -29,7 +29,7 @@ const evidence = Schema.decodeUnknownSync(Schema.NonEmptyString)(
   process.argv[3],
 )
 const viewport = Schema.decodeUnknownSync(
-  Schema.Literal("both", "desktop", "mobile"),
+  Schema.Literals(["both", "desktop", "mobile"]),
 )(
   process.argv
     .slice(4)
@@ -342,9 +342,7 @@ async function api(
   const body = Schema.decodeUnknownSync(
     Schema.Struct({
       data: Schema.optional(
-        Schema.NullOr(
-          Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-        ),
+        Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
       ),
       errors: Schema.optional(
         Schema.Array(Schema.Struct({ message: Schema.String })),
@@ -638,7 +636,7 @@ try {
   const agentContext = await connect(agent)
   const agentLive = observe(agentContext)
   const agentPage = Option.getOrThrow(
-    Option.fromNullable(
+    Option.fromNullishOr(
       agentContext
         .pages()
         .find((candidate) => candidate.url().startsWith(handoff.frontend)),
@@ -655,7 +653,7 @@ try {
     "Human subscriber tab missing",
   )
   const subscriberPage = Option.getOrThrow(
-    Option.fromNullable(
+    Option.fromNullishOr(
       ownerContext
         .pages()
         .find((candidate) => !existingOwnerPages.has(candidate)),
@@ -970,10 +968,7 @@ try {
       return Schema.decodeUnknownSync(
         Schema.Struct({
           exp: Schema.Number,
-          properties: Schema.Record({
-            key: Schema.String,
-            value: Schema.Unknown,
-          }),
+          properties: Schema.Record(Schema.String, Schema.Unknown),
         }),
       )(JSON.parse(Buffer.from(payload, "base64url").toString()))
     }
@@ -2410,7 +2405,7 @@ try {
       )
       const originalSecret = await takeSecret()
       const [delegationId] = Schema.decodeUnknownSync(
-        Schema.Tuple(Schema.String),
+        Schema.Tuple([Schema.String]),
       )(
         await evaluate(
           owner,
@@ -2503,13 +2498,13 @@ try {
         Schema.Array(
           Schema.Struct({
             result: Schema.Struct({
-              refs: Schema.Record({
-                key: Schema.String,
-                value: Schema.Struct({
+              refs: Schema.Record(
+                Schema.String,
+                Schema.Struct({
                   role: Schema.String,
                   name: Schema.String,
                 }),
-              }),
+              ),
             }),
           }),
         ),
@@ -2697,7 +2692,7 @@ try {
         "Restricted tab missing",
       )
       const restrictedPage = Option.getOrThrow(
-        Option.fromNullable(
+        Option.fromNullishOr(
           ownerContext
             .pages()
             .find((candidate) => !existingPages.has(candidate)),
@@ -2813,7 +2808,7 @@ try {
             return {
               accepted: !result.error,
               data: Schema.decodeUnknownSync(
-                Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+                Schema.Record(Schema.String, Schema.Unknown),
               )(result.data),
             }
           })()

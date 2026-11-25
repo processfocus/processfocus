@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
-import { SqlClient } from "@effect/sql"
 import { PgClient } from "@effect/sql-pg"
 import { PostgreSqlContainer } from "@testcontainers/postgresql"
 import { Context, Effect, Layer, Redacted } from "effect"
+import { SqlClient } from "effect/sql"
 import { TypedPostgresDrizzleLayer } from "../src/lib/typed-drizzle"
 import { MigrationLayer } from "./migrator"
 import {
@@ -19,9 +19,10 @@ export interface PostgresTestSuiteConfig {
   readonly templateDatabase: string
 }
 
-class ClonedDatabase extends Context.Tag(
-  "@pf/service-drizzle-postgres/ClonedDatabase",
-)<ClonedDatabase, { readonly connectionUri: string }>() {}
+class ClonedDatabase extends Context.Service<
+  ClonedDatabase,
+  { readonly connectionUri: string }
+>()("@pf/service-drizzle-postgres/ClonedDatabase") {}
 
 const connectionUriForDatabase = (
   connectionUri: string,
@@ -34,6 +35,7 @@ const connectionUriForDatabase = (
 
 const connectionLayer = (connectionUri: string) =>
   PgClient.layer({
+    prepare: false,
     url: Redacted.make(connectionUri),
   })
 
@@ -117,17 +119,17 @@ const dropClonedDatabase = (
   )
 
 export const postgresTestFromTemplate = (config: PostgresTestSuiteConfig) => {
-  const clonedDatabaseLayer = Layer.scoped(
+  const clonedDatabaseLayer = Layer.effect(
     ClonedDatabase,
     Effect.acquireRelease(createClonedDatabase(config), ({ database }) =>
       dropClonedDatabase(config, database).pipe(
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.logError("Failed to drop PostgreSQL test database", cause),
         ),
       ),
     ),
   )
-  const clientLayer = Layer.unwrapEffect(
+  const clientLayer = Layer.unwrap(
     Effect.map(ClonedDatabase, ({ connectionUri }) =>
       testConnectionLayer(connectionUri),
     ),

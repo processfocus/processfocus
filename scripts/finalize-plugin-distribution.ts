@@ -6,8 +6,6 @@ const dist = resolve(process.argv[2] ?? "dist")
 const PACKAGE_REWRITES: ReadonlyArray<readonly [string, string]> = [
   ["@pf/process/organisation-frontend-plugin-manifest", "processfocus/plugin"],
   ["@pf/frontend-plugin-host", "processfocus/plugin"],
-  ["@pf/document-store-service", "@processfocus/runtime"],
-  ["@pf/job-handler", "@processfocus/runtime"],
   ["@pf/form-schema", "processfocus/forms"],
   ["@pf/frontend-manifest", "processfocus/manifest"],
   ["@pf/process", "processfocus"],

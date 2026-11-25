@@ -30,6 +30,9 @@
     },
     {
       "path": "../../packages/frontend-endpoints"
+    },
+    {
+      "path": "../../packages/auth-session"
     }
   ]
 }

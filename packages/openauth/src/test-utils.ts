@@ -1,5 +1,5 @@
 /**
- * Test utilities for testing HttpApp-based servers.
+ * Test utilities for testing HttpEffect-based servers.
  *
  * Provides a `.request()` method similar to the old Router interface
  * for easier testing.
@@ -7,15 +7,15 @@
  * @packageDocumentation
  */
 
-import { HttpApp } from "@effect/platform"
-import { Runtime } from "effect"
+import { Context, type Effect } from "effect"
+import { HttpEffect } from "effect/http"
 import type { Issuer } from "./issuer.js"
 
 /** Default base URL for test requests */
 const DEFAULT_BASE_URL = "http://localhost"
 
 /**
- * Wrapper around an HttpApp that provides a convenient `.request()` method for testing.
+ * Wrapper around an HttpEffect that provides a convenient `.request()` method for testing.
  */
 export interface TestApp {
   /**
@@ -42,19 +42,19 @@ export interface CreateTestAppOptions {
   baseUrl?: string
   /**
    * Runtime to use for handling requests.
-   * If not provided, uses Runtime.defaultRuntime.
+   * If not provided, uses Context.empty().
    * When the app requires services at request time, provide a runtime that has those services.
    */
-  runtime?: Runtime.Runtime<never>
+  runtime?: Context.Context<never>
 }
 
 /**
- * Create a TestApp from an HttpApp (Issuer).
+ * Create a TestApp from an HttpEffect (Issuer).
  *
  * The TestApp tracks the last used base URL (origin) so relative URLs in redirects
  * are resolved correctly.
  *
- * @param app - The HttpApp to wrap
+ * @param app - The HttpEffect to wrap
  * @param optionsOrBaseUrl - Options object or base URL string for backward compatibility
  * @returns TestApp with `.request()` method
  */
@@ -69,8 +69,8 @@ export const createTestApp = (
       : optionsOrBaseUrl ?? {}
 
   const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL
-  const runtime = options.runtime ?? Runtime.defaultRuntime
-  const handler = HttpApp.toWebHandlerRuntime(runtime)(app)
+  const runtime = options.runtime ?? Context.empty()
+  const handler = HttpEffect.toWebHandlerWith<never, Effect.Services<Issuer>>(runtime)(app)
 
   // Track the last used origin for resolving relative URLs
   let lastOrigin = baseUrl as string

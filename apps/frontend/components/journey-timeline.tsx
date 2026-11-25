@@ -1,6 +1,8 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
+import { Popover, PopoverContent, PopoverTrigger } from "@pf/shadcn-components"
+import { DateTimeDisplay } from "@pf/shadcn-components/date-time-display"
 import { cn } from "@/lib/utils"
 
 interface TimelineSegmentData {
@@ -68,15 +70,7 @@ function formatDuration(ms: number): string {
   return `${mins}m`
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleDateString("en-NZ", {
-    day: "numeric",
-    month: "short",
-  })
-}
-
-const RowTooltip = ({
+const SegmentDetails = ({
   item,
   segment,
   now,
@@ -88,14 +82,33 @@ const RowTooltip = ({
   const start = new Date(segment.startDate).getTime()
   const end = segment.endDate ? new Date(segment.endDate).getTime() : now
   return (
-    <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-slate-700 dark:bg-slate-800">
+    <div className="text-xs">
       <div className="font-semibold text-slate-900 dark:text-slate-100">
         {segment.status}
       </div>
       <div className="text-slate-500 dark:text-slate-400">{item.label}</div>
       <div className="mt-1 text-slate-400 dark:text-slate-500">
-        {formatDate(segment.startDate)}
-        {segment.endDate ? ` → ${formatDate(segment.endDate)}` : " → now"}
+        <DateTimeDisplay
+          kind={
+            /^\d{4}-\d{2}-\d{2}$/.test(segment.startDate)
+              ? "calendar-date"
+              : "timestamp"
+          }
+          value={segment.startDate}
+        />
+        {" → "}
+        {segment.endDate ? (
+          <DateTimeDisplay
+            kind={
+              /^\d{4}-\d{2}-\d{2}$/.test(segment.endDate)
+                ? "calendar-date"
+                : "timestamp"
+            }
+            value={segment.endDate}
+          />
+        ) : (
+          "now"
+        )}
         {" · "}
         {formatDuration(end - start)}
       </div>
@@ -104,8 +117,6 @@ const RowTooltip = ({
 }
 
 export function JourneyTimeline({ items, now }: JourneyTimelineProps) {
-  const [hoveredSegment, setHoveredSegment] = useState<string | null>(null)
-
   const { globalStart, globalEnd, sortedItems } = useMemo(() => {
     if (items.length === 0) {
       return {
@@ -145,8 +156,8 @@ export function JourneyTimeline({ items, now }: JourneyTimelineProps) {
   const axisMarks = useMemo(() => {
     const marks: { key: string; label: string; pct: number }[] = []
     const start = new Date(globalStart)
-    start.setDate(1)
-    start.setHours(0, 0, 0, 0)
+    start.setUTCDate(1)
+    start.setUTCHours(0, 0, 0, 0)
 
     const end = new Date(globalEnd)
     const cursor = new Date(start)
@@ -155,14 +166,12 @@ export function JourneyTimeline({ items, now }: JourneyTimelineProps) {
       const t = cursor.getTime()
       if (t >= globalStart) {
         marks.push({
-          key: `${cursor.getFullYear()}-${cursor.getMonth()}`,
-          label: cursor.toLocaleDateString("en-NZ", {
-            month: "short",
-          }),
+          key: cursor.toISOString(),
+          label: cursor.toISOString().slice(0, 10),
           pct: pct(t),
         })
       }
-      cursor.setMonth(cursor.getMonth() + 1)
+      cursor.setUTCMonth(cursor.getUTCMonth() + 1)
     }
     return marks
   }, [globalStart, globalEnd, pct])
@@ -208,7 +217,7 @@ export function JourneyTimeline({ items, now }: JourneyTimelineProps) {
             style={{ left: `${mark.pct}%` }}
           >
             <span className="text-[10px] text-slate-400 dark:text-slate-500">
-              {mark.label}
+              <DateTimeDisplay kind="calendar-date" value={mark.label} />
             </span>
             <span className="h-2 w-px bg-slate-200 dark:bg-slate-700" />
           </div>
@@ -260,29 +269,27 @@ export function JourneyTimeline({ items, now }: JourneyTimelineProps) {
                     const segWidth =
                       ((segEnd - segStart) / (itemEnd - itemStart || 1)) * 100
                     const segKey = `${item.id}-${i}`
-                    const isHovered = hoveredSegment === segKey
                     return (
-                      <div
-                        key={segKey}
-                        className={cn(
-                          "relative h-full transition-opacity",
-                          getStatusColor(seg.status),
-                          isHovered ? "opacity-80" : "opacity-100",
-                        )}
-                        style={{
-                          position: "absolute",
-                          left: `${segLeft}%`,
-                          width: `${Math.max(segWidth, 0.5)}%`,
-                        }}
-                        role="img"
-                        aria-label={`${seg.status}: ${formatDate(seg.startDate)}${seg.endDate ? ` to ${formatDate(seg.endDate)}` : " to now"}`}
-                        onMouseEnter={() => setHoveredSegment(segKey)}
-                        onMouseLeave={() => setHoveredSegment(null)}
-                      >
-                        {isHovered && (
-                          <RowTooltip item={item} segment={seg} now={now} />
-                        )}
-                      </div>
+                      <Popover key={segKey}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            className={cn(
+                              "relative h-full transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500",
+                              getStatusColor(seg.status),
+                            )}
+                            style={{
+                              position: "absolute",
+                              left: `${segLeft}%`,
+                              width: `${Math.max(segWidth, 0.5)}%`,
+                            }}
+                            aria-label={`${item.label}: ${seg.status} — show dates`}
+                          />
+                        </PopoverTrigger>
+                        <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] p-3">
+                          <SegmentDetails item={item} segment={seg} now={now} />
+                        </PopoverContent>
+                      </Popover>
                     )
                   })}
                 </div>

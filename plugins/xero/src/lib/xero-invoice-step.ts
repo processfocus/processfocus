@@ -14,7 +14,10 @@ import {
   SystemStep,
 } from "@pf/process"
 import type { XeroInvoiceError } from "./errors"
-import type { IssueAuthorisedSalesInvoiceInput } from "./identities"
+import {
+  type IssueAuthorisedSalesInvoiceInput,
+  IssuedSalesInvoiceLine,
+} from "./identities"
 import {
   XeroInvoice,
   decodeIssueAuthorisedSalesInvoiceInput,
@@ -23,6 +26,8 @@ import {
 export const xeroInvoiceOutput = {
   invoiceId: Schema.String,
   invoiceNumber: Schema.String,
+  productDescription: Schema.String,
+  lines: Schema.Array(IssuedSalesInvoiceLine),
 }
 
 export type XeroInvoiceStepProps<
@@ -84,7 +89,7 @@ export class XeroInvoiceStep<
     XeroInvoiceError,
     XeroInvoice | CurrentStepJobContext
   > {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const decoded = yield* decodeIssueAuthorisedSalesInvoiceInput(input)
       const xero = yield* XeroInvoice
       return yield* xero.issueAuthorisedSalesInvoice(decoded)

@@ -1,6 +1,7 @@
 import { AwsFunctionStep } from "@processfocus/plugin-aws-lambda"
 import { PostHog } from "@processfocus/plugin-posthog"
 import {
+  type ConfigurationContract,
   RUNTIME_ARTIFACT_FORMAT,
   RUNTIME_ARTIFACT_VERSION,
   parseRuntimeArtifact,
@@ -19,6 +20,15 @@ import { Saturday, Sunday, createDefaultConfig } from "processfocus/calendar"
 import { TextField } from "processfocus/forms"
 import type { OrganisationFrontendPluginManifestJson } from "processfocus/plugin"
 import { validateOrganisation } from "processfocus/testing"
+import { fixtureForm } from "./custom-field.js"
+import { CustomFieldPlugin } from "./custom-field-plugin.js"
+import { representativeForm } from "./representative-form.js"
+
+// This fixture uses literal settings and has no environment configuration.
+export const Configuration = {
+  version: 1,
+  groups: [],
+} satisfies ConfigurationContract
 
 export const org = new Organisation({
   name: "External Fixture",
@@ -42,18 +52,35 @@ const field = TextField({ label: "Summary" })
 let resolvedDefaults = 0
 const submit = new Form(process, "Submit", {
   name: "Submit representative form",
-  form: ({ value }) => ({
-    summary: field,
-    display: TextField({
-      readOnly: true,
-      default: value(() => {
-        resolvedDefaults++
-        return "Read-only fixture"
-      }),
-    }),
-  }),
+  form: representativeForm,
+  browser: {
+    entrypoint: "src/representative-form.ts",
+    exportName: "representativeForm",
+  },
+  bindings: () => {
+    resolvedDefaults++
+    return { display: { default: "Read-only fixture" } }
+  },
   role: author,
 })
+const pluginProcess = new Process(operations, "Plugin", {
+  name: "Plugin",
+  purpose: "Packaged unknown field",
+})
+const pluginSubmit = new Form(pluginProcess, "Submit", {
+  anonymousPage: { address: "packaged-plugin-start", afterSubmit: "restart" },
+  form: fixtureForm,
+  browser: {
+    entrypoint: "src/custom-field.ts",
+    exportName: "fixtureForm",
+    resolvePluginConfiguration: () =>
+      Effect.succeed({ summary: { hint: "Public runtime configuration" } }),
+  },
+  role: author,
+})
+pluginProcess.start(pluginSubmit).end()
+new CustomFieldPlugin(org, "CustomField")
+
 const flow = process.start(submit)
 
 const enrich = new AwsFunctionStep(flow, "Enrich", {
@@ -88,6 +115,7 @@ Effect.runSync(
     format: RUNTIME_ARTIFACT_FORMAT,
     version: RUNTIME_ARTIFACT_VERSION,
     organisation: {},
+    configuration: Configuration,
     extensions: { "fixture/plugin": { enabled: true } },
   }),
 )

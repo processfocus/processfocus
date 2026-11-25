@@ -1,12 +1,12 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Layer } from "effect"
-import type { ConfigError } from "effect/ConfigError"
+import type { ConfigError } from "effect/Config"
+import type { SqlError } from "effect/sql/SqlError"
 import { makeDatabaseConfigLayer } from "@pf/db-info"
 import { TypedSqliteDrizzleLayer } from "@pf/service-drizzle-sqlite"
 import { SqliteOpenAuthStorageServiceLive } from "@pf/sqlite-operations"
 import { makePfcliSqlClientLayer } from "./local-database-layer"
 
-type FrontendJwtStorageService = Layer.Layer.Success<
+type FrontendJwtStorageService = Layer.Success<
   typeof SqliteOpenAuthStorageServiceLive
 >
 

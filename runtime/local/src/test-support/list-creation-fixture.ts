@@ -1,11 +1,5 @@
-import { SqlClient } from "@effect/sql"
 import { Effect, Schema } from "effect"
-import {
-  EmailField,
-  FormDateInput,
-  FormDefault,
-  TextField,
-} from "@pf/form-schema"
+import { SqlClient } from "effect/sql"
 import {
   List,
   ListCreateError,
@@ -13,18 +7,12 @@ import {
   type Organisation,
   type Role,
 } from "@pf/process"
+import {
+  contactCreateForm,
+  contactEditForm,
+  fields,
+} from "./list-creation-forms"
 
-const fields = {
-  name: TextField({ label: "Name" }).pipe(Schema.minLength(1)),
-  email: EmailField({ label: "Email" }),
-  date: Schema.String.pipe(
-    Schema.pattern(/^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/),
-  ).annotations({ title: "Date", [FormDateInput]: true }),
-  category: Schema.Literal("Member", "Guest").annotations({
-    title: "Category",
-    [FormDefault]: "Member",
-  }),
-}
 const row = Schema.Struct({
   id: Schema.String,
   ...fields,
@@ -53,27 +41,28 @@ export function addListCreationFixture(org: Organisation, role: Role): void {
           count: number
         }>`SELECT count(*) AS count FROM list_creation_fixture`
         return {
-          items: yield* Schema.decodeUnknown(Schema.Array(row))(items),
+          items: yield* Schema.decodeUnknownEffect(Schema.Array(row))(items),
           totalCount: counts[0]?.count ?? 0,
         }
       }).pipe(Effect.orDie),
-    form: () => ({
-      ...fields,
-      id: TextField({ label: "ID", readOnly: true }),
-      summary: TextField({ label: "Summary", readOnly: true }),
-    }),
+    form: () => contactEditForm.fields,
+    browser: {
+      entrypoint: "src/list-creation-forms.ts",
+      exportName: "contactEditForm",
+    },
     itemQuery: (id) =>
       Effect.gen(function* () {
         const sql = yield* ready
         const rows =
           yield* sql`SELECT * FROM list_creation_fixture WHERE id = ${id}`
-        return rows[0] ? yield* Schema.decodeUnknown(row)(rows[0]) : null
+        return rows[0] ? yield* Schema.decodeUnknownEffect(row)(rows[0]) : null
       }).pipe(Effect.orDie),
     create: {
-      form: () => ({
-        ...fields,
-        summary: TextField({ label: "Summary", readOnly: true }),
-      }),
+      form: () => contactCreateForm.fields,
+      browser: {
+        entrypoint: "src/list-creation-forms.ts",
+        exportName: "contactCreateForm",
+      },
       submit: (input) =>
         Effect.gen(function* () {
           const sql = yield* ready
@@ -96,7 +85,7 @@ export function addListCreationFixture(org: Organisation, role: Role): void {
         yield* sql`UPDATE list_creation_fixture SET name = ${input.name}, email = ${input.email}, date = ${input.date}, category = ${input.category}, summary = ${`${input.name} — ${input.category}`} WHERE id = ${id}`
         const rows =
           yield* sql`SELECT * FROM list_creation_fixture WHERE id = ${id}`
-        return rows[0] ? yield* Schema.decodeUnknown(row)(rows[0]) : null
+        return rows[0] ? yield* Schema.decodeUnknownEffect(row)(rows[0]) : null
       }).pipe(
         Effect.mapError(
           () =>

@@ -81,9 +81,7 @@ export type SystemStepExecutorError =
 /**
  * Optional service used to dispatch long-duration system steps out-of-process.
  */
-export class LongDurationDispatcher extends Context.Tag(
-  "@pf/process/LongDurationDispatcher",
-)<
+export class LongDurationDispatcher extends Context.Service<
   LongDurationDispatcher,
   {
     readonly dispatch: (
@@ -91,16 +89,14 @@ export class LongDurationDispatcher extends Context.Tag(
       stepPath: string,
     ) => Effect.Effect<void, LongDurationDispatchError>
   }
->() {}
+>()("@pf/process/LongDurationDispatcher") {}
 
 /**
  * Optional service that lets system steps read their process state at
  * execution time. Used by deferred steps to check idempotency guards
  * (e.g. has this Resend email already been sent on a previous retry?).
  */
-export class StepProcessStateReader extends Context.Tag(
-  "@pf/process/StepProcessStateReader",
-)<
+export class StepProcessStateReader extends Context.Service<
   StepProcessStateReader,
   {
     /**
@@ -111,7 +107,7 @@ export class StepProcessStateReader extends Context.Tag(
       todoId: string,
     ) => Effect.Effect<Record<string, unknown>>
   }
->() {}
+>()("@pf/process/StepProcessStateReader") {}
 
 /**
  * Service interface for executing system steps.
@@ -139,6 +135,7 @@ export interface SystemStepExecutorService {
     todoId: string,
     forEachInput?: unknown,
     completedStepPaths?: readonly string[],
+    externalWriteAttemptId?: string,
   ) => Effect.Effect<StepResult, SystemStepExecutorError, unknown>
 }
 
@@ -164,12 +161,12 @@ const rehydrateCompletedStepState = (
           continue
         }
 
-        const decoded = yield* Schema.decodeUnknown(schema)(
+        const decoded = yield* Schema.decodeUnknownEffect(schema)(
           rehydrated[key],
         ).pipe(
           // Some fields are already decoded, dynamic, or structural-only. Keep
           // the persisted value unless this field schema can rehydrate it.
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logDebug("Skipped process state field rehydration", {
               stepPath,
               field: key,
@@ -190,9 +187,10 @@ const rehydrateCompletedStepState = (
 /**
  * Context tag for the SystemStepExecutor service.
  */
-export class SystemStepExecutor extends Context.Tag(
-  "@pf/process/SystemStepExecutor",
-)<SystemStepExecutor, SystemStepExecutorService>() {}
+export class SystemStepExecutor extends Context.Service<
+  SystemStepExecutor,
+  SystemStepExecutorService
+>()("@pf/process/SystemStepExecutor") {}
 
 /**
  * Create a SystemStepExecutor service from an Organisation.
@@ -210,6 +208,7 @@ export const makeSystemStepExecutor = (
     todoId,
     forEachInput?,
     completedStepPaths?,
+    externalWriteAttemptId?,
   ) => {
     const effect = Effect.gen(function* () {
       // Find the step by path (handles paths with or without leading slash)
@@ -223,8 +222,6 @@ export const makeSystemStepExecutor = (
         return yield* new NotASystemStepError({ stepPath })
       }
 
-      // Now step is narrowed to SystemStep
-      // Use unknown intermediate type to satisfy TypeScript
       // biome-ignore lint/suspicious/noExplicitAny: Type erasure at runtime, values are compatible
       const systemStep = step as any as SystemStep<
         Record<string, unknown>,
@@ -234,7 +231,13 @@ export const makeSystemStepExecutor = (
         string
       >
 
-      const jobContext = { todoId, stepPath }
+      const jobContext = {
+        todoId,
+        stepPath,
+        ...(externalWriteAttemptId === undefined
+          ? {}
+          : { externalWriteAttemptId }),
+      }
       const rehydrationStepPaths = [
         ...(completedStepPaths ?? []),
         // Start-step completions may not have a todo, so include all forms from
@@ -289,7 +292,7 @@ export const makeSystemStepExecutor = (
 
       // Create a schema from the output fields and validate
       const outputSchema = Schema.Struct(outputFields)
-      const validatedOutput = yield* Schema.decodeUnknown(outputSchema)(
+      const validatedOutput = yield* Schema.decodeUnknownEffect(outputSchema)(
         rawOutput,
       ).pipe(
         Effect.mapError(
@@ -303,7 +306,6 @@ export const makeSystemStepExecutor = (
       }
     })
 
-    // Return effect with propagated requirements from the step's execute function
     return effect
   },
 })

@@ -1,6 +1,7 @@
-import { SqlClient } from "@effect/sql"
+import { EnqueueError, QueueService } from "@processfocus/runtime"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer, Option, Schema } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer, Option, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   UserDetails,
@@ -13,7 +14,6 @@ import {
   type NotificationDeliveryPayload,
   PROCESS_EVENT_QUEUE,
   TODO_EVENT_QUEUE,
-  applyPublicCompletionDeliveryCallback,
 } from "@pf/job-handler"
 import { storeOrganisation } from "@pf/org-to-db"
 import {
@@ -25,7 +25,7 @@ import {
   Role,
   normalizePath,
 } from "@pf/process"
-import { EnqueueError, QueueService } from "@pf/queue-service"
+import { applyPublicCompletionDeliveryCallback } from "@pf/process-execution/worker"
 import { RequestTime } from "@pf/request-time"
 import {
   DatabaseTest,
@@ -85,6 +85,8 @@ const createMockQueueService = (options?: {
     enqueue: enqueueJob,
     enqueueWithDelay: enqueueJob,
     rawClaim: () => Effect.succeed(Option.none()),
+    rawClaimBatch: () => Effect.succeed([]),
+    acknowledgeBatch: () => Effect.succeed([]),
     acknowledge: () => Effect.void,
     fail: () => Effect.void,
     extendVisibility: () => Effect.void,
@@ -121,7 +123,7 @@ const createPublicCompletionOrg = (options?: {
     form: () => ({ response: Schema.String }),
     publicCompletion: {
       recipient: () => ({ email: "external@example.com" }),
-      expiresAt: () => DateTime.unsafeMake("2099-01-01T10:00:00.000Z"),
+      expiresAt: () => DateTime.makeUnsafe("2099-01-01T10:00:00.000Z"),
       ...(options?.correction === true
         ? {
             correction: {
@@ -156,15 +158,12 @@ const createTestLayers = (
   })
   const RequestTimeLive = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake("2026-06-01T10:00:00.000Z")),
+    DateTime.makeUnsafe("2026-06-01T10:00:00.000Z"),
   )
-  const UserDetailsLive = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "TEST_USER",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsLive = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "TEST_USER",
+  } as UserDetailsValue)
   const BaseDbLayer = Layer.provideMerge(SqliteDbOperationsLive, DatabaseTest)
   const OperationLayers = Layer.provideMerge(
     Layer.mergeAll(
@@ -174,6 +173,10 @@ const createTestLayers = (
     BaseDbLayer,
   )
   const layers = Layer.mergeAll(
+    Layer.effect(
+      ConfigProvider.ConfigProvider,
+      Effect.sync(() => ConfigProvider.fromEnv()),
+    ),
     OrganisationProviderLive,
     RequestTimeLive,
     UserDetailsLive,
@@ -216,7 +219,7 @@ const insertProviderUser = (params: {
       id: params.userId,
       provider: "test",
       sub: params.email,
-      lastLoggedIn: now,
+      createdAt: now,
     })
 
     const [firstName, ...rest] = params.name.split(" ")
@@ -290,7 +293,7 @@ const insertWaitingPublicCompletion = (params?: {
         toDoId: todoId,
         email: "old@example.com",
         providerMessageId: "email-old",
-        createdAt: DateTime.unsafeMake("2026-06-01T09:00:00.000Z"),
+        createdAt: DateTime.makeUnsafe("2026-06-01T09:00:00.000Z"),
       })
     }
 
@@ -299,7 +302,7 @@ const insertWaitingPublicCompletion = (params?: {
       toDoId: todoId,
       email: "external@example.com",
       providerMessageId: "email-latest",
-      createdAt: DateTime.unsafeMake("2026-06-01T10:00:00.000Z"),
+      createdAt: DateTime.makeUnsafe("2026-06-01T10:00:00.000Z"),
     })
 
     return { latestAttemptId, processExecutionId, todoId }
@@ -335,15 +338,15 @@ describe("Public Completion delivery callbacks", () => {
         const { latestAttemptId, todoId } =
           yield* insertWaitingPublicCompletion()
 
-        const result = yield* applyPublicCompletionDeliveryCallback({
+        const delivery = applyPublicCompletionDeliveryCallback({
           status: "delivered",
           deliveryId: "msg-delivered",
           todoId,
           invitationAttemptId: latestAttemptId,
           providerMessageId: "email-latest",
         })
-
-        expect(result._tag).toBe("Delivered")
+        expect((yield* delivery)._tag).toBe("Delivered")
+        expect((yield* delivery)._tag).toBe("Delivered")
         const attempts = yield* dbAttempts()
         expect(attempts[0]?.deliveryStatus).toBe("delivered")
         expect(attempts[0]?.deliveryEventId).toBe("msg-delivered")
@@ -486,7 +489,7 @@ describe("Public Completion delivery callbacks", () => {
         const { latestAttemptId, todoId } =
           yield* insertWaitingPublicCompletion()
 
-        const result = yield* applyPublicCompletionDeliveryCallback({
+        const failure = applyPublicCompletionDeliveryCallback({
           status: "failed",
           deliveryId: "msg-correction-required",
           todoId,
@@ -496,6 +499,8 @@ describe("Public Completion delivery callbacks", () => {
           failureReason: "Resend reported email.failed",
           failureDetails: { failureReasonDetail: "recipient_not_found" },
         })
+        const result = yield* failure
+        expect((yield* failure)._tag).toBe("Ignored")
         const lateDelivered = yield* applyPublicCompletionDeliveryCallback({
           status: "delivered",
           deliveryId: "msg-delivered-after-correction",
@@ -742,8 +747,8 @@ describe("Public Completion delivery callbacks", () => {
 
           const first = yield* applyPublicCompletionDeliveryCallback(
             callback,
-          ).pipe(Effect.either)
-          expect(first._tag).toBe("Left")
+          ).pipe(Effect.result)
+          expect(first._tag).toBe("Failure")
 
           const retry = yield* applyPublicCompletionDeliveryCallback(callback)
           expect(retry._tag).toBe("CorrectionRequired")
@@ -792,8 +797,8 @@ describe("Public Completion delivery callbacks", () => {
 
           const first = yield* applyPublicCompletionDeliveryCallback(
             callback,
-          ).pipe(Effect.either)
-          expect(first._tag).toBe("Left")
+          ).pipe(Effect.result)
+          expect(first._tag).toBe("Failure")
 
           const retry = yield* applyPublicCompletionDeliveryCallback(callback)
           expect(retry._tag).toBe("Failed")

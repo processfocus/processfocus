@@ -18,7 +18,7 @@
       "options": {
         "cwd": "{projectRoot}",
         "commands": [
-          "bash ./scripts/run-tests.spec.sh && PFCLI_TEST_RUN_ID=${NX_TASK_HASH:-$(date +%s%N)} bash ./scripts/run-tests.sh"
+          "bash ./scripts/run-tests.spec.sh && bash ./scripts/run-tests.sh"
         ]
       },
       "cache": true,
@@ -28,9 +28,7 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": "{projectRoot}",
-        "commands": [
-          "PFCLI_TEST_RUN_ID=${NX_TASK_HASH:-$(date +%s%N)} bash ./scripts/run-slow-tests.sh"
-        ]
+        "commands": ["bash ./scripts/run-slow-tests.sh"]
       },
       "dependsOn": [
         "^build",
@@ -47,7 +45,7 @@
         "cwd": "{projectRoot}",
         "commands": ["tsgo -p tsconfig.spec.json --noEmit"]
       },
-      "inputs": ["default", "{projectRoot}/tsconfig.spec.json"],
+      "inputs": ["default", "typecheck-default"],
       "dependsOn": ["^build", "build"]
     },
     "pack-check": {

@@ -1,15 +1,14 @@
 import { watch as watchFileSystem } from "node:fs"
 import * as path from "node:path"
-import { FileSystem } from "@effect/platform"
-import { NodeFileSystem } from "@effect/platform-node"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import {
   Context,
   Effect,
-  Either,
+  FileSystem,
   Layer,
   PubSub,
   Ref,
-  Runtime,
+  Result,
   Stream,
 } from "effect"
 import { PolicyLoadError } from "@pf/auth-policy"
@@ -34,9 +33,10 @@ export interface PolicyWatcher {
   readonly currentPolicies: Effect.Effect<readonly string[]>
 }
 
-export class PolicyWatcherService extends Context.Tag(
-  "@pf/auth-local-cedar/PolicyWatcherService",
-)<PolicyWatcherService, PolicyWatcher>() {}
+export class PolicyWatcherService extends Context.Service<
+  PolicyWatcherService,
+  PolicyWatcher
+>()("@pf/auth-local-cedar/PolicyWatcherService") {}
 
 /**
  * Create a layer that watches policy files and provides current policy text.
@@ -49,14 +49,13 @@ export const makePolicyWatcherLayer = (
   policyFiles: readonly string[],
 ) =>
   Layer.provide(
-    Layer.scoped(
+    Layer.effect(
       PolicyWatcherService,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const pubsub = yield* PubSub.unbounded<void>()
-        const runtime = yield* Effect.runtime()
+        const runtime = yield* Effect.context()
 
-        // Resolve absolute paths
         const absolutePaths = policyFiles.map((f) => path.resolve(basePath, f))
 
         // Group watched files by parent directory so file replacement saves
@@ -70,7 +69,6 @@ export const makePolicyWatcherLayer = (
           watchedFilesByDirectory.set(directoryPath, watchedFiles)
         }
 
-        // Read all policy files
         const readPolicies = Effect.forEach(absolutePaths, (filePath) =>
           fs
             .readFileString(filePath)
@@ -81,7 +79,6 @@ export const makePolicyWatcherLayer = (
             ),
         )
 
-        // Initial read
         const initialPolicies = yield* readPolicies
         const policiesRef = yield* Ref.make<readonly string[]>(initialPolicies)
 
@@ -93,17 +90,16 @@ export const makePolicyWatcherLayer = (
           Effect.gen(function* () {
             yield* Effect.log(`Cedar policy file changed: ${changedPath}`)
 
-            // Try to reload all policies
-            const reloadResult = yield* Effect.either(readPolicies)
+            const reloadResult = yield* Effect.result(readPolicies)
 
-            yield* Either.match(reloadResult, {
-              onRight: (policies) =>
+            yield* Result.match(reloadResult, {
+              onSuccess: (policies) =>
                 Effect.gen(function* () {
                   yield* Ref.set(policiesRef, policies)
                   yield* PubSub.publish(pubsub, undefined)
                   yield* Effect.log("Cedar policies reloaded")
                 }),
-              onLeft: (error) =>
+              onFailure: (error) =>
                 Effect.logWarning(
                   `Failed to reload Cedar policies, keeping previous valid policies: ${error}`,
                 ),
@@ -134,7 +130,7 @@ export const makePolicyWatcherLayer = (
               // Once the timer fires this reload is intentionally allowed to
               // complete outside the watcher scope; pending timers are cleared
               // by the finalizer before they get this far.
-              Runtime.runFork(runtime, reloadPolicies(changedPath))
+              Effect.runForkWith(runtime)(reloadPolicies(changedPath))
             }, 100),
           )
         }

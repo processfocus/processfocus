@@ -1,9 +1,5 @@
-import {
-  HttpClient,
-  HttpClientError,
-  HttpClientResponse,
-} from "@effect/platform"
 import { Clock, ConfigProvider, Duration, Effect, Layer, Schema } from "effect"
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http"
 import { xeroDraftIdempotencyKey } from "./idempotency"
 import { DraftSalesInvoice, XeroDraftInvoice } from "./xero-draft-invoice"
 import {
@@ -57,7 +53,7 @@ const existing = (status = "DRAFT", reference = "T4 2026 Pupil Y11") => ({
   Reference: reference,
 })
 const bodySchema = Schema.Struct({
-  Invoices: Schema.Tuple(
+  Invoices: Schema.Tuple([
     Schema.Struct({
       Type: Schema.Literal("ACCREC"),
       Status: Schema.Literal("DRAFT"),
@@ -79,10 +75,10 @@ const bodySchema = Schema.Struct({
         }),
       ),
     }),
-  ),
+  ]),
 })
-const realClock = Clock.make()
-const fastClock = Object.assign(Clock.make(), {
+const realClock = Clock.Clock.defaultValue()
+const fastClock = Object.assign(Clock.Clock.defaultValue(), {
   sleep: (duration: Duration.Duration) =>
     Duration.toMillis(duration) === 2000
       ? Effect.void
@@ -200,10 +196,11 @@ const harness = (
         }
         if (options.loseWriteResponse && firstWrite) {
           firstWrite = false
-          return yield* new HttpClientError.RequestError({
-            request,
-            reason: "Transport",
-            cause: new Error("Timed out after commit"),
+          return yield* new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: new Error("Timed out after commit"),
+            }),
           })
         }
         return respond({
@@ -226,11 +223,13 @@ const harness = (
     Layer.provide(XeroInvoiceConfigFromEnv),
     Layer.provide(http),
   )
-  const config = ConfigProvider.fromMap(
-    new Map([
-      ["XERO_CLIENT_ID", "fixture"],
-      ["XERO_CLIENT_SECRET", "fixture"],
-    ]),
+  const config = ConfigProvider.fromEnvRecord(
+    Object.fromEntries(
+      new Map([
+        ["XERO_CLIENT_ID", "fixture"],
+        ["XERO_CLIENT_SECRET", "fixture"],
+      ]),
+    ),
   )
   const { expectedRecipientEmails: _recipients, ...legacyInput } = input
   const operation = Effect.flatMap(XeroDraftInvoice, (service) =>
@@ -250,8 +249,8 @@ const harness = (
     Effect.runPromise(
       operation.pipe(
         Effect.provide(layer),
-        Effect.withConfigProvider(config),
-        Effect.withClock(fastClock),
+        Effect.provideService(ConfigProvider.ConfigProvider, config),
+        Effect.provideService(Clock.Clock, fastClock),
       ),
     )
   return {
@@ -267,7 +266,10 @@ const harness = (
             operation.pipe(Effect.provide(layer)),
           ],
           { concurrency: "unbounded" },
-        ).pipe(Effect.withConfigProvider(config), Effect.withClock(fastClock)),
+        ).pipe(
+          Effect.provideService(ConfigProvider.ConfigProvider, config),
+          Effect.provideService(Clock.Clock, fastClock),
+        ),
       ),
   }
 }

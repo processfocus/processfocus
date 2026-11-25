@@ -1,9 +1,14 @@
 import { desc, sql } from "drizzle-orm"
 import { PgDialect, integer, pgTable, text } from "drizzle-orm/pg-core"
 import { Effect, Schema } from "effect"
-import { MetricBreakdown } from "@pf/form-schema"
+import { ListField, MetricBreakdown, ReadOnly, Wrapper } from "@pf/form-schema"
 import { Form } from "./form"
-import { List, ListSortable, ListVisibleInList } from "./list"
+import {
+  List,
+  type ListItemDetail,
+  ListSortable,
+  ListVisibleInList,
+} from "./list"
 import {
   type ListQuerySortExpression,
   ListQuerySortFieldNotFoundError,
@@ -17,7 +22,7 @@ import { normalizePath, pathToPascalCase } from "./org-utils"
 import { Organisation } from "./organisation"
 import { Process } from "./process"
 import { Role } from "./role"
-import { describe, expect, it } from "bun:test"
+import { describe, expect, expectTypeOf, it } from "bun:test"
 
 describe("List path normalization", () => {
   function createTestFixtures() {
@@ -153,35 +158,56 @@ describe("List path normalization", () => {
     expect(deptList.itemQueryName()).toBe("listItemPrimaryStaff")
   })
 
-  it("should expose list form components through a rule-free structured definition", async () => {
+  it("preserves optional keys in item query callbacks", async () => {
     const { organisation, mockRole } = createTestFixtures()
-
-    const list = new List(organisation, "employees", {
-      name: "Employees",
+    const list = new List(organisation, "optional-detail", {
+      name: "Optional detail",
       roles: [mockRole],
-      output: { id: Schema.String, name: Schema.String },
+      output: { id: Schema.String },
       query: () => Effect.succeed({ items: [], totalCount: 0 }),
       form: () => ({
-        id: Schema.String.annotations({ title: "ID" }),
-        name: Schema.String.annotations({ title: "Name" }),
+        note: Schema.optionalKey(Schema.String),
+        profile: Schema.optionalKey(Schema.Struct({ name: Schema.String })),
+        group: Wrapper({ reference: Schema.optionalKey(Schema.String) }),
       }),
-      itemQuery: () => Effect.succeed(null),
+      itemQuery: () => Effect.succeed({}),
     })
 
-    const definition = await Effect.runPromise(list.clientFormDefinition())
+    expect(await Effect.runPromise(list.executeItemQuery("1"))).toEqual({})
+  })
 
-    expect(definition).toEqual({
-      components: {
-        id: expect.objectContaining({ _tag: "text", field: "id" }),
-        name: expect.objectContaining({ _tag: "text", field: "name" }),
-      },
-      rules: [],
+  it("retains nested read-only fields in detail output contracts", () => {
+    const fields = { name: Schema.String, total: ReadOnly(Schema.Number) }
+    const form = {
+      nested: Schema.Struct(fields),
+      rows: ListField(fields),
+      array: Schema.Array(Schema.Struct(fields)),
+      optional: Schema.optionalKey(Schema.Struct(fields)),
+      nullable: Schema.NullOr(Schema.Struct(fields)),
+    }
+    type Item = { readonly name: string; readonly total: number }
+    expectTypeOf<ListItemDetail<typeof form>>().toEqualTypeOf<{
+      readonly nested: Item
+      readonly rows: readonly Item[]
+      readonly array: readonly Item[]
+      readonly optional?: Item
+      readonly nullable: Item | null
+    }>()
+  })
+
+  it("returns flattened wrapper data through the public execution API", async () => {
+    const { organisation, mockRole } = createTestFixtures()
+    const list = new List(organisation, "flat-detail", {
+      name: "Flat detail",
+      roles: [mockRole],
+      output: { id: Schema.String },
+      query: () => Effect.succeed({ items: [], totalCount: 0 }),
+      form: () => ({ group: Wrapper({ name: Schema.String }) }),
+      itemQuery: () => Effect.succeed({ name: "Order" }),
     })
-    expect(
-      Object.values(definition?.components ?? {}).every(
-        (component) => typeof component._tag === "string",
-      ),
-    ).toBe(true)
+    const result = await Effect.runPromise(list.executeItemQuery("1"))
+    expectTypeOf(result).toEqualTypeOf<{ readonly name: string } | null>()
+    expect(result?.name).toBe("Order")
   })
 
   it("should pass selected metric controls to item query context", async () => {
@@ -211,7 +237,6 @@ describe("List path normalization", () => {
       itemQuery: (_id, ctx) =>
         Effect.succeed({
           id: ctx?.controls?.["environmentId"] ?? "missing",
-          usageCosts: undefined,
         }),
     })
 
@@ -224,7 +249,7 @@ describe("List path normalization", () => {
           controls: { environmentId: "prod" },
         }),
       ),
-    ).resolves.toEqual({ id: "prod", usageCosts: undefined })
+    ).resolves.toEqual({ id: "prod" })
   })
 
   it("should ignore controls from non-item-backed metric breakdowns", () => {
@@ -263,11 +288,11 @@ describe("List path normalization", () => {
       name: "Employees",
       roles: [mockRole],
       output: {
-        id: Schema.String.annotations({
+        id: Schema.String.annotate({
           title: "ID",
           [ListVisibleInList]: false,
         }),
-        name: Schema.String.annotations({ title: "Name" }),
+        name: Schema.String.annotate({ title: "Name" }),
       },
       query: () =>
         Effect.succeed({
@@ -289,35 +314,35 @@ describe("List path normalization", () => {
       name: "Employees",
       roles: [mockRole],
       output: {
-        name: Schema.String.annotations({ title: "Name" }),
-        score: Schema.Number.annotations({ title: "Score" }),
-        active: Schema.Boolean.annotations({ title: "Active" }),
-        hireDate: Schema.DateFromString.annotations({ title: "Hire date" }),
-        nickname: Schema.NullOr(Schema.String).annotations({
+        name: Schema.String.annotate({ title: "Name" }),
+        score: Schema.Number.annotate({ title: "Score" }),
+        active: Schema.Boolean.annotate({ title: "Active" }),
+        hireDate: Schema.DateFromString.annotate({ title: "Hire date" }),
+        nickname: Schema.NullOr(Schema.String).annotate({
           title: "Nickname",
         }),
-        alias: Schema.NullishOr(Schema.String).annotations({ title: "Alias" }),
-        hiddenCode: Schema.String.annotations({
+        alias: Schema.NullishOr(Schema.String).annotate({ title: "Alias" }),
+        hiddenCode: Schema.String.annotate({
           title: "Hidden code",
           [ListVisibleInList]: false,
         }),
-        hiddenSortKey: Schema.String.annotations({
+        hiddenSortKey: Schema.String.annotate({
           title: "Hidden sort key",
           [ListVisibleInList]: false,
           [ListSortable]: true,
         }),
-        neverSort: Schema.String.annotations({
+        neverSort: Schema.String.annotate({
           title: "Never sort",
           [ListSortable]: false,
         }),
-        nothing: Schema.Literal(null).annotations({ title: "Nothing" }),
+        nothing: Schema.Null.annotate({ title: "Nothing" }),
         manager: Schema.Struct({
           name: Schema.String,
-        }).annotations({ title: "Manager" }),
-        tags: Schema.Array(Schema.String).annotations({ title: "Tags" }),
-        jsonManager: Schema.parseJson(
+        }).annotate({ title: "Manager" }),
+        tags: Schema.Array(Schema.String).annotate({ title: "Tags" }),
+        jsonManager: Schema.fromJsonString(
           Schema.Struct({ name: Schema.String }),
-        ).annotations({ title: "JSON manager" }),
+        ).annotate({ title: "JSON manager" }),
       },
       query: () => Effect.succeed({ items: [], totalCount: 0 }),
     })
@@ -391,8 +416,8 @@ describe("List path normalization", () => {
       name: "Employees",
       roles: [mockRole],
       output: {
-        id: Schema.String.annotations({ title: "ID" }),
-        name: Schema.String.annotations({ title: "Name" }),
+        id: Schema.String.annotate({ title: "ID" }),
+        name: Schema.String.annotate({ title: "Name" }),
       },
       query: () =>
         Effect.succeed({
@@ -423,10 +448,10 @@ describe("List path normalization", () => {
       name: "Employees",
       roles: [mockRole],
       output: {
-        id: Schema.String.annotations({ title: "ID" }),
+        id: Schema.String.annotate({ title: "ID" }),
       },
       exportOutput: {
-        email: Schema.String.annotations({ title: "Email" }),
+        email: Schema.String.annotate({ title: "Email" }),
       },
       query: () =>
         Effect.succeed({
@@ -524,7 +549,7 @@ describe("List path normalization", () => {
             id: Schema.String,
           },
           exportOutput: {
-            status: Schema.Union(Schema.String, Schema.Number),
+            status: Schema.Union([Schema.String, Schema.Number]),
           },
           query: () => Effect.succeed({ items: [], totalCount: 0 }),
           exportQuery: () =>

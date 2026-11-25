@@ -80,7 +80,7 @@ const getFailureMessage = (exit: Exit.Exit<unknown, unknown>): string => {
   if (!Exit.isFailure(exit)) {
     return ""
   }
-  const failure = Cause.failureOption(exit.cause)
+  const failure = Cause.findErrorOption(exit.cause)
   if (Option.isNone(failure)) {
     return ""
   }
@@ -391,7 +391,11 @@ describe("TursoDB logical download materializer", () => {
       throw new Error("Expected materialization and cleanup to fail")
     }
     expect(
-      [...Cause.failures(exit.cause)].map((error) => error.message),
+      [
+        ...exit.cause.reasons
+          .filter(Cause.isFailReason)
+          .map((reason) => reason.error),
+      ].map((error) => error.message),
     ).toEqual([
       "TursoDB dump response was not valid logical SQL",
       "Failed to materialize TursoDB snapshot",
@@ -480,7 +484,7 @@ COMMIT;
     if (!Exit.isFailure(transportExit)) {
       throw new Error("Expected the transport failure to fail the Effect")
     }
-    const failure = Cause.failureOption(transportExit.cause)
+    const failure = Cause.findErrorOption(transportExit.cause)
     if (Option.isNone(failure)) {
       throw new Error("Expected a typed transport failure")
     }

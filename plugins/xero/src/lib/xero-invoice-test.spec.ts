@@ -1,4 +1,4 @@
-import { Effect, Logger, Schema } from "effect"
+import { Effect, Logger, Result, Schema } from "effect"
 import { CurrentStepJobContext } from "@pf/process"
 import { IssueAuthorisedSalesInvoiceInput } from "./identities"
 import {
@@ -21,8 +21,7 @@ const sampleInput = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
     postalCode: "6011",
     country: "New Zealand",
   },
-  productSku: "TBS-100",
-  agreedPrice: "100.00",
+  lines: [{ productSku: "TBS-100", quantity: 1, unitAmount: "100.00" }],
   currency: "NZD",
   reference: "ORD-1001",
   date: "2026-03-15",
@@ -51,12 +50,91 @@ const seedCatalogItem = (
   plugin.controller.seedItem({
     itemCode: "TBS-100",
     name: "TBS Product",
+    description: "TBS Product",
     taxType: "NONE",
     taxPercent: 0,
   })
 }
 
 describe("XeroInvoice test Layer", () => {
+  it("keeps website orders separate and recovers a lost create response beyond key expiry", async () => {
+    const plugin = makeXeroInvoiceTestPlugin()
+    seedCatalogItem(plugin)
+    const first = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
+      ...sampleInput,
+      reference: "001281",
+      legacyReference: "ord-first",
+      internalNote: "Process Focus Customer Order ID: ord-first",
+    })
+    const second = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
+      ...sampleInput,
+      reference: "001282",
+      legacyReference: "ord-second",
+      internalNote: "Process Focus Customer Order ID: ord-second",
+    })
+    plugin.controller.scriptTimeoutAfterCommit("invoice.create")
+    expect(
+      Result.isFailure(
+        await Effect.runPromise(issue(plugin.layer, first).pipe(Effect.result)),
+      ),
+    ).toBe(true)
+    const other = await Effect.runPromise(
+      issue(plugin.layer, second, "second-todo"),
+    )
+    plugin.controller.advanceTime(7 * 60 * 1000)
+    const recovered = await Effect.runPromise(issue(plugin.layer, first))
+    expect(recovered.invoiceId).not.toBe(other.invoiceId)
+    expect(
+      (await Effect.runPromise(issue(plugin.layer, second, "second-todo")))
+        .invoiceId,
+    ).toBe(other.invoiceId)
+    expect(
+      (await Effect.runPromise(issue(plugin.layer, first))).invoiceId,
+    ).toBe(recovered.invoiceId)
+    expect(
+      plugin.controller.listInvoices().map((invoice) => ({
+        reference: invoice.reference,
+        notes: invoice.internalNotes,
+      })),
+    ).toEqual([
+      { reference: "001281", notes: [first.internalNote!] },
+      { reference: "001282", notes: [second.internalNote!] },
+    ])
+  })
+
+  it("recovers an old unnumbered execution but refuses to create a ULID-reference replacement", async () => {
+    const plugin = makeXeroInvoiceTestPlugin()
+    seedCatalogItem(plugin)
+    const input = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
+      ...sampleInput,
+      reference: "ord-legacy",
+      legacyReference: "ord-legacy",
+      recoveryOnly: true,
+    })
+    expect(
+      Result.isFailure(
+        await Effect.runPromise(issue(plugin.layer, input).pipe(Effect.result)),
+      ),
+    ).toBe(true)
+    expect(plugin.controller.listInvoices()).toHaveLength(0)
+    const contact = plugin.controller.listContacts()[0]!
+    const existing = plugin.controller.seedInvoice({
+      contactId: contact.contactId,
+      reference: "ord-legacy",
+      date: input.date,
+      dueDate: input.dueDate,
+      itemCode: "TBS-100",
+      unitAmount: "100.00",
+      total: "100.00",
+      totalTax: "0.00",
+      subTotal: "100.00",
+    })
+    expect(
+      String((await Effect.runPromise(issue(plugin.layer, input))).invoiceId),
+    ).toBe(existing.invoiceId)
+    expect(plugin.controller.listInvoices()).toHaveLength(1)
+  })
+
   it("exposes one invoice operation", async () => {
     const plugin = makeXeroInvoiceTestPlugin()
     const keys = await Effect.runPromise(
@@ -126,6 +204,13 @@ describe("XeroInvoice test Layer", () => {
         postalCode: "6011",
         country: "New Zealand",
       },
+      {
+        addressType: "POBOX",
+        line1: "10 Customhouse Quay",
+        city: "Wellington",
+        postalCode: "6011",
+        country: "New Zealand",
+      },
     ])
     expect(invoices).toHaveLength(1)
     expect(invoices[0]?.contactId).toBe(contacts[0]?.contactId)
@@ -138,6 +223,7 @@ describe("XeroInvoice test Layer", () => {
     plugin.controller.seedItem({
       itemCode: "TBS-100",
       name: "TBS Product",
+      description: "TBS Product",
       taxType: "NONE",
       taxPercent: 0,
     })
@@ -155,7 +241,7 @@ describe("XeroInvoice test Layer", () => {
     expect(invoice?.lines).toEqual([
       {
         itemCode: "TBS-100",
-        description: "TBS-100",
+        description: "TBS Product",
         quantity: "1",
         unitAmount: "100.00",
       },
@@ -170,6 +256,7 @@ describe("XeroInvoice test Layer", () => {
     plugin.controller.seedItem({
       itemCode: "TBS-100",
       name: "TBS Product",
+      description: "TBS Product",
       taxType: "OUTPUT",
       taxPercent: 15,
     })
@@ -182,6 +269,121 @@ describe("XeroInvoice test Layer", () => {
     expect(invoice?.subTotal).toBe("86.96")
     expect(invoice?.lines[0]?.unitAmount).toBe("100.00")
   })
+
+  it("issues ordered lines including repeated SKUs, with unit prices, inclusive totals and description snapshots", async () => {
+    const plugin = makeXeroInvoiceTestPlugin()
+    plugin.controller.seedItem({
+      itemCode: "TBS-100",
+      name: "Catalogue name is not the sales description",
+      description: "Zero-tax product",
+      taxType: "NONE",
+      taxPercent: 0,
+    })
+    plugin.controller.seedItem({
+      itemCode: "TBS-200",
+      name: "GST product",
+      description: "GST sales description",
+      taxType: "OUTPUT",
+      taxPercent: 15,
+    })
+    const input = await Effect.runPromise(
+      decodeIssueAuthorisedSalesInvoiceInput({
+        customer: sampleInput.customer,
+        shippingAddress: sampleInput.shippingAddress,
+        currency: "NZD",
+        reference: sampleInput.reference,
+        date: sampleInput.date,
+        dueDate: sampleInput.dueDate,
+        lines: [
+          { productSku: "TBS-100", quantity: 3, unitAmount: "0.10" },
+          { productSku: "TBS-200", quantity: 2, unitAmount: "11.50" },
+          { productSku: "TBS-100", quantity: 1, unitAmount: "0.00" },
+        ],
+      }),
+    )
+    const result = await Effect.runPromise(issue(plugin.layer, input))
+    expect(result.lines).toEqual([
+      {
+        itemCode: "TBS-100",
+        quantity: 3,
+        unitAmount: "0.10",
+        description: "Zero-tax product",
+      },
+      {
+        itemCode: "TBS-200",
+        quantity: 2,
+        unitAmount: "11.50",
+        description: "GST sales description",
+      },
+      {
+        itemCode: "TBS-100",
+        quantity: 1,
+        unitAmount: "0.00",
+        description: "Zero-tax product",
+      },
+    ])
+    expect(plugin.controller.listInvoices()[0]).toMatchObject({
+      type: "ACCREC",
+      status: "AUTHORISED",
+      lineAmountTypes: "Inclusive",
+      total: "23.30",
+      totalTax: "3.00",
+      subTotal: "20.30",
+      lines: [
+        { itemCode: "TBS-100", quantity: "3", unitAmount: "0.10" },
+        { itemCode: "TBS-200", quantity: "2", unitAmount: "11.50" },
+        { itemCode: "TBS-100", quantity: "1", unitAmount: "0.00" },
+      ],
+    })
+  })
+
+  it.each([undefined, "", " \t\n", "unknown"])(
+    "rejects an unusable sales item on a later line (%j)",
+    async (description) => {
+      const plugin = makeXeroInvoiceTestPlugin()
+      plugin.controller.seedItem({
+        itemCode: "TBS-100",
+        name: "Valid product",
+        description: "Valid sales description",
+        taxType: "NONE",
+        taxPercent: 0,
+      })
+      if (description !== "unknown") {
+        plugin.controller.seedItem({
+          itemCode: "TBS-200",
+          name: "A name must not replace a sales description",
+          ...(description !== undefined && { description }),
+          taxType: "NONE",
+          taxPercent: 0,
+        })
+      }
+      const input = await Effect.runPromise(
+        decodeIssueAuthorisedSalesInvoiceInput({
+          customer: sampleInput.customer,
+          shippingAddress: sampleInput.shippingAddress,
+          currency: "NZD",
+          reference: sampleInput.reference,
+          date: sampleInput.date,
+          dueDate: sampleInput.dueDate,
+          lines: [
+            { productSku: "TBS-100", quantity: 1, unitAmount: "1.00" },
+            { productSku: "TBS-200", quantity: 1, unitAmount: "1.00" },
+          ],
+        }),
+      )
+      const result = await Effect.runPromise(
+        issue(plugin.layer, input).pipe(Effect.result),
+      )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure.code).toBe(
+          description === "unknown" ? "unknown_item_code" : "validation",
+        )
+        expect(result.failure.retryable).toBe(false)
+      }
+      expect(plugin.controller.listInvoices()).toHaveLength(0)
+    },
+  )
 
   it("updates a unique email match with current name, email, and STREET address", async () => {
     const plugin = makeXeroInvoiceTestPlugin()
@@ -289,6 +491,13 @@ describe("XeroInvoice test Layer", () => {
         postalCode: "6011",
         country: "New Zealand",
       },
+      {
+        addressType: "POBOX",
+        line1: "10 Customhouse Quay",
+        city: "Wellington",
+        postalCode: "6011",
+        country: "New Zealand",
+      },
     ])
     expect(invoices[0]?.contactId).toBe(created[0]?.contactId)
   })
@@ -321,7 +530,101 @@ describe("XeroInvoice test Layer", () => {
     expect(
       plugin.controller.findContactByName("Ada Lovelace ORD-1001"),
     ).toHaveLength(1)
+    expect(
+      plugin.controller.findContactByName("Ada Lovelace ORD-1001")[0]
+        ?.addresses,
+    ).toContainEqual({
+      addressType: "POBOX",
+      line1: "10 Customhouse Quay",
+      city: "Wellington",
+      postalCode: "6011",
+      country: "New Zealand",
+    })
   })
+
+  it.each([
+    {},
+    {
+      attentionTo: " \t",
+      line1: " ",
+      line2: "\n",
+      line3: "",
+      line4: " ",
+      city: " ",
+      region: " ",
+      postalCode: " ",
+      country: " ",
+    },
+    ...[
+      "attentionTo",
+      "line1",
+      "line2",
+      "line3",
+      "line4",
+      "city",
+      "region",
+      "postalCode",
+      "country",
+    ].map((field) => ({ [field]: " Existing billing " })),
+  ])(
+    "defaults blank billing, preserves partial billing, and recovers a lost update: %j",
+    async (content) => {
+      const plugin = makeXeroInvoiceTestPlugin()
+      seedCatalogItem(plugin)
+      const billing = { addressType: "POBOX" as const, ...content }
+      const existing = plugin.controller.seedContact({
+        name: "Former Name",
+        email: " ADA@EXAMPLE.COM ",
+        addresses: [billing],
+      })
+      const input = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
+        ...sampleInput,
+        shippingAddress: {
+          ...sampleInput.shippingAddress,
+          line2: "Level 2",
+          region: "Wellington",
+        },
+      })
+      plugin.controller.scriptTimeoutAfterCommit("contact.update")
+      expect(
+        Result.isFailure(
+          await Effect.runPromise(
+            issue(plugin.layer, input).pipe(Effect.result),
+          ),
+        ),
+      ).toBe(true)
+      const issued = await Effect.runPromise(issue(plugin.layer, input))
+      expect(await Effect.runPromise(issue(plugin.layer, input))).toEqual(
+        issued,
+      )
+      plugin.controller.advanceTime(7 * 60 * 1000)
+      expect(await Effect.runPromise(issue(plugin.layer, input))).toEqual(
+        issued,
+      )
+      expect(plugin.controller.listContacts()).toHaveLength(1)
+      const contact = plugin.controller.listContacts()[0]!
+      expect(contact.contactId).toBe(existing.contactId)
+      expect(
+        contact.addresses.find((address) => address.addressType === "STREET"),
+      ).toEqual({
+        addressType: "STREET",
+        line1: "10 Customhouse Quay",
+        line2: "Level 2",
+        city: "Wellington",
+        region: "Wellington",
+        postalCode: "6011",
+        country: "New Zealand",
+      })
+      expect(
+        contact.addresses.find((address) => address.addressType === "POBOX"),
+      ).toEqual(
+        Object.values(content).some((value) => value.trim())
+          ? billing
+          : { addressType: "POBOX", ...input.shippingAddress },
+      )
+      expect(plugin.controller.listInvoices()).toHaveLength(1)
+    },
+  )
 
   it("logs that one normalized email may match multiple Xero contacts", async () => {
     const plugin = makeXeroInvoiceTestPlugin()
@@ -340,9 +643,7 @@ describe("XeroInvoice test Layer", () => {
     })
 
     await Effect.runPromise(
-      issue(plugin.layer).pipe(
-        Effect.provide(Logger.replace(Logger.defaultLogger, capturingLogger)),
-      ),
+      issue(plugin.layer).pipe(Effect.provide(Logger.layer([capturingLogger]))),
     )
 
     expect(logs.join("\n")).toContain(
@@ -370,6 +671,7 @@ describe("XeroInvoice test Layer", () => {
     plugin.controller.seedItem({
       itemCode: "TBS-100",
       name: "TBS Product",
+      description: "TBS Product",
       taxType: "NONE",
       taxPercent: 0,
     })

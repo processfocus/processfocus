@@ -1,5 +1,3 @@
-/** WebAuthn/passkey provider with application-owned credential persistence. */
-import { HttpRouter, HttpServerRequest } from "@effect/platform"
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -11,8 +9,11 @@ import type {
   AuthenticatorTransportFuture,
   RegistrationResponseJSON,
 } from "@simplewebauthn/types"
-import { Data, Effect, Either, Schema } from "effect"
+import { Data, Effect, Result, Schema } from "effect"
+/** WebAuthn/passkey provider with application-owned credential persistence. */
+import { HttpRouter, HttpServerRequest } from "effect/http"
 import { json } from "../response.js"
+import { makeRouter } from "../router"
 import { Storage } from "../storage/storage.js"
 import {
   type Provider,
@@ -35,7 +36,7 @@ const RegistrationResponseSchema = Schema.Struct({
   id: Schema.String,
   rawId: Schema.String,
   type: Schema.Literal("public-key"),
-  clientExtensionResults: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  clientExtensionResults: Schema.Record(Schema.String, Schema.Unknown),
   response: Schema.Struct({
     clientDataJSON: Schema.String,
     attestationObject: Schema.String,
@@ -65,7 +66,7 @@ const AuthenticationResponseSchema = Schema.Struct({
   id: Schema.String,
   rawId: Schema.String,
   type: Schema.Literal("public-key"),
-  clientExtensionResults: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  clientExtensionResults: Schema.Record(Schema.String, Schema.Unknown),
   response: Schema.Struct({
     clientDataJSON: Schema.String,
     authenticatorData: Schema.String,
@@ -137,6 +138,7 @@ export interface RecoveryRegistrationSessionResolved {
 }
 
 export interface PasskeyConfig {
+  readonly accountLabel?: string | undefined
   readonly rpName: string
   readonly rpID: string
   readonly origin: string | string[]
@@ -174,6 +176,7 @@ export interface PasskeyConfig {
     | {
         allowed: true
         context: InvitationRegistrationSessionResolved | RecoveryRegistrationSessionResolved
+        readonly excludeCredentials?: readonly PasskeyExcludeCredential[]
       }
     | { allowed: false; error: string }
   >
@@ -234,6 +237,8 @@ type OpenPasskeyRegistrationProperties = {
     readonly id: string
     readonly publicKey: string
     readonly counter: number
+    readonly aaguid?: string
+    readonly deviceType?: "singleDevice" | "multiDevice"
     readonly transports?: readonly AuthenticatorTransportFuture[]
   }
 }
@@ -247,12 +252,7 @@ type InvitationPasskeyRegistrationProperties = {
   readonly linkGeneration: number
   readonly sessionTokenHash: string
   readonly sessionBearer: string
-  readonly credential: {
-    readonly id: string
-    readonly publicKey: string
-    readonly counter: number
-    readonly transports?: readonly AuthenticatorTransportFuture[]
-  }
+  readonly credential: OpenPasskeyRegistrationProperties["credential"]
 }
 
 export type PasskeyRegistrationProperties =
@@ -311,18 +311,31 @@ const excludeCredentialDescriptors = (
 }
 
 const issueRegistrationOptions = (
-  config: Pick<PasskeyConfig, "rpName" | "rpID">,
+  config: Pick<PasskeyConfig, "rpName" | "rpID" | "accountLabel"> & {
+    readonly origin?: string | readonly string[] | undefined
+  },
   email: string,
   userId: Uint8Array<ArrayBuffer>,
   excludeCredentials?: readonly PasskeyExcludeCredential[],
 ) => {
   const excluded = excludeCredentialDescriptors(excludeCredentials)
+  // These are authenticator-facing labels, not the account's email identity.
+  // Only localhost needs a suffix: independent local projects share its RP ID.
+  const origin =
+    typeof config.origin === "string" ? config.origin : config.origin?.[0]
+  const accountParts = [config.accountLabel ?? config.rpName, email]
+  if (config.rpID === "localhost") {
+    // URL.port drops explicit default ports, so read the configured authority.
+    const port = origin?.match(/^https?:\/\/[^/?#]*:(\d+)(?:[/?#]|$)/i)?.[1]
+    accountParts.push(port ? `${config.rpID}:${port}` : config.rpID)
+  }
+  const accountName = accountParts.join(" · ")
   return Effect.promise(() =>
     generateRegistrationOptions({
       rpName: config.rpName,
       rpID: config.rpID,
-      userName: email,
-      userDisplayName: email,
+      userName: accountName,
+      userDisplayName: accountName,
       userID: userId,
       attestationType: "none",
       authenticatorSelection: {
@@ -344,6 +357,8 @@ export const passkeyUserHandleBytes = (userHandle: string) =>
  * account handle, excluding already-registered credentials when provided.
  */
 export const createPasskeyRegistrationOptions = (input: {
+  readonly accountLabel?: string | undefined
+  readonly origin?: string | readonly string[] | undefined
   readonly rpName: string
   readonly rpID: string
   readonly email: string
@@ -351,7 +366,12 @@ export const createPasskeyRegistrationOptions = (input: {
   readonly excludeCredentials?: readonly PasskeyExcludeCredential[]
 }) =>
   issueRegistrationOptions(
-    { rpName: input.rpName, rpID: input.rpID },
+    {
+      rpName: input.rpName,
+      rpID: input.rpID,
+      accountLabel: input.accountLabel,
+      origin: input.origin,
+    },
     input.email,
     base64ToUint8Array(input.userHandle),
     input.excludeCredentials,
@@ -401,6 +421,8 @@ export const verifyPasskeyRegistrationAttestation = (input: {
             verification.registrationInfo.credential.publicKey,
           ),
           counter: verification.registrationInfo.credential.counter,
+          aaguid: verification.registrationInfo.aaguid,
+          deviceType: verification.registrationInfo.credentialDeviceType,
           ...(transports && { transports }),
         },
       }
@@ -430,12 +452,12 @@ export function PasskeyProvider(
       const exchangeRegistrationSessionHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const body = yield* request.json.pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         )
-        const decoded = Schema.decodeUnknownEither(ExchangeRegistrationLinkSchema)(
+        const decoded = Schema.decodeUnknownResult(ExchangeRegistrationLinkSchema)(
           body,
         )
-        if (Either.isLeft(decoded) || !decoded.right.token.trim()) {
+        if (Result.isFailure(decoded) || !decoded.success.token.trim()) {
           return yield* json(
             {
               error:
@@ -457,7 +479,7 @@ export function PasskeyProvider(
 
         const result = yield* tryProviderCallback(
           "Passkey provider exchangeRegistrationLink failed",
-          () => config.exchangeRegistrationLink!(decoded.right.token.trim()),
+          () => config.exchangeRegistrationLink!(decoded.success.token.trim()),
         )
         if (!result.ok) {
           return yield* json({ error: result.error }, { status: 400 })
@@ -473,7 +495,7 @@ export function PasskeyProvider(
       const registerOptionsHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const body = (yield* request.json.pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         )) as Record<string, unknown> | null
 
         if (!body) {
@@ -525,6 +547,7 @@ export function PasskeyProvider(
             config,
             context.email,
             userId,
+            resolved.excludeCredentials,
           )
 
           const challengeId = crypto.randomUUID()
@@ -587,17 +610,17 @@ export function PasskeyProvider(
       const registerVerifyHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const body = yield* request.json.pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         )
-        const decoded = Schema.decodeUnknownEither(RegisterVerifyRequestSchema)(body)
-        if (Either.isLeft(decoded)) {
+        const decoded = Schema.decodeUnknownResult(RegisterVerifyRequestSchema)(body)
+        if (Result.isFailure(decoded)) {
           return yield* json({ error: "Invalid request body" }, { status: 400 })
         }
 
         const challenge = yield* Storage.take<PasskeyChallenge>([
           "passkey",
           "challenge",
-          decoded.right.challengeId,
+          decoded.success.challengeId,
         ])
         if (challenge?.type !== "register") {
           return yield* json({ error: "Invalid or expired challenge" }, { status: 400 })
@@ -622,8 +645,8 @@ export function PasskeyProvider(
           challenge.registrationKind === "recovery"
         ) {
           const sessionBearer =
-            typeof decoded.right.sessionBearer === "string"
-              ? decoded.right.sessionBearer.trim()
+            typeof decoded.success.sessionBearer === "string"
+              ? decoded.success.sessionBearer.trim()
               : ""
           if (!sessionBearer || !config.resolveInvitationRegistrationSession) {
             return yield* json(
@@ -667,7 +690,7 @@ export function PasskeyProvider(
           return yield* json({ error: "Invalid or expired challenge" }, { status: 400 })
         }
 
-        const response = toRegistrationResponseJSON(decoded.right.response)
+        const response = toRegistrationResponseJSON(decoded.success.response)
         const verification = yield* Effect.tryPromise({
           try: () =>
             verifyRegistrationResponse({
@@ -702,6 +725,8 @@ export function PasskeyProvider(
             verification.registrationInfo.credential.publicKey
           ),
           counter: verification.registrationInfo.credential.counter,
+          aaguid: verification.registrationInfo.aaguid,
+          deviceType: verification.registrationInfo.credentialDeviceType,
           ...(transports && { transports }),
         }
 
@@ -762,23 +787,23 @@ export function PasskeyProvider(
       const authVerifyHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const body = yield* request.json.pipe(
-          Effect.catchAll(() => Effect.succeed(null)),
+          Effect.catch(() => Effect.succeed(null)),
         )
-        const decoded = Schema.decodeUnknownEither(AuthVerifyRequestSchema)(body)
-        if (Either.isLeft(decoded)) {
+        const decoded = Schema.decodeUnknownResult(AuthVerifyRequestSchema)(body)
+        if (Result.isFailure(decoded)) {
           return yield* json({ error: "Invalid request body" }, { status: 400 })
         }
 
         const challenge = yield* Storage.take<PasskeyChallenge>([
           "passkey",
           "challenge",
-          decoded.right.challengeId,
+          decoded.success.challengeId,
         ])
         if (challenge?.type !== "authenticate") {
           return yield* json({ error: "Invalid or expired challenge" }, { status: 400 })
         }
 
-        const response = toAuthenticationResponseJSON(decoded.right.response)
+        const response = toAuthenticationResponseJSON(decoded.success.response)
         const credential = yield* tryProviderCallback(
           "Passkey provider findCredential failed",
           () => config.findCredential(response.id),
@@ -835,17 +860,17 @@ export function PasskeyProvider(
         })
       })
 
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", authorizeHandler),
-        HttpRouter.post("/register-options", registerOptionsHandler),
-        HttpRouter.post("/register-verify", registerVerifyHandler),
-        HttpRouter.post("/auth-options", authOptionsHandler),
-        HttpRouter.post("/auth-verify", authVerifyHandler),
-        HttpRouter.post(
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", authorizeHandler),
+        HttpRouter.route("POST", "/register-options", registerOptionsHandler),
+        HttpRouter.route("POST", "/register-verify", registerVerifyHandler),
+        HttpRouter.route("POST", "/auth-options", authOptionsHandler),
+        HttpRouter.route("POST", "/auth-verify", authVerifyHandler),
+        HttpRouter.route("POST",
           "/registration-session-exchange",
           exchangeRegistrationSessionHandler,
         ),
-      )
+      ])
     },
   }
 }

@@ -1,0 +1,26 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index f3298ad825bdb47228fdd4b6e81abfd18ac496bb..5040d64e3c2f8a87a3ebd9d54de66cb35e9dbfc3 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -858,7 +858,7 @@ var Session = class _Session {
+       columns,
+       columnTypes,
+       rows,
+-      rowsAffected: columns.length > 0 ? 0 : stepResult.affected_row_count ?? 0,
++      rowsAffected: stepResult.affected_row_count ?? 0,
+       rowsRead: stepResult.rows_read,
+       rowsWritten: stepResult.rows_written,
+       queryDurationMs: stepResult.query_duration_ms
+diff --git a/dist/index.js b/dist/index.js
+index 94efd1987358587ad7b0eeefc1907c25ef5a618d..cb878e7070038293ce41b9fd1c7c35c7c41dbf6e 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -856,7 +856,7 @@ var Session = class _Session {
+       columns,
+       columnTypes,
+       rows,
+-      rowsAffected: columns.length > 0 ? 0 : stepResult.affected_row_count ?? 0,
++      rowsAffected: stepResult.affected_row_count ?? 0,
+       rowsRead: stepResult.rows_read,
+       rowsWritten: stepResult.rows_written,
+       queryDurationMs: stepResult.query_duration_ms

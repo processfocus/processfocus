@@ -1,0 +1,1 @@
+ALTER TABLE `pf_to_do` ADD `completion_fingerprint` text(64);

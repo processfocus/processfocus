@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import type { UserDetails } from "./user-details"
 
@@ -9,9 +9,7 @@ import type { UserDetails } from "./user-details"
  * This service enables NodeStep execute functions to interact with the database.
  * Operations run in the context of the system user (no human user involved).
  */
-export class SystemUserOperations extends Context.Tag(
-  "@pf/graphql-db-operations/SystemUserOperations",
-)<
+export class SystemUserOperations extends Context.Service<
   SystemUserOperations,
   {
     /**
@@ -23,4 +21,4 @@ export class SystemUserOperations extends Context.Tag(
       email: string
     }) => Effect.Effect<void, SqlError, RequestTime | UserDetails>
   }
->() {}
+>()("@pf/graphql-db-operations/SystemUserOperations") {}

@@ -1,8 +1,8 @@
 import { existsSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SqlError } from "@effect/sql/SqlError"
 import { ConfigProvider, Effect, Layer } from "effect"
+import { SqlError } from "effect/sql/SqlError"
 import { afterEach, describe, expect, it } from "bun:test"
 
 const dbPaths: string[] = []
@@ -23,14 +23,16 @@ describe("makePfcliSqlClientLayer", () => {
       `../src/utils/local-database-layer.ts?scenario=${Date.now()}-${Math.random()}`
     )
 
-    const ConfigLayer = Layer.setConfigProvider(
-      ConfigProvider.fromMap(
-        new Map([
-          [
-            "SQLITE_DATABASE_PATH",
-            "libsql://example-db.process-focus.turso.io",
-          ],
-        ]),
+    const ConfigLayer = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(
+          new Map([
+            [
+              "SQLITE_DATABASE_PATH",
+              "libsql://example-db.process-focus.turso.io",
+            ],
+          ]),
+        ),
       ),
     )
 
@@ -55,8 +57,10 @@ describe("makePfcliSqlClientLayer", () => {
     const { makePfcliSqlClientLayer } = await import(
       `../src/utils/local-database-layer.ts?scenario=${Date.now()}-${Math.random()}`
     )
-    const ConfigLayer = Layer.setConfigProvider(
-      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    const ConfigLayer = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+      ),
     )
 
     await Effect.runPromise(

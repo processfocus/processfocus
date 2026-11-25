@@ -1,4 +1,4 @@
-import { Deferred, Effect, Either, Fiber, Redacted, Ref } from "effect"
+import { Deferred, Effect, Fiber, Redacted, Ref, Result } from "effect"
 import { xeroAuthError } from "./errors"
 import { type XeroAccess, makeXeroAccessCache } from "./xero-token"
 import { describe, expect, it } from "bun:test"
@@ -26,7 +26,7 @@ describe("Xero access token cache", () => {
           }),
         )
 
-        const owner = yield* Effect.fork(cache.get())
+        const owner = yield* Effect.forkChild(cache.get())
         yield* Deferred.await(firstStarted)
         yield* Fiber.interrupt(owner)
         return yield* cache.get()
@@ -52,11 +52,11 @@ describe("Xero access token cache", () => {
           }),
         )
 
-        const owner = yield* Effect.fork(cache.get())
+        const owner = yield* Effect.forkChild(cache.get())
         yield* Deferred.await(firstStarted)
-        const waiterA = yield* Effect.fork(cache.get())
-        const waiterB = yield* Effect.fork(cache.get())
-        yield* Effect.yieldNow()
+        const waiterA = yield* Effect.forkChild(cache.get())
+        const waiterB = yield* Effect.forkChild(cache.get())
+        yield* Effect.yieldNow
         yield* Fiber.interrupt(owner)
         return yield* Effect.all([Fiber.join(waiterA), Fiber.join(waiterB)], {
           concurrency: 2,
@@ -84,13 +84,13 @@ describe("Xero access token cache", () => {
           }),
         )
 
-        const first = yield* cache.get().pipe(Effect.either)
-        expect(Either.isLeft(first)).toBe(true)
-        if (Either.isRight(first)) {
+        const first = yield* cache.get().pipe(Effect.result)
+        expect(Result.isFailure(first)).toBe(true)
+        if (Result.isSuccess(first)) {
           throw new Error("expected auth failure")
         }
-        expect(first.left.code).toBe("auth")
-        expect(first.left.retryable).toBe(false)
+        expect(first.failure.code).toBe("auth")
+        expect(first.failure.retryable).toBe(false)
 
         return yield* cache.get()
       }),

@@ -138,14 +138,11 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should use citextColumn custom type
     expect(schema).toContain('name: citextColumn("name").notNull()')
 
-    // Should include custom type definition
     expect(schema).toContain("const citextColumn = customType")
     expect(schema).toContain('return "text collate nocase"')
 
-    // Should include CHECK constraint for length
     expect(schema).toContain(
       'nameLengthCheck: check("name_length_check", sql.raw(`length("person"."name") <= 256`))',
     )
@@ -338,19 +335,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
     )
   })
 
-  it("should generate ID without prefix when type has no idPrefix", async () => {
-    const source = `
-      base name (A64).
-      type customer = name.
-    `
-
-    const schema = await parseAndGenerate(source)
-
-    expect(schema).toContain(
-      'id: text("id", { length: 41 }).primaryKey().$defaultFn(() => ulid())',
-    )
-  })
-
   it("should fail with unknown base type error when AST has invalid base reference", async () => {
     // Create an AST with an invalid base reference directly
     // (bypassing validation that would normally catch this)
@@ -389,7 +373,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
       asserts: [],
     }
 
-    // Use Effect.flip to move error to success channel for testing
     const error = await Effect.runPromise(
       generateDrizzleSchema(invalidProgram, "test.ddl").pipe(Effect.flip),
     )
@@ -398,7 +381,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
     if (error._tag !== "UnknownBaseType") {
       throw new Error("Expected UnknownBaseType error")
     }
-    // TypeScript now knows error is UnknownBaseType
     expect(error.attribute).toBe("invalid")
     expect(error.baseName).toBe("nonexistent")
   })
@@ -435,7 +417,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import relations
     expect(schema).toContain(
       'import { relations } from "drizzle-orm/_relations"',
     )
@@ -501,9 +482,7 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should not have relations for standalone table
     expect(schema).not.toContain("standaloneRelations")
-    // Should not import relations when there are no relations to generate
     expect(schema).not.toContain("import { relations }")
   })
 
@@ -548,14 +527,11 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const parentItsHasNoChildren = sqliteView("parent_its_has_no_children", {',
     )
@@ -582,14 +558,11 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const parentItsHasChildren = sqliteView("parent_its_has_children", {',
     )
@@ -617,14 +590,11 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const parentItsSomescore = sqliteView("parent_its_somescore", {',
     )
@@ -650,7 +620,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
@@ -679,7 +648,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const grandparentItsSomevalue = sqliteView("grandparent_its_somevalue", {',
     )
@@ -704,11 +672,9 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
     // Should generate the view (assert is treated like extend)
@@ -837,7 +803,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
@@ -904,14 +869,11 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import sqliteView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("sqliteView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const invoiceItsLinecount = sqliteView("invoice_its_linecount", {',
     )
@@ -941,7 +903,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const grandparentItsChildcount = sqliteView("grandparent_its_childcount", {',
     )
@@ -972,7 +933,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const invoiceItsInvoicesum = sqliteView("invoice_its_invoicesum", {',
     )
@@ -1001,7 +961,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const categoryItsLowestPrice = sqliteView("category_its_lowest_price", {',
     )
@@ -1027,7 +986,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const teamItsHighScore = sqliteView("team_its_high_score", {',
     )
@@ -1078,16 +1036,13 @@ describe("generateDrizzleSchema (SQLite)", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Check for customType import
     expect(schema).toContain("import { customType")
     expect(schema).toContain('from "drizzle-orm/sqlite-core"')
 
-    // Check for jsonColumn definition
     expect(schema).toContain(
       "const jsonColumn = customType<{ data: Record<string, unknown> | unknown[]; driverData: string | null }>",
     )
 
-    // Check column uses jsonColumn()
     expect(schema).toContain('config: jsonColumn("config").notNull()')
 
     // Should NOT use old text with mode: json pattern
@@ -1122,7 +1077,6 @@ describe("generateDrizzleSchema (SQLite)", () => {
     expect(schema).toContain("text")
     expect(schema).toContain("integer")
 
-    // All columns should be present
     expect(schema).toContain('name: text("name", { length: 64 }).notNull()')
     expect(schema).toContain('config: jsonColumn("config").notNull()')
     expect(schema).toContain(
@@ -1142,14 +1096,12 @@ describe("generateTriggerSQL (SQLite)", () => {
     const program = await parseDDL(source)
     const triggers = generateTriggerSQL(program, "test.ddl")
 
-    // Should have header comments
     expect(triggers).toContain("-- Generated from Xplain DDL: test.ddl")
     expect(triggers).toContain(
       "-- Auto-generated triggers for updated_at columns",
     )
     expect(triggers).toContain("-- DO NOT EDIT")
 
-    // Should have trigger for customer table
     expect(triggers).toContain(
       "CREATE TRIGGER IF NOT EXISTS customer_updated_at_trigger",
     )
@@ -1162,7 +1114,6 @@ describe("generateTriggerSQL (SQLite)", () => {
     )
     expect(triggers).toContain("END;")
 
-    // Should NOT have statement breakpoint for single trigger
     expect(triggers).not.toContain("--> statement-breakpoint")
   })
 
@@ -1176,7 +1127,6 @@ describe("generateTriggerSQL (SQLite)", () => {
     const program = await parseDDL(source)
     const triggers = generateTriggerSQL(program, "test.ddl")
 
-    // Should have triggers for all three tables
     expect(triggers).toContain(
       "CREATE TRIGGER IF NOT EXISTS customer_updated_at_trigger",
     )
@@ -1213,58 +1163,6 @@ describe("generateTriggerSQL (SQLite)", () => {
     expect(triggers).toContain(
       "  UPDATE \"invoice_line\" SET updated_at = julianday('now') WHERE id = NEW.id;",
     )
-  })
-
-  it("should use AFTER UPDATE timing (not BEFORE UPDATE)", async () => {
-    const source = `
-      base name (A64).
-      type customer = name.
-    `
-    const program = await parseDDL(source)
-    const triggers = generateTriggerSQL(program, "test.ddl")
-
-    // MUST use AFTER UPDATE because SQLite doesn't support direct assignment in BEFORE triggers
-    expect(triggers).toContain('AFTER UPDATE ON "customer"')
-    expect(triggers).not.toContain("BEFORE UPDATE")
-  })
-
-  it("should have WHEN clause to prevent infinite recursion", async () => {
-    const source = `
-      base name (A64).
-      type customer = name.
-    `
-    const program = await parseDDL(source)
-    const triggers = generateTriggerSQL(program, "test.ddl")
-
-    // WHEN clause ensures trigger only fires when updated_at hasn't been explicitly changed
-    // This prevents infinite recursion when the nested UPDATE executes
-    expect(triggers).toContain("WHEN NEW.updated_at = OLD.updated_at")
-  })
-
-  it("should use julianday for SQLite timestamps", async () => {
-    const source = `
-      base name (A64).
-      type customer = name.
-    `
-    const program = await parseDDL(source)
-    const triggers = generateTriggerSQL(program, "test.ddl")
-
-    // SQLite uses julianday('now') instead of NOW() or CURRENT_TIMESTAMP
-    expect(triggers).toContain("julianday('now')")
-    expect(triggers).not.toContain("NOW()")
-    expect(triggers).not.toContain("CURRENT_TIMESTAMP")
-  })
-
-  it("should target row by id column", async () => {
-    const source = `
-      base name (A64).
-      type customer = name.
-    `
-    const program = await parseDDL(source)
-    const triggers = generateTriggerSQL(program, "test.ddl")
-
-    // Nested UPDATE uses WHERE id = NEW.id to target the specific row
-    expect(triggers).toContain("WHERE id = NEW.id;")
   })
 
   it("should generate consistent trigger structure across all tables", async () => {

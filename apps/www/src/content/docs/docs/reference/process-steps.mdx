@@ -1,0 +1,83 @@
+---
+title: Process steps
+description: Choose a form or system step for work in a process.
+---
+
+Use a form when a person needs to provide information, and a system step
+when the process can do the work automatically.
+
+Employees can fill in forms, as can anonymous visitors and external
+recipients who receive a unique link.
+
+- [Forms](/docs/reference/process-steps/forms/)
+- [Embedded forms](/docs/reference/process-steps/embedded-forms/)
+- [Public page forms](/docs/reference/process-steps/public-page-forms/)
+- [System steps](/docs/reference/process-steps/system-steps/)
+- [Step context](/docs/reference/process-steps/step-context/)
+
+See [Adding steps](/docs/reference/processes/#adding-steps) for how to
+connect steps in a process.
+
+## Example: Web order form
+
+Define the fields for a web order form with `Schema.Struct`:
+
+```typescript
+import { NumberField, TextField } from "@pf/form-schema"
+import { Schema } from "effect"
+
+const orderForm = Schema.Struct({
+  sku: TextField({ label: "SKU" }),
+  quantity: NumberField({ label: "Quantity" }),
+})
+```
+
+See [Forms](/docs/reference/process-steps/forms/#form-example) for the complete
+process example.
+
+## Example: system step
+
+Use `NodeStep` for work that runs automatically. Continue the example above
+by defining a web order process and using `orderForm` as the schema for its
+first step.
+The last line connects the form step to the system step.
+
+```typescript
+import { Form, NodeStep, Organisation, Process, Role } from "@pf/process"
+import { Effect } from "effect"
+
+export const org = new Organisation({ name: "Demo Store" })
+const sales = new Role(org, "Sales")
+
+const webOrder = new Process(org, "web-order", {
+  name: "Web order",
+  purpose: "Capture an order and normalise its SKU",
+})
+
+const captureOrder = new Form(webOrder, "Capture order", {
+  role: sales,
+  form: orderForm,
+})
+
+const normaliseSku = new NodeStep(webOrder, "Normalise SKU", {
+  input: ({ sku }: typeof orderForm.Type) => Effect.succeed(sku),
+  output: { normalisedSku: Schema.String },
+  execute: (sku) => Effect.succeed({ normalisedSku: sku.trim().toUpperCase() }),
+})
+
+webOrder
+  .start(captureOrder)
+  .next(normaliseSku)
+  .end()
+```
+
+`input` tells Process Focus what to pass to `execute`. Here it takes
+just `sku` from the process state, so `execute` receives a string as
+first parameter, rather than the whole state. The system step adds
+`normalisedSku` back to the state.
+
+The `input` callback uses the form’s output type because the system step is
+defined under `webOrder`, not under a typed flow path. The type annotation
+does not check runtime data. If `sku` is missing, `execute` receives
+`undefined` and `sku.trim()` fails. If a missing SKU is expected on a path,
+handle that case explicitly rather than passing it to `execute`.

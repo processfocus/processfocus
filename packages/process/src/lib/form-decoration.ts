@@ -1,4 +1,4 @@
-import { Data, Effect, Schema, SchemaAST } from "effect"
+import { Data, Effect, Schema, type SchemaAST } from "effect"
 import {
   CurrentProviderUser,
   FormAutoComplete,
@@ -10,7 +10,6 @@ import {
   FormProviderUserInput,
   STRUCTURAL_ONLY_SYMBOL,
   fieldAnnotation,
-  mapFormPropertySignature,
 } from "@pf/form-schema"
 
 export class FormDecorationError extends Data.TaggedError(
@@ -49,6 +48,7 @@ export const decorateAst = (
   original: SchemaAST.AST,
   value: unknown,
   path: string,
+  inputAst: SchemaAST.AST = original,
 ): SchemaAST.AST => {
   const operations = record(value, path)
   const annotations: Record<symbol, unknown> = {}
@@ -75,11 +75,11 @@ export const decorateAst = (
         break
       }
       case "default": {
-        if (original.annotations[STRUCTURAL_ONLY_SYMBOL])
+        if (fieldAnnotation(original, STRUCTURAL_ONLY_SYMBOL))
           fail(path, "structural fields cannot have defaults")
         // Validate encoded defaults, without executing transformations, services, or refinements here.
         // Full business validation still runs through the submission Effect schema.
-        const input = Schema.encodedSchema(Schema.make(original))
+        const input = Schema.toEncoded(Schema.make(inputAst))
         const checked = (candidate: unknown): unknown => {
           if (
             !(
@@ -123,8 +123,8 @@ export const decorateAst = (
                 Effect.flatMap(
                   (items): Effect.Effect<unknown, unknown> =>
                     lookup
-                      ? Schema.decodeUnknown(lookupResult)(items)
-                      : Schema.decodeUnknown(calendarResult)(items),
+                      ? Schema.decodeUnknownEffect(lookupResult)(items)
+                      : Schema.decodeUnknownEffect(calendarResult)(items),
                 ),
               )
             }),
@@ -135,7 +135,11 @@ export const decorateAst = (
         fail(path, `unsupported operation ${key}`)
     }
   }
-  return SchemaAST.annotations(original, annotations)
+  return Schema.make<Schema.Top>(
+    Object.assign(Object.create(Object.getPrototypeOf(original)), original, {
+      annotations: { ...original.annotations, ...annotations },
+    }),
+  ).annotate(annotations).ast
 }
 
 /** Preserve property transformations and exact field types during safe resolution. */
@@ -143,33 +147,35 @@ export const mapFormFields = <Fields extends Schema.Struct.Fields>(
   fields: Fields,
   map: (ast: SchemaAST.AST, name: string) => SchemaAST.AST,
   mapAnnotations: (
-    annotations: SchemaAST.Annotations,
+    annotations: Record<PropertyKey, unknown>,
     ast: SchemaAST.AST,
     name: string,
     side: "input" | "output",
-  ) => SchemaAST.Annotations = (annotations) => annotations,
+  ) => Record<PropertyKey, unknown> = (annotations) => annotations,
   // Resolve descriptors retained by Effect on a property's decoded side too.
   mapOutput: (ast: SchemaAST.AST, name: string) => SchemaAST.AST = (ast) => ast,
 ): Fields => {
   const resolved = Object.fromEntries(
     Object.entries(fields).map(([name, original]) => {
-      if (Schema.isPropertySignature(original)) {
-        return [
-          name,
-          mapFormPropertySignature(
-            original,
-            (ast, side) =>
-              side === "input" ? map(ast, name) : mapOutput(ast, name),
-            (annotations, input, side) =>
-              mapAnnotations(annotations, input, name, side),
-          ),
-        ]
-      }
-      return [name, schemaFromAst(map(original.ast, name), original)]
+      const mapped = map(original.ast, name)
+      const annotations = mapAnnotations(
+        { ...mapped.annotations },
+        mapped,
+        name,
+        "input",
+      )
+      const output = mapped.encoding ? mapOutput(mapped, name) : mapped
+      return [
+        name,
+        schemaFromAst(
+          Schema.make<Schema.Top>(output).annotate(annotations).ast,
+          original,
+        ),
+      ]
     }),
   )
   // The whitelist preserves every value schema and property contract in Fields.
-  return resolved as Fields
+  return resolved as unknown as Fields
 }
 
 const sourceStructFields = (
@@ -180,8 +186,7 @@ const sourceStructFields = (
   if (typeof fields !== "object" || fields === null) return undefined
   const result: Record<string, Schema.Struct.Fields[string]> = {}
   for (const [name, field] of Object.entries(fields)) {
-    if (!Schema.isSchema(field) && !Schema.isPropertySignature(field))
-      return undefined
+    if (!Schema.isSchema(field)) return undefined
     result[name] = field
   }
   return result
@@ -190,62 +195,14 @@ const sourceStructFields = (
 function schemaFromAst(
   ast: SchemaAST.AST,
   source?: Schema.Struct.Fields[string],
-): Schema.Schema.Any {
+): Schema.Top {
   const sourceFields = sourceStructFields(source)
-  const struct =
-    ast._tag === "TypeLiteral"
-      ? { input: ast, output: ast }
-      : ast._tag === "Transformation" &&
-          ast.transformation._tag === "TypeLiteralTransformation" &&
-          ast.from._tag === "TypeLiteral" &&
-          ast.to._tag === "TypeLiteral"
-        ? { input: ast.from, output: ast.to }
-        : undefined
-  if (sourceFields && struct) {
-    const inputs = new Map(
-      struct.input.propertySignatures.map((p) => [p.name, p]),
-    )
-    const outputs = new Map(
-      struct.output.propertySignatures.map((p) => [p.name, p]),
-    )
-    const property = (name: string, side: "input" | "output") => {
-      const original = sourceFields[name]
-      const inputKey =
-        Schema.isPropertySignature(original) &&
-        original.ast._tag === "PropertySignatureTransformation"
-          ? (original.ast.from.fromKey ?? name)
-          : name
-      const resolved =
-        side === "input" ? inputs.get(inputKey) : outputs.get(name)
-      if (!resolved)
-        return fail(`form.${name}`, "projected struct field is missing")
-      return resolved
-    }
-    // The AST is authoritative for resolved metadata. The original field
-    // signatures retain intrinsic defaults, key mappings and decode/encode
-    // functions which cannot be reconstructed from a TypeLiteral alone.
-    const fields = mapFormFields(
-      sourceFields,
-      (_ast, name) => property(name, "input").type,
-      (annotations, _ast, name, side) =>
-        Object.fromEntries(
-          Reflect.ownKeys(annotations).map((key) => [
-            key,
-            property(name, side).annotations[key],
-          ]),
-        ),
-      (_ast, name) => property(name, "output").type,
-    )
-    return Object.assign(Schema.make(ast), { fields })
-  }
-  if (ast._tag !== "TypeLiteral") return Schema.make(ast)
+  if (ast._tag !== "Objects") return Schema.make<Schema.Top>(ast)
   const fields = Object.fromEntries(
     ast.propertySignatures.map((property) => [
       property.name,
-      property.isOptional
-        ? Schema.optional(schemaFromAst(property.type))
-        : schemaFromAst(property.type),
+      schemaFromAst(property.type, sourceFields?.[property.name]),
     ]),
   )
-  return Object.assign(Schema.make(ast), { fields })
+  return Object.assign(Schema.make<Schema.Top>(ast), { fields })
 }

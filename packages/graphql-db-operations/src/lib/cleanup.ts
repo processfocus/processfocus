@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Result of a cleanup operation.
@@ -26,9 +26,7 @@ export interface CleanupResult {
  *
  * IMPORTANT: This should only be available in test environments.
  */
-export class CleanupOperations extends Context.Tag(
-  "@pf/graphql-db-operations/CleanupOperations",
-)<
+export class CleanupOperations extends Context.Service<
   CleanupOperations,
   {
     /**
@@ -40,4 +38,4 @@ export class CleanupOperations extends Context.Tag(
      */
     readonly cleanupExecutions: () => Effect.Effect<CleanupResult, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/CleanupOperations") {}

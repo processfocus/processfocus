@@ -1,7 +1,7 @@
 Feature: Executions browsing
 
   Background:
-    Given I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager" using client "e2e-employee-finance-manager"
+    Given I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager"
     When I visit the processes page
     And I wait for RxDB to populate local storage
 
@@ -11,6 +11,7 @@ Feature: Executions browsing
     And I submit the process form
     And I visit the executions page
     Then I should see execution browsing for "Purchase Request"
+    And the "Purchase Request" execution timestamps should cycle independently without opening it
     When I filter executions by "In Progress"
     Then I should see execution browsing for "Purchase Request"
     When I open the "Purchase Request" execution from the executions list

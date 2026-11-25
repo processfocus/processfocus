@@ -89,7 +89,7 @@ describe("createMobileTodoList", () => {
       title: "Review welcome pack",
       cue: "Upcoming",
       assignedAt,
-      dueCue: null,
+      dueAt: null,
       summary: [],
       actionLabel: "Preview",
       href: "/to-dos/complete/hr/onboarding/review?todoId=upcoming-1",
@@ -101,7 +101,7 @@ describe("createMobileTodoList", () => {
       title: "Finish request",
       cue: "Draft",
       assignedAt,
-      dueCue: null,
+      dueAt: null,
       summary: [{ label: "Parent", value: "Alex Example" }],
       actionLabel: "Continue",
       href: "/to-dos/complete/finance/purchase/finish?todoId=draft-1",
@@ -109,7 +109,8 @@ describe("createMobileTodoList", () => {
     })
   })
 
-  test("uses due status text as the mobile cue when available", () => {
+  test("marks overdue work and retains its deadline for display", () => {
+    const dueAt = new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString()
     const [item] = createMobileTodoList([
       {
         id: "overdue-1",
@@ -117,7 +118,7 @@ describe("createMobileTodoList", () => {
         stepName: "Approve purchase request",
         stepPath: "finance/purchase/approve",
         status: "Active",
-        dueAt: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
+        dueAt,
         assignedAt: new Date(
           Date.now() - 1000 * 60 * 60 * 24 * 2,
         ).toISOString(),
@@ -126,8 +127,8 @@ describe("createMobileTodoList", () => {
     ])
 
     expect(item.status).toBe("Overdue")
-    expect(item.cue.startsWith("Overdue by")).toBe(true)
-    expect(item.dueCue?.startsWith("Overdue by")).toBe(true)
+    expect(item.cue).toBe("Overdue")
+    expect(item.dueAt).toBe(dueAt)
     expect(item.actionLabel).toBe("Do")
   })
 
@@ -147,7 +148,7 @@ describe("createMobileTodoList", () => {
 
     expect(item.status).toBe("Correction Required")
     expect(item.cue).toBe("Correction required")
-    expect(item.dueCue).toBeNull()
+    expect(item.dueAt).toBeNull()
     expect(item.actionLabel).toBe("Correct email")
     expect(item.href).toBe(
       "/to-dos/correct/finance/purchase/review?todoId=correction-1",
@@ -170,12 +171,13 @@ describe("createMobileTodoList", () => {
 
     expect(item.status).toBe("Completed")
     expect(item.cue).toBe("Completed")
-    expect(item.dueCue).toBeNull()
+    expect(item.dueAt).toBeNull()
     expect(item.actionLabel).toBe("Done")
     expect(item.href).toBeNull()
   })
 
-  test("keeps future due status as structured mobile due cue", () => {
+  test("retains future deadlines for the shared display", () => {
+    const dueAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 29).toISOString()
     const [item] = createMobileTodoList([
       {
         id: "active-1",
@@ -183,15 +185,15 @@ describe("createMobileTodoList", () => {
         stepName: "Inform Board at next meeting",
         stepPath: "board/inform-next-meeting",
         status: "Active",
-        dueAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 29).toISOString(),
+        dueAt,
         assignedAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
         summary: [],
       },
     ])
 
     expect(item.status).toBe("Active")
-    expect(item.cue.startsWith("Due ")).toBe(true)
-    expect(item.dueCue?.startsWith("Due ")).toBe(true)
+    expect(item.cue).toBe("Active")
+    expect(item.dueAt).toBe(dueAt)
     expect(item.actionLabel).toBe("Do")
   })
 })

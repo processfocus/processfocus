@@ -1,4 +1,4 @@
-import { Context, Effect, FiberRef, Option, Schema } from "effect"
+import { Context, Effect, Option, Schema } from "effect"
 
 const DelegationAudit = Schema.Struct({
   version: Schema.Literal(1),
@@ -21,7 +21,7 @@ export const decodeDelegationAudit = (
   by: string,
 ): Option.Option<DelegationAuditValue> =>
   by.startsWith(delegationAuditPrefix)
-    ? Schema.decodeUnknownOption(Schema.parseJson(DelegationAudit))(
+    ? Schema.decodeUnknownOption(Schema.fromJsonString(DelegationAudit))(
         by.slice(delegationAuditPrefix.length),
       )
     : Option.none()
@@ -29,7 +29,7 @@ export const decodeDelegationAudit = (
 export const delegationAuditLabel = (by: string): string | undefined =>
   Option.match(decodeDelegationAudit(by), {
     onNone: () => undefined,
-    onSome: (actor) => `${actor.ownerEmail} via ${actor.name}`,
+    onSome: (actor) => `${actor.ownerEmail}/${actor.name}`,
   })
 
 /**
@@ -43,7 +43,7 @@ export interface UserDetailsValue {
 }
 
 /**
- * Service providing a FiberRef with user details for all operations within a request.
+ * Service providing user details for all operations within a request.
  * This ensures all database operations use the same user identifier for audit trails
  * (createdBy and updatedBy fields).
  *
@@ -53,12 +53,13 @@ export interface UserDetailsValue {
  *
  * @effect-leakable-service
  */
-export class UserDetails extends Context.Tag(
-  "@pf/graphql-db-operations/UserDetails",
-)<UserDetails, FiberRef.FiberRef<UserDetailsValue>>() {}
+export class UserDetails extends Context.Service<
+  UserDetails,
+  UserDetailsValue
+>()("@pf/graphql-db-operations/UserDetails") {}
 
 /**
- * Helper to get the current user details from the UserDetails FiberRef.
+ * Helper to get the current user details from the UserDetails service.
  *
  * @example
  * ```typescript
@@ -75,14 +76,13 @@ export const getUserDetails = (): Effect.Effect<
   UserDetailsValue,
   never,
   UserDetails
-> => Effect.flatMap(UserDetails, FiberRef.get)
+> => UserDetails
 
 /** Keep worker attribution local even when a caller runs jobs in one fiber. */
 export const withUserDetailsScope = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R | UserDetails> =>
   Effect.gen(function* () {
-    const ref = yield* UserDetails
-    const current = yield* FiberRef.get(ref)
-    return yield* effect.pipe(Effect.locally(ref, current))
+    const current = yield* UserDetails
+    return yield* effect.pipe(Effect.provideService(UserDetails, current))
   })

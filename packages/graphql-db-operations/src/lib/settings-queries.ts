@@ -1,5 +1,22 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
+import type {
+  InvitationLifecycleStatus,
+  InvitationSource,
+  LiveRegistrationLinkRow,
+  RegistrationLinkPersistence,
+  SettingsInvitationRow,
+} from "@pf/identity-management/persistence"
+import type { RequestTime } from "@pf/request-time"
+
+export {
+  InvitationLifecycleStatus,
+  InvitationSource,
+  type LiveRegistrationLinkRow,
+  type RegistrationLinkPersistence,
+  RegistrationLinkStatus,
+  type SettingsInvitationRow,
+} from "@pf/identity-management/persistence"
 
 /**
  * Database row type for user with optional provider user data
@@ -141,120 +158,12 @@ export interface SettingsRoleRow {
 }
 
 /**
- * Invitation lifecycle status stored in pf_invitation.invitation_status.
- * Soft-delete (`_deleted`) is the deleted outcome and is not a stored status.
- */
-export const InvitationLifecycleStatus = {
-  Pending: "pending",
-  Accepted: "accepted",
-  LegacyClosed: "legacy_closed",
-} as const
-
-export type InvitationLifecycleStatus =
-  (typeof InvitationLifecycleStatus)[keyof typeof InvitationLifecycleStatus]
-
-/**
- * Invitation write-boundary source stored in pf_invitation.invitation_source.
- */
-export const InvitationSource = {
-  Model: "model",
-  Dashboard: "dashboard",
-  Process: "process",
-  Legacy: "legacy",
-} as const
-
-export type InvitationSource =
-  (typeof InvitationSource)[keyof typeof InvitationSource]
-
-/**
- * Derived Registration Link status for Invited Users dashboard rows.
- * Never includes bearer secrets.
- */
-export const RegistrationLinkStatus = {
-  NotGenerated: "not_generated",
-  Active: "active",
-  Expired: "expired",
-  Revoked: "revoked",
-} as const
-
-export type RegistrationLinkStatus =
-  (typeof RegistrationLinkStatus)[keyof typeof RegistrationLinkStatus]
-
-/**
- * Database row type for invitation with roles and lifecycle metadata.
- */
-export interface SettingsInvitationRow {
-  readonly id: string
-  readonly email: string
-  readonly status: InvitationLifecycleStatus
-  readonly source: InvitationSource
-  readonly roles: readonly SettingsRoleRow[]
-  readonly acceptedAt: Date | null
-  readonly acceptedByProvider: string | null
-  readonly acceptedBySubject: string | null
-  readonly acceptedByProviderUserId: string | null
-  readonly legacyClosedAt: Date | null
-  readonly legacyClosureReason: string | null
-  readonly registrationLinkStatus: RegistrationLinkStatus
-  readonly registrationLinkExpiresAt: Date | null
-  readonly registrationLinkGeneratedAt: Date | null
-  readonly registrationLinkGeneratedBy: string | null
-  readonly registrationLinkRevealedAt: Date | null
-  readonly registrationLinkRevealedBy: string | null
-  readonly registrationLinkRevokedAt: Date | null
-  readonly registrationLinkRevokedBy: string | null
-  /**
-   * Internal generation counter for Registration Session binding.
-   * Not exposed on the bulk GraphQL invitation type.
-   */
-  readonly registrationLinkGeneration: number
-}
-
-/**
- * Encrypted Registration Link material persisted on a pending Invitation.
- * Callers must never return these fields through bulk GraphQL responses.
- */
-export interface RegistrationLinkPersistence {
-  readonly tokenHash: string
-  readonly encryptionVersion: number
-  readonly nonce: string
-  readonly authenticationTag: string
-  readonly ciphertext: string
-  readonly expiresAt: Date
-  /** New generation value written on success. */
-  readonly generation: number
-  /**
-   * Optimistic concurrency: row must still have this previous generation
-   * (null column treated as 0).
-   */
-  readonly expectedPreviousGeneration: number
-  /**
-   * When true (rotate), require a currently live unexpired token.
-   * When false (generate), require no live unexpired token.
-   */
-  readonly requireActiveLink: boolean
-  readonly actor: string
-}
-
-/**
- * Live Registration Link envelope fields needed for authorised reveal.
- */
-export interface LiveRegistrationLinkRow {
-  readonly invitationId: string
-  readonly tokenHash: string
-  readonly encryptionVersion: number
-  readonly nonce: string
-  readonly authenticationTag: string
-  readonly ciphertext: string
-  readonly expiresAt: Date
-  readonly generation: number
-}
-
-/**
  * Input for updating provider user app-managed settings.
  */
 export interface UpdateProviderUserInput {
   readonly roleIds: readonly string[]
+  readonly firstName?: string | null
+  readonly lastName?: string | null
 }
 
 /**
@@ -287,11 +196,16 @@ export interface PaginatedResult<T> {
 /**
  * Service providing settings query operations for GraphQL resolvers
  */
-export class SettingsQueries extends Context.Tag(
-  "@pf/graphql-db-operations/SettingsQueries",
-)<
+export class SettingsQueries extends Context.Service<
   SettingsQueries,
   {
+    readonly countUsers: () => Effect.Effect<number, SqlError>
+    readonly countRoles: () => Effect.Effect<number, SqlError>
+    readonly countOAuthProviders: () => Effect.Effect<number, SqlError>
+    readonly countInvitations: (
+      status?: InvitationLifecycleStatus,
+    ) => Effect.Effect<number, SqlError>
+
     /**
      * Query paginated users with provider user status
      */
@@ -353,7 +267,20 @@ export class SettingsQueries extends Context.Tag(
      */
     readonly queryProviderUserDetail: (
       providerUserId: string,
-    ) => Effect.Effect<SettingsProviderUserRow | null, SqlError>
+    ) => Effect.Effect<
+      (SettingsProviderUserRow & { readonly provider: string }) | null,
+      SqlError
+    >
+
+    readonly updateProviderUserNames: (
+      providerUserId: string,
+      names: {
+        readonly firstName: string
+        readonly lastName: string
+        readonly name: string
+      },
+      updatedBy: string,
+    ) => Effect.Effect<void, SqlError, RequestTime>
 
     /**
      * Query all roles in the system (non-paginated, for internal validation)
@@ -540,4 +467,4 @@ export class SettingsQueries extends Context.Tag(
       grantedBy: string,
     ) => Effect.Effect<GrantRoleResult, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/SettingsQueries") {}

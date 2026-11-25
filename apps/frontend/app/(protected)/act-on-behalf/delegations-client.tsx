@@ -1,24 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState, useTransition } from "react"
-import { Button } from "@pf/shadcn-components"
+import { Button, DateTimeDisplay } from "@pf/shadcn-components"
 import { createDelegation, listDelegations, updateDelegation } from "./actions"
 import type { DelegationList, DelegationMetadata } from "@/lib/auth/delegations"
 import { environmentUnavailableMessage } from "@/lib/auth/session-admission-message"
 import { authenticateWithPasskey } from "@/lib/auth/verify-passkey"
-
-function TokenTime({ value }: { value: string }) {
-  return (
-    <time dateTime={value}>
-      {new Intl.DateTimeFormat("en", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: "UTC",
-      }).format(new Date(value))}{" "}
-      UTC
-    </time>
-  )
-}
 
 function SecretLifetime({
   replacement = false,
@@ -61,13 +48,23 @@ function SecretLifetime({
         ))}
       </div>
       <p className="text-sm text-muted-foreground" aria-live="polite">
-        Estimated expiry: <TokenTime value={expiresAt} />. Confirmed when
-        created.
+        Estimated expiry:{" "}
+        <DateTimeDisplay
+          kind="timestamp"
+          value={expiresAt}
+          initialMode="browser-local"
+        />
+        . Confirmed when created.
         {issuanceDeadline !== null && (
           <>
             {" "}
             Limited by your current access, ending{" "}
-            <TokenTime value={issuanceDeadline} />.
+            <DateTimeDisplay
+              kind="timestamp"
+              value={issuanceDeadline}
+              initialMode="browser-local"
+            />
+            .
             {ancestorDeadline <= now &&
               " Your access deadline has passed. Reload to check your access."}
           </>
@@ -434,7 +431,13 @@ export function DelegationsClient({
             {secret.value}
           </code>
           <p className="text-sm">
-            Expires <TokenTime value={secret.expiresAt} />.
+            Expires{" "}
+            <DateTimeDisplay
+              kind="timestamp"
+              value={secret.expiresAt}
+              initialMode="browser-local"
+            />
+            .
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -538,20 +541,27 @@ export function DelegationsClient({
               <div>
                 <dt className="text-muted-foreground">Created</dt>
                 <dd>
-                  <TokenTime value={token.createdAt} />
+                  <DateTimeDisplay kind="timestamp" value={token.createdAt} />
                 </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Secret expires</dt>
                 <dd>
-                  <TokenTime value={token.expiresAt} />
+                  <DateTimeDisplay
+                    kind="timestamp"
+                    value={token.expiresAt}
+                    initialMode="browser-local"
+                  />
                 </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">Last used</dt>
                 <dd>
                   {token.lastUsedAt ? (
-                    <TokenTime value={token.lastUsedAt} />
+                    <DateTimeDisplay
+                      kind="timestamp"
+                      value={token.lastUsedAt}
+                    />
                   ) : (
                     "Never used"
                   )}

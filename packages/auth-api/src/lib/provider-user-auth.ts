@@ -1,5 +1,5 @@
-import { Data, DateTime, Effect, Either, Option, Schema } from "effect"
-import { GoogleOAuthProviderConfigSchema } from "@pf/auth-config"
+import { Data, DateTime, Effect, Option, Result, Schema } from "effect"
+import { GoogleOAuthProviderConfigSchema } from "@pf/auth-config/runtime"
 import type {
   ProviderSubjectIdentity,
   VerifiedHumanIdentity,
@@ -63,11 +63,11 @@ export const GoogleIdTokenSchema = Schema.Struct({
   sub: Schema.String,
   email: Schema.String,
   name: Schema.String,
-  given_name: Schema.optionalWith(Schema.String, { exact: true }),
-  family_name: Schema.optionalWith(Schema.String, { exact: true }),
-  picture: Schema.optionalWith(Schema.String, { exact: true }),
-  locale: Schema.optionalWith(Schema.String, { exact: true }),
-  email_verified: Schema.optionalWith(Schema.Boolean, { exact: true }),
+  given_name: Schema.optionalKey(Schema.String),
+  family_name: Schema.optionalKey(Schema.String),
+  picture: Schema.optionalKey(Schema.String),
+  locale: Schema.optionalKey(Schema.String),
+  email_verified: Schema.optionalKey(Schema.Boolean),
 })
 
 export type GoogleIdToken = Schema.Schema.Type<typeof GoogleIdTokenSchema>
@@ -80,11 +80,6 @@ const touchExistingProviderUser = (
 ) =>
   Effect.gen(function* () {
     const db = yield* AuthenticationDatabase
-    const now = yield* DateTime.now
-    yield* withNonCriticalRetry(
-      db.updateLastLoggedIn(providerUser.id, now),
-      "updateLastLoggedIn",
-    )
     if (picture && picture !== providerUser.picture) {
       yield* withNonCriticalRetry(
         db.updateProviderUserProfilePicture(providerUser.id, picture),
@@ -224,9 +219,9 @@ export const findOrCreateProviderUserFromVerifiedIdentity = (
 export const findDummyProviderUser = (idToken: unknown) =>
   Effect.gen(function* () {
     const db = yield* AuthenticationDatabase
-    const subjectToken = yield* Schema.decodeUnknown(ProviderSubjectSchema)(
-      idToken,
-    )
+    const subjectToken = yield* Schema.decodeUnknownEffect(
+      ProviderSubjectSchema,
+    )(idToken)
 
     const existingByProviderSub = yield* db.findProviderUserByProviderSub(
       "dummy",
@@ -240,7 +235,8 @@ export const findDummyProviderUser = (idToken: unknown) =>
       )
     }
 
-    const token = yield* Schema.decodeUnknown(GoogleIdTokenSchema)(idToken)
+    const token =
+      yield* Schema.decodeUnknownEffect(GoogleIdTokenSchema)(idToken)
     const existingByEmail = yield* db.findProviderUserByEmail(token.email)
 
     if (Option.isSome(existingByEmail) && existingByEmail.value) {
@@ -258,7 +254,7 @@ export const findDummyProviderUser = (idToken: unknown) =>
  * matching roles. All errors are caught and logged — never blocks user creation.
  */
 const resolveGoogleOuInvite = (
-  db: Effect.Effect.Success<typeof AuthenticationDatabase>,
+  db: Effect.Success<typeof AuthenticationDatabase>,
   email: string,
 ) =>
   Effect.gen(function* () {
@@ -267,19 +263,19 @@ const resolveGoogleOuInvite = (
       return { matched: false, roleIds: [] as string[] }
     }
 
-    const configResult = yield* Schema.decodeUnknown(
+    const configResult = yield* Schema.decodeUnknownEffect(
       GoogleOAuthProviderConfigSchema,
-    )(providerRecord.value.config).pipe(Effect.either)
+    )(providerRecord.value.config).pipe(Effect.result)
 
-    return yield* Either.match(configResult, {
-      onLeft: () =>
+    return yield* Result.match(configResult, {
+      onFailure: () =>
         Effect.gen(function* () {
           yield* Effect.logWarning(
             "Failed to decode Google provider config for OU check",
           )
           return { matched: false, roleIds: [] as string[] }
         }),
-      onRight: (config) =>
+      onSuccess: (config) =>
         Effect.gen(function* () {
           const {
             invitedOrgUnits,
@@ -302,7 +298,7 @@ const resolveGoogleOuInvite = (
             serviceAccountKey,
             adminEmail,
           ).pipe(
-            Effect.catchAll((e) => {
+            Effect.catch((e) => {
               return Effect.logWarning(
                 `Google Directory API error for ${email}: ${e.message}`,
               ).pipe(Effect.as(undefined))
@@ -313,7 +309,6 @@ const resolveGoogleOuInvite = (
             return { matched: false, roleIds: [] as string[] }
           }
 
-          // Check if the user's OU matches any invited OU
           const matched = invitedOrgUnits.some((ou) => orgUnitPath === ou)
           if (!matched) {
             yield* Effect.logDebug(
@@ -339,7 +334,7 @@ const resolveGoogleOuInvite = (
         }),
     })
   }).pipe(
-    Effect.catchAll((e) =>
+    Effect.catch((e) =>
       Effect.logWarning(`OU-based role assignment failed: ${e}`).pipe(
         Effect.as({ matched: false, roleIds: [] as string[] }),
       ),

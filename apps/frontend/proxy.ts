@@ -1,8 +1,17 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 import { subjects } from "@pf/auth-session"
+import {
+  InvalidAccessTokenError,
+  InvalidRefreshTokenError,
+  InvalidSubjectError,
+} from "@pf/openauth/error"
 import { getAuthClient } from "@/lib/auth/client"
 import { DEFAULT_REFRESH_TOKEN_MAX_AGE, isPublicPath } from "@/lib/auth/config"
+import {
+  expiredGoogleIdentity,
+  isDocumentNavigation,
+} from "@/lib/auth/google-revalidation"
 import { getValidRedirect } from "@/lib/auth/redirect"
 import {
   getAccessTokenCookieOptions,
@@ -10,6 +19,7 @@ import {
   getRefreshTokenCookieOptions,
 } from "@/lib/auth/session"
 import { acceptVerifiedSession } from "@/lib/auth/ssr-session"
+import { isMcpLogin } from "@/lib/mcp/origin"
 
 /** Paths that should not preserve redirect after login */
 const noRedirectPaths = ["/", "/login", "/logout"]
@@ -66,15 +76,39 @@ export const proxy = async (request: NextRequest) => {
     return NextResponse.next({ request: { headers: requestHeaders } })
   }
 
+  // MCP clients discover OAuth without a Dashboard cookie. The handler owns
+  // the client grant and uses Dashboard sign-in only for browser consent.
+  if (pathname === "/mcp" || pathname.startsWith("/mcp/")) {
+    return NextResponse.next()
+  }
+  const runtimeMode = process.env["PF_RUNTIME_MODE"]
+  // RFC 8414 inserts the well-known path before the issuer path (/mcp).
+  const mcpDiscovery =
+    (runtimeMode === "local" || runtimeMode === "deployed") &&
+    pathname === "/.well-known/oauth-protected-resource/mcp"
+      ? "/mcp/resource"
+      : (runtimeMode === "local" &&
+            pathname === "/.well-known/oauth-authorization-server") ||
+          (runtimeMode === "deployed" &&
+            pathname === "/.well-known/oauth-authorization-server/mcp")
+        ? "/mcp/metadata"
+        : undefined
+  if (mcpDiscovery)
+    return NextResponse.rewrite(new URL(mcpDiscovery, request.url))
+
   // Resolve cookie names first. Public routes should not require auth-client
   // initialization unless we actually need to verify or refresh a session.
   const host = request.headers.get("host") ?? ""
-  const { accessToken: AT, refreshToken: RT } = getCookieNamesFromHost(host)
+  const {
+    accessToken: AT,
+    refreshToken: RT,
+    googleRevalidation,
+  } = getCookieNamesFromHost(host)
 
   // Allow public paths
   if (isPublicPath(pathname)) {
     // Redirect already-authenticated users away from /login
-    if (pathname === "/login") {
+    if (pathname === "/login" && !isMcpLogin(request)) {
       const accessToken = request.cookies.get(AT)?.value
       const refreshToken = request.cookies.get(RT)?.value
 
@@ -157,7 +191,21 @@ export const proxy = async (request: NextRequest) => {
     return NextResponse.next({ request: { headers: requestHeaders } })
   }
 
-  // Check session
+  if (
+    isDocumentNavigation(request) &&
+    !pathname.startsWith("/api/") &&
+    expiredGoogleIdentity(request.cookies.get(googleRevalidation)?.value)
+  ) {
+    const target = new URL("/api/auth/revalidate-google", request.url)
+    target.searchParams.set(
+      "redirect",
+      getValidRedirect(pathname + request.nextUrl.search),
+    )
+    return NextResponse.redirect(target, {
+      headers: { "cache-control": "no-store" },
+    })
+  }
+
   const accessToken = request.cookies.get(AT)?.value
   const refreshToken = request.cookies.get(RT)?.value
 
@@ -239,17 +287,27 @@ export const proxy = async (request: NextRequest) => {
       verified.tokens?.access ?? accessToken ?? "",
     ))
   ) {
-    // Token invalid and couldn't refresh
-    console.error("[proxy] Token verification FAILED, redirecting to /login", {
-      error: verified.err,
-      errorName: verified.err?.constructor?.name,
-      errorMessage:
-        verified.err instanceof Error
-          ? verified.err.message
-          : String(verified.err),
-      pathname,
-      hadRefreshToken: !!refreshToken,
-    })
+    // Expected credential or session-admission rejection needs no error log.
+    if (
+      verified.err &&
+      !(verified.err instanceof InvalidAccessTokenError) &&
+      !(verified.err instanceof InvalidRefreshTokenError) &&
+      !(verified.err instanceof InvalidSubjectError)
+    ) {
+      console.error(
+        "[proxy] Token verification FAILED, redirecting to /login",
+        {
+          error: verified.err,
+          errorName: verified.err?.constructor?.name,
+          errorMessage:
+            verified.err instanceof Error
+              ? verified.err.message
+              : String(verified.err),
+          pathname,
+          hadRefreshToken: !!refreshToken,
+        },
+      )
+    }
     const response = createLoginRedirect(request)
     response.cookies.delete(AT)
     response.cookies.delete(RT)

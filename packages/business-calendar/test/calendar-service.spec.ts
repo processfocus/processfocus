@@ -4,9 +4,9 @@ import {
   Duration,
   Effect,
   Fiber,
-  LogLevel,
   Logger,
   Option,
+  References,
 } from "effect"
 import {
   type BusinessCalendarConfig,
@@ -252,8 +252,8 @@ describe("BusinessCalendarService", () => {
       expect(Option.isSome(result)).toBe(true)
       if (Option.isSome(result)) {
         const parts = DateTime.toParts(result.value)
-        expect(parts.hours).toBe(9)
-        expect(parts.minutes).toBe(0)
+        expect(parts.hour).toBe(9)
+        expect(parts.minute).toBe(0)
       }
     })
 
@@ -712,18 +712,18 @@ describe("BusinessCalendarService", () => {
         hour: number,
         minute: number,
       ): DateTime.Utc => {
-        const zoned = DateTime.unsafeMakeZoned(
+        const zoned = DateTime.makeZonedUnsafe(
           {
             year,
             month,
             day,
-            hours: hour,
-            minutes: minute,
-            seconds: 0,
-            millis: 0,
+            hour: hour,
+            minute: minute,
+            second: 0,
+            millisecond: 0,
           },
           {
-            timeZone: DateTime.zoneUnsafeMakeNamed("America/New_York"),
+            timeZone: DateTime.zoneMakeNamedUnsafe("America/New_York"),
             adjustForTimeZone: true,
           },
         )
@@ -769,18 +769,18 @@ describe("BusinessCalendarService", () => {
         hour: number,
         minute: number,
       ): DateTime.Utc => {
-        const zoned = DateTime.unsafeMakeZoned(
+        const zoned = DateTime.makeZonedUnsafe(
           {
             year,
             month,
             day,
-            hours: hour,
-            minutes: minute,
-            seconds: 0,
-            millis: 0,
+            hour: hour,
+            minute: minute,
+            second: 0,
+            millisecond: 0,
           },
           {
-            timeZone: DateTime.zoneUnsafeMakeNamed("Europe/Berlin"),
+            timeZone: DateTime.zoneMakeNamedUnsafe("Europe/Berlin"),
             adjustForTimeZone: true,
           },
         )
@@ -834,16 +834,16 @@ describe("BusinessCalendarService", () => {
         annotations: Record<string, unknown>
       }> = []
 
-      const capturingLogger = Logger.make(
-        ({ logLevel, message, cause, annotations }) => {
-          logs.push({
-            level: logLevel.label,
-            message,
-            cause,
-            annotations: Object.fromEntries(annotations),
-          })
-        },
-      )
+      const capturingLogger = Logger.make((options) => {
+        const { logLevel, message, cause } = options
+        const { annotations } = Logger.formatStructured.log(options)
+        logs.push({
+          level: logLevel,
+          message,
+          cause,
+          annotations: annotations,
+        })
+      })
 
       // Feb 30 is accepted by DayOfMonth branding but fails date validation.
       const badConfig: BusinessCalendarConfig = {
@@ -857,8 +857,8 @@ describe("BusinessCalendarService", () => {
           s.getHolidaysForYear(2024),
         ).pipe(
           Effect.provide(layer),
-          Effect.provide(Logger.replace(Logger.defaultLogger, capturingLogger)),
-          Logger.withMinimumLogLevel(LogLevel.Warning),
+          Effect.provide(Logger.layer([capturingLogger])),
+          Effect.provideService(References.MinimumLogLevel, "Warn"),
         ),
       )
 
@@ -866,7 +866,7 @@ describe("BusinessCalendarService", () => {
 
       const warning = logs.find(
         (entry) =>
-          entry.level === "WARN" &&
+          entry.level === "Warn" &&
           (entry.message === "Failed to compute holidays for year" ||
             (Array.isArray(entry.message) &&
               entry.message[0] === "Failed to compute holidays for year")),
@@ -875,7 +875,7 @@ describe("BusinessCalendarService", () => {
       if (warning) {
         expect(warning.annotations.year).toBe(2024)
         const failure = Option.getOrUndefined(
-          Cause.failureOption(warning.cause),
+          Cause.findErrorOption(warning.cause),
         )
         expect(failure).toMatchObject({ _tag: "InvalidDateError" })
       }
@@ -888,10 +888,12 @@ describe("BusinessCalendarService", () => {
         Effect.gen(function* () {
           const service = yield* BusinessCalendarService
           const year = 2031
-          const fiber = yield* Effect.fork(service.getHolidaysForYear(year))
+          const fiber = yield* Effect.forkChild(
+            service.getHolidaysForYear(year),
+          )
           // Let the owner register InFlight and reach the interruptible yield.
-          yield* Effect.yieldNow()
-          yield* Effect.yieldNow()
+          yield* Effect.yieldNow
+          yield* Effect.yieldNow
           yield* Fiber.interrupt(fiber)
           return yield* service.getHolidaysForYear(year)
         }).pipe(Effect.provide(layer)),
@@ -908,13 +910,19 @@ describe("BusinessCalendarService", () => {
         Effect.gen(function* () {
           const service = yield* BusinessCalendarService
           const year = 2032
-          const owner = yield* Effect.fork(service.getHolidaysForYear(year))
+          const owner = yield* Effect.forkChild(
+            service.getHolidaysForYear(year),
+          )
           // Owner registers InFlight and reaches the interruptible yield.
-          yield* Effect.yieldNow()
-          yield* Effect.yieldNow()
-          const waiterA = yield* Effect.fork(service.getHolidaysForYear(year))
-          const waiterB = yield* Effect.fork(service.getHolidaysForYear(year))
-          yield* Effect.yieldNow()
+          yield* Effect.yieldNow
+          yield* Effect.yieldNow
+          const waiterA = yield* Effect.forkChild(
+            service.getHolidaysForYear(year),
+          )
+          const waiterB = yield* Effect.forkChild(
+            service.getHolidaysForYear(year),
+          )
+          yield* Effect.yieldNow
           yield* Fiber.interrupt(owner)
           return yield* Effect.all([Fiber.join(waiterA), Fiber.join(waiterB)], {
             concurrency: 2,

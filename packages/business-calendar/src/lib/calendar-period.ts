@@ -34,13 +34,13 @@ export const CalendarPeriod = Schema.Struct({
    * Start date of the period (inclusive).
    * Stored as ISO 8601 date string for serialization.
    */
-  startDate: Schema.DateTimeUtcFromSelf,
+  startDate: Schema.DateTimeUtc,
 
   /**
    * End date of the period (inclusive).
    * Stored as ISO 8601 date string for serialization.
    */
-  endDate: Schema.DateTimeUtcFromSelf,
+  endDate: Schema.DateTimeUtc,
 
   /**
    * Whether this period counts as "active" or "working".
@@ -65,8 +65,8 @@ export const CalendarPeriodFromJson = Schema.Struct({
   id: Schema.String,
   type: Schema.String,
   name: Schema.String,
-  startDate: Schema.DateTimeUtc,
-  endDate: Schema.DateTimeUtc,
+  startDate: Schema.DateTimeUtcFromString,
+  endDate: Schema.DateTimeUtcFromString,
   isActive: Schema.Boolean,
   weeklySchedule: Schema.optional(Schema.Array(DaySchedule)),
 })

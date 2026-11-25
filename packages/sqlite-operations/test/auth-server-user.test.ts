@@ -32,7 +32,7 @@ describe("auth-server user authentication", () => {
         .values({
           provider: "google",
           sub,
-          lastLoggedIn: now,
+          createdAt: now,
         })
         .returning()
 
@@ -168,6 +168,22 @@ describe("auth-server user authentication", () => {
           expect(props.roles).toBeDefined()
           expect(props.roles).toContain(testData.testerRolePath)
           expect(testData.testerRolePath).toBe("/Tester")
+          const db = yield* TypedSqliteDrizzle
+          const audits = yield* db.select().from(schema.auditEvent)
+          expect(audits).toHaveLength(1)
+          expect(audits[0]).toMatchObject({
+            auditKind: "login",
+            auditDetails: {
+              actorUserId: props.userId,
+              authenticationMethod: "dummy",
+            },
+          })
+          // Refresh is token maintenance, not another human login.
+          const refreshed = yield* Effect.promise(() =>
+            client.refresh(tokens.refresh),
+          )
+          expect(refreshed.err).toBe(false)
+          expect(yield* db.select().from(schema.auditEvent)).toEqual(audits)
         }),
         TestLayer,
       ),
@@ -198,6 +214,7 @@ describe("auth-server user authentication", () => {
           const location = new URL(response.headers.get("location")!)
           expect(location.searchParams.get("code")).toBeNull()
           expect(location.searchParams.get("error")).toBe("access_denied")
+          expect(yield* db.select().from(schema.auditEvent)).toEqual([])
           expect(location.searchParams.get("error_description")).toBe(
             `Dummy login requires an existing user, but the given bypass user ${testEmail} does not exist in the database. Please set PF_BYPASS_AUTH to a valid user.`,
           )
@@ -207,7 +224,7 @@ describe("auth-server user authentication", () => {
     )
   })
 
-  it("should switch org unit when refreshing with a permitted role from different department", async () => {
+  it("rejects a legacy permanent grant for another department", async () => {
     const testEmail = "switcher@example.com"
     const testSub = "dummy-switcher-sub"
     const testName = "Role Switcher"
@@ -313,47 +330,15 @@ describe("auth-server user authentication", () => {
               scope: `role:${encodeURIComponent("/Finance/Auditor")}`,
             }),
           )
-          if (refreshed.err) throw refreshed.err
-          if (!refreshed.tokens) throw new Error("No tokens returned")
-
-          const switchedVerified = yield* Effect.promise(() =>
-            client.verify(subjects, refreshed.tokens!.access),
-          )
-          if (switchedVerified.err) throw switchedVerified.err
-
-          const switchedProps = switchedVerified.subject
-            .properties as ProviderUserSession
-
-          expect(switchedProps.orgUnitId).toBe(financeOrgUnit.id)
-          expect(switchedProps.orgUnitPath).toBe("/Finance/")
-          expect(switchedProps.roles).toEqual(["/Finance/Auditor"])
-
-          const switchedBack = yield* Effect.promise(() =>
-            client.refresh(refreshed.tokens!.refresh, {
-              scope: `role:${encodeURIComponent("/Employee")}`,
-            }),
-          )
-          if (switchedBack.err) throw switchedBack.err
-          if (!switchedBack.tokens) throw new Error("No tokens returned")
-
-          const backVerified = yield* Effect.promise(() =>
-            client.verify(subjects, switchedBack.tokens!.access),
-          )
-          if (backVerified.err) throw backVerified.err
-
-          const backProps = backVerified.subject
-            .properties as ProviderUserSession
-
-          expect(backProps.orgUnitId).toBe(rootOrgUnit.id)
-          expect(backProps.orgUnitPath).toBe("/")
-          expect(backProps.roles).toEqual(["/Employee"])
+          expect(refreshed.err).toBeDefined()
+          expect("tokens" in refreshed).toBe(false)
         }),
         TestLayer,
       ),
     )
   })
 
-  it("should keep original org unit when refreshing with own employee role", async () => {
+  it("requires preparation even for an assigned account role", async () => {
     const testEmail = "keeper@example.com"
     const testSub = "dummy-keeper-sub"
     const testName = "Org Keeper"
@@ -439,20 +424,8 @@ describe("auth-server user authentication", () => {
               scope: `role:${encodeURIComponent("/Manager")}`,
             }),
           )
-          if (refreshed.err) throw refreshed.err
-          if (!refreshed.tokens) throw new Error("No tokens returned")
-
-          const switchedVerified = yield* Effect.promise(() =>
-            client.verify(subjects, refreshed.tokens!.access),
-          )
-          if (switchedVerified.err) throw switchedVerified.err
-
-          const switchedProps2 = switchedVerified.subject
-            .properties as ProviderUserSession
-
-          expect(switchedProps2.orgUnitId).toBe(rootOrgUnit.id)
-          expect(switchedProps2.orgUnitPath).toBe("/")
-          expect(switchedProps2.roles).toEqual(["/Manager"])
+          expect(refreshed.err).toBeDefined()
+          expect("tokens" in refreshed).toBe(false)
         }),
         TestLayer,
       ),

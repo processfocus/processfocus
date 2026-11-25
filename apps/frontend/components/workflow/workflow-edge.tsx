@@ -3,6 +3,7 @@ import { getWorkflowEdgeRoute } from "@/lib/workflow/edge-routing"
 
 type EdgeState =
   | "highlighted"
+  | "deadline"
   | "error"
   | "scheduled"
   | "conditional"
@@ -10,6 +11,7 @@ type EdgeState =
   | "default"
 
 const EDGE_COLORS = {
+  deadline: { stroke: "#d97706", text: "#92400e", bg: "#fffbeb" },
   highlighted: { stroke: "#818cf8", text: "#4f46e5", bg: "#eef2ff" },
   error: { stroke: "#dc2626", text: "#991b1b", bg: "#fef2f2" },
   scheduled: { stroke: "#f59e0b", text: "#92400e", bg: "#fffbeb" },
@@ -23,6 +25,7 @@ const EDGE_COLORS = {
 } as const
 
 const EDGE_DASH_PATTERNS: Record<EdgeState, string | undefined> = {
+  deadline: "8 4 2 4",
   highlighted: undefined, //              ————————————————
   error: "10 4", //                      ————  ————
   scheduled: "2 4", //                    ··············
@@ -33,6 +36,7 @@ const EDGE_DASH_PATTERNS: Record<EdgeState, string | undefined> = {
 
 function getEdgeState(data: WorkflowEdgeData | undefined): EdgeState {
   if (data?.isHighlighted) return "highlighted"
+  if (data?.isDeadline) return "deadline"
   if (data?.isOnError) return "error"
   if (data?.isConditionalAndScheduled) return "conditionalAndScheduled"
   if (data?.isScheduled) return "scheduled"
@@ -51,6 +55,7 @@ interface WorkflowEdgeData {
   isCrossLane?: boolean
   isHighlighted?: boolean
   isOnError?: boolean
+  isDeadline?: boolean
   isConditional?: boolean
   isScheduled?: boolean
   isConditionalAndScheduled?: boolean

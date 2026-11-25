@@ -21,7 +21,7 @@ import type { KVNamespace } from "@cloudflare/workers-types"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { StorageError, StorageService, joinKey, splitKey } from "./storage.js"
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 /**
  * Configure the Cloudflare KV store that's created.
@@ -62,7 +62,7 @@ export function CloudflareStorageServiceLive(
 
     set: (key: string[], value: unknown, ttl?: number) =>
       Effect.gen(function* () {
-        const encoded = yield* Schema.encode(JsonValue)(value).pipe(
+        const encoded = yield* Schema.encodeEffect(JsonValue)(value).pipe(
           Effect.mapError(mapError("put")),
         )
 

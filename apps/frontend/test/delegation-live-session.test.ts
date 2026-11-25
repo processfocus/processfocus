@@ -2,6 +2,9 @@ import type { ProviderUserSession } from "@pf/auth-session"
 import { afterEach, expect, mock, test } from "bun:test"
 
 mock.module("server-only", () => ({}))
+mock.module("@/lib/graphql/endpoint", () => ({
+  getGraphqlEndpoint: () => "https://graphql.example.test/graphql",
+}))
 mock.module("@/lib/auth/issuer", () => ({
   getFrontendAuthClientConfig: () => ({
     issuer: "https://auth.example.test",
@@ -33,25 +36,29 @@ const tokenFor = (properties: unknown, exp = 2_000_000_000) =>
   `header.${Buffer.from(JSON.stringify({ properties, exp })).toString("base64url")}.signature`
 const token = tokenFor(session)
 
-test("current issuer facts replace stale role/name/org facts without caching", async () => {
+test("protected GraphQL facts replace stale role/name/org facts without caching", async () => {
   const current = {
     ...session,
     roles: ["/CurrentRole"],
     orgUnitPath: "/current",
     delegation: { ...session.delegation, name: "renamed" },
   }
-  const request = mock(async () => Response.json({ session: current }))
+  const request = mock(async () =>
+    Response.json({ data: { delegatedSession: current } }),
+  )
   globalThis.fetch = request
   expect(await acceptVerifiedSession(session, token)).toEqual(current)
   expect(await acceptVerifiedSession(session, token)).toEqual(current)
   expect(request).toHaveBeenCalledTimes(2)
   expect(request).toHaveBeenCalledWith(
-    "https://auth.example.test/oauth/delegation/session",
+    "https://graphql.example.test/graphql",
     expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ accessToken: token }),
+      body: JSON.stringify({
+        query: "query DelegatedSessionAuthority { delegatedSession }",
+      }),
       headers: {
-        Authorization: "Bearer confidential-client",
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       cache: "no-store",
@@ -61,7 +68,7 @@ test("current issuer facts replace stale role/name/org facts without caching", a
 })
 
 test.each([403, 401, 500])(
-  "unavailable or invalid issuer response %i fails closed",
+  "unavailable or invalid protected GraphQL response %i fails closed",
   async (status) => {
     globalThis.fetch = mock(async () => new Response(null, { status }))
     expect(await acceptVerifiedSession(session, token)).toBeNull()
@@ -103,12 +110,18 @@ test.each([
     },
   },
 ])("malformed, human or mismatched lineage facts fail closed", async (body) => {
-  globalThis.fetch = mock(async () => Response.json(body))
+  globalThis.fetch = mock(async () =>
+    Response.json({
+      data: { delegatedSession: "session" in body ? body.session : undefined },
+    }),
+  )
   expect(await acceptVerifiedSession(session, token)).toBeNull()
 })
 
 test("a frontend marker cannot launder a signed human token or strip a delegation", async () => {
-  const request = mock(async () => Response.json({ session }))
+  const request = mock(async () =>
+    Response.json({ data: { delegatedSession: session } }),
+  )
   globalThis.fetch = request
   expect(await acceptVerifiedSession(session, tokenFor(human))).toBeNull()
   expect(await acceptVerifiedSession(human, token)).toBeNull()
@@ -116,7 +129,9 @@ test("a frontend marker cannot launder a signed human token or strip a delegatio
 })
 
 test("access expiry cannot exceed the generation deadline", async () => {
-  globalThis.fetch = mock(async () => Response.json({ session }))
+  globalThis.fetch = mock(async () =>
+    Response.json({ data: { delegatedSession: session } }),
+  )
   expect(
     await acceptVerifiedSession(session, tokenFor(session, 2_000_000_001)),
   ).toBeNull()
@@ -127,5 +142,35 @@ test("transport exceptions cannot leak tokens or become human sessions", async (
     throw new Error(token)
   })
   expect(await acceptVerifiedSession(session, token)).toBeNull()
+  expect(await acceptVerifiedSession(human, tokenFor(human))).toBeNull()
+})
+
+test("delegated acceptance rejects HTTP-200 GraphQL errors even with session data", async () => {
+  globalThis.fetch = mock(async () =>
+    Response.json({
+      data: { delegatedSession: session },
+      errors: [{ message: "denied" }],
+    }),
+  )
+  expect(await acceptVerifiedSession(session, token)).toBeNull()
+})
+
+test("human acceptance rechecks protected API authority without caching and rejects HTTP-200 GraphQL errors", async () => {
+  let revoked = false
+  const request = mock(async () =>
+    Response.json(
+      revoked
+        ? { errors: [{ message: "Session authority revoked" }] }
+        : { data: { __typename: "Query" } },
+    ),
+  )
+  globalThis.fetch = request
   expect(await acceptVerifiedSession(human, tokenFor(human))).toEqual(human)
+  revoked = true
+  expect(await acceptVerifiedSession(human, tokenFor(human))).toBeNull()
+  expect(request).toHaveBeenCalledTimes(2)
+  expect(request).toHaveBeenCalledWith(
+    "https://graphql.example.test/graphql",
+    expect.objectContaining({ cache: "no-store", redirect: "error" }),
+  )
 })

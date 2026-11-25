@@ -10,9 +10,9 @@ const fixture = () => {
 }
 
 describe("List create contract", () => {
-  it("accepts untouched optional and nullable dropdowns from generated metadata", async () => {
+  it("accepts untouched optional and nullable dropdowns from resolved defaults", async () => {
     const { org, role } = fixture()
-    const choices = Schema.Literal("Member", "Guest")
+    const choices = Schema.Literals(["Member", "Guest"])
     const list = new List(org, "optional-choices", {
       name: "Optional choices",
       roles: [role],
@@ -36,18 +36,10 @@ describe("List create contract", () => {
       nullable: null,
       both: null,
     })
-    expect(metadata?.formDefinition.components["optional"]).toMatchObject({
-      _tag: "select",
-      emptyValue: "undefined",
-    })
-    expect(metadata?.formDefinition.components["nullable"]).toMatchObject({
-      _tag: "select",
-      emptyValue: "null",
-    })
     // JSON transport drops undefined optional values, preserving nullable ones.
     const input: unknown = JSON.parse(JSON.stringify(metadata?.defaultValues))
     const decoded = await Effect.runPromise(
-      Schema.decodeUnknown(list.createSubmissionSchema()!)(input),
+      Schema.decodeUnknownEffect(list.createSubmissionSchema()!)(input),
     )
     expect(await Effect.runPromise(list.executeCreate(decoded))).toBe("created")
   })
@@ -66,10 +58,10 @@ describe("List create contract", () => {
       create: {
         form: () => ({
           details: Wrapper({
-            name: TextField().pipe(Schema.minLength(1)),
+            name: TextField().pipe(Schema.check(Schema.isMinLength(1))),
             email: EmailField(),
           }),
-          category: Schema.Literal("Member", "Guest").annotations({
+          category: Schema.Literals(["Member", "Guest"]).annotate({
             [FormDefault]: "Member",
           }),
           note: Schema.optional(Schema.String),
@@ -94,19 +86,15 @@ describe("List create contract", () => {
       "note",
     ])
     expect(
-      Schema.decodeUnknownEither(schema, { onExcessProperty: "error" })({
+      Schema.decodeUnknownResult(schema, { onExcessProperty: "error" })({
         name: "Alex",
         email: "alex@example.com",
         category: "Member",
         generated: "override",
       })._tag,
-    ).toBe("Left")
+    ).toBe("Failure")
     const metadata = await Effect.runPromise(list.createFormMetadata())
     expect(metadata?.defaultValues["category"]).toBe("Member")
-    expect(metadata?.formDefinition.components["category"]).toMatchObject({
-      _tag: "select",
-      options: ["Member", "Guest"],
-    })
     expect(
       await Effect.runPromise(
         list.executeCreate({

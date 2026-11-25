@@ -21,6 +21,9 @@
       "path": "../../cli/pfcli"
     },
     {
+      "path": "../../packages/process-execution"
+    },
+    {
       "path": "../../packages/todo-summary"
     },
     {
@@ -37,6 +40,12 @@
     },
     {
       "path": "../../packages/request-time"
+    },
+    {
+      "path": "../../packages/public-completion"
+    },
+    {
+      "path": "../../packages/project-accounting"
     },
     {
       "path": "../../packages/process"
@@ -63,6 +72,9 @@
       "path": "../../packages/job-handler"
     },
     {
+      "path": "../../packages/identity-management"
+    },
+    {
       "path": "../../packages/graphql-schema"
     },
     {
@@ -75,6 +87,9 @@
       "path": "../../packages/frontend-endpoints"
     },
     {
+      "path": "../../packages/form-submission-schema"
+    },
+    {
       "path": "../../packages/form-schema"
     },
     {
@@ -84,7 +99,7 @@
       "path": "../../packages/drizzle-postgres"
     },
     {
-      "path": "../../packages/document-store-service"
+      "path": "../../packages/delegation"
     },
     {
       "path": "../../packages/db-info"
@@ -103,6 +118,9 @@
     },
     {
       "path": "../../packages/auth-api"
+    },
+    {
+      "path": "../../packages/audit"
     }
   ]
 }

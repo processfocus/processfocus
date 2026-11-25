@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { NodeContext } from "@effect/platform-node"
+import { NodeServices } from "@effect/platform-node"
 import { Effect } from "effect"
 import { runInit } from "../src/commands/init"
 import {
@@ -58,7 +58,7 @@ describe("pfcli init", () => {
     const result = await Effect.runPromiseExit(
       Effect.provide(
         runInit(orgPath, [], "admin@example.com"),
-        NodeContext.layer,
+        NodeServices.layer,
       ),
     )
 
@@ -77,7 +77,7 @@ describe("pfcli init", () => {
     const result = await Effect.runPromiseExit(
       Effect.provide(
         runInit(orgPath, ["google"], "not-an-email"),
-        NodeContext.layer,
+        NodeServices.layer,
       ),
     )
 
@@ -105,7 +105,7 @@ describe("pfcli init", () => {
 
     expect(result.status).not.toBe(0)
     const output = result.output
-    expect(output).toContain("Expected one of the following cases")
+    expect(output).toContain("Invalid value for flag --identity-provider")
     expect(output).toContain("google")
     expect(output).toContain("github")
   })

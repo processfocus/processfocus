@@ -1,5 +1,5 @@
-import type { HttpClientError } from "@effect/platform/HttpClientError"
 import { Duration, Effect } from "effect"
+import type { HttpClientError } from "effect/http/HttpClientError"
 import {
   type XeroInvoiceError,
   xeroTimeoutError,

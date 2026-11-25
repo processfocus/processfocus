@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, rmSync } from "node:fs"
 import { resolve } from "node:path"
+import { generateReference } from "./generate-reference"
 
 const projectRoot = resolve(import.meta.dir, "..")
 const dist = resolve(projectRoot, "dist")
@@ -30,3 +31,5 @@ const bundled = readFileSync(output, "utf8")
 if (unpublishedImplementationImport.test(bundled)) {
   throw new Error("main.mjs imports an unpublished @pf/* package")
 }
+
+await generateReference(dist)

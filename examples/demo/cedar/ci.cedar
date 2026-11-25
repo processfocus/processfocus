@@ -33,20 +33,6 @@ when {
     principal.roles.contains(resource.role)
 };
 
-// The e2e-employee only has graphql api permission to switch to a provider user
-permit (
-    principal == PF::ServiceAccount::"e2e-employee",
-    action in [PF::Action::"mutation"],
-    resource == PF::GraphQLField::"Mutation.requestProviderUserPermissions"
-);
-
-// The e2e-employee-finance-manager only has graphql api permission to switch to a provider user
-permit (
-    principal == PF::ServiceAccount::"e2e-employee-finance-manager",
-    action in [PF::Action::"mutation"],
-    resource == PF::GraphQLField::"Mutation.requestProviderUserPermissions"
-);
-
 // The ci-pipeline account can request any role (for testing purposes).
 permit (
     principal == PF::ServiceAccount::"ci-pipeline",
@@ -61,58 +47,23 @@ permit (
     resource is PF::Application
 );
 
-// The ci-pipeline account can request provider user permissions (for testing).
-permit (
-    principal == PF::ServiceAccount::"ci-pipeline",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"ci@example.com"
-);
-
-// The e2e-employee account can request provider user permissions (for testing).
-permit (
-    principal == PF::ServiceAccount::"e2e-employee",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"ci@example.com"
-);
-
 // Settings e2e smoke: allow the existing ci provider user to browse admin settings.
 permit (
     principal == PF::ProviderUser::"ci@example.com",
-    action in [PF::Action::"administerUsers", PF::Action::"administerOAuthProviders"],
+    action in [PF::Action::"administerUsers", PF::Action::"administerOAuthProviders", PF::Action::"viewAuthorization"],
     resource is PF::Application
 );
 
-// The e2e-employee-finance-manager account can request provider user permissions (for testing).
 permit (
-    principal == PF::ServiceAccount::"e2e-employee-finance-manager",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"employee-finance-manager@example.com"
-);
-
-// E2E multi-user subscription test: allow ci-pipeline to authenticate as these provider users
-permit (
-    principal == PF::ServiceAccount::"ci-pipeline",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"employee@example.com"
+    principal == PF::ProviderUser::"settings-providers@example.com",
+    action == PF::Action::"administerOAuthProviders",
+    resource is PF::Application
 );
 
 permit (
-    principal == PF::ServiceAccount::"ci-pipeline",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"finance-manager@example.com"
-);
-
-permit (
-    principal == PF::ServiceAccount::"ci-pipeline",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"procurement-manager@example.com"
-);
-
-// E2E file permissions test: allow ci-pipeline to authenticate as employee-2
-permit (
-    principal == PF::ServiceAccount::"ci-pipeline",
-    action == PF::Action::"requestProviderUserPermissions",
-    resource == PF::ProviderUser::"employee-2@example.com"
+    principal == PF::ProviderUser::"settings-users@example.com",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
 );
 
 // E2E multi-user subscription test: allow test provider users to access CI-only fields
@@ -186,17 +137,6 @@ permit (
     principal == PF::ServiceAccount::"ci-pipeline",
     action == PF::Action::"complete",
     resource is PF::Step
-)
-when {
-    resource in PF::Process::"/hr/on-boarding" &&
-    resource.role == PF::Role::"/operations/Facilities" &&
-    principal.roles.contains(PF::Role::"/hr/HR")
-};
-
-permit (
-    principal == PF::ServiceAccount::"ci-pipeline",
-    action == PF::Action::"complete",
-    resource is PF::Todo
 )
 when {
     resource in PF::Process::"/hr/on-boarding" &&

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { isDeepStrictEqual } from "node:util"
-import { Effect, JSONSchema, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   type GraphQLInputType,
   type GraphQLSchema,
@@ -14,7 +14,10 @@ import {
   parse,
   validateInputValue,
 } from "graphql"
-import { submissionSchemaSync } from "@pf/form-submission-schema"
+import {
+  submissionSchemaSync,
+  toFormJsonSchema,
+} from "@pf/form-submission-schema"
 import {
   type Form,
   type Organisation,
@@ -108,9 +111,7 @@ const differences = (
 }
 
 const record = (value: unknown): Record<string, unknown> =>
-  Schema.decodeUnknownSync(
-    Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-  )(value)
+  Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(value)
 
 /** Independently compare JSON wire semantics with GraphQL; do not reuse the SDL
  * generator as the oracle (a generator bug must fail these contracts too).
@@ -143,9 +144,13 @@ const checkGraphQL = (
       ])
       return
     }
-    const variants = Array.isArray(json["anyOf"])
-      ? json["anyOf"].map(record)
-      : [json]
+    const flattenVariants = (
+      value: Record<string, unknown>,
+    ): Record<string, unknown>[] =>
+      Array.isArray(value["anyOf"])
+        ? value["anyOf"].flatMap((child) => flattenVariants(record(child)))
+        : [value]
+    const variants = flattenVariants(json)
     const types = variants.flatMap((variant) =>
       Array.isArray(variant["type"]) ? variant["type"] : [variant["type"]],
     )
@@ -225,7 +230,7 @@ export const verifyFormContract = async <Args extends unknown[]>(options: {
   readonly form: {
     readonly node: { readonly path: string }
     getFieldsWithState(...args: Args): Schema.Struct.Fields
-    submissionSchema(): Record<string, unknown>
+    readonly output: Schema.Struct.Fields
   }
   readonly fixtures: readonly [
     { readonly name: string; readonly args: Args; readonly input: unknown },
@@ -253,11 +258,15 @@ export const verifyFormContract = async <Args extends unknown[]>(options: {
       const fields = form.getFieldsWithState(...fixture.args)
       const submission = submissionSchemaSync(Schema.Struct(fields))
       const { additionalProperties: _openness, ...runtimeJson } = record(
-        JSONSchema.make(submission),
+        toFormJsonSchema(submission),
       )
+      const { additionalProperties: _declaredOpenness, ...declaredJson } =
+        record(
+          toFormJsonSchema(submissionSchemaSync(Schema.Struct(form.output))),
+        )
       const mismatches = differences(
         semantics(runtimeJson),
-        semantics(form.submissionSchema()),
+        semantics(declaredJson),
       )
       if (mismatches.length)
         throw new Error(`submissionSchema mismatch: ${mismatches.join(", ")}`)
@@ -267,7 +276,7 @@ export const verifyFormContract = async <Args extends unknown[]>(options: {
         checkGraphQL(runtimeJson, inputType)
       }
 
-      Schema.decodeUnknownSync(Schema.encodedSchema(submission))(fixture.input)
+      Schema.decodeUnknownSync(Schema.toEncoded(submission))(fixture.input)
       validateInputValue(fixture.input, inputType, (error, path) => {
         throw new Error(`GraphQL ${path.join(".")}: ${error.message}`)
       })

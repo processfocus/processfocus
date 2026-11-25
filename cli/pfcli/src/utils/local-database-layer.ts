@@ -1,7 +1,7 @@
-import type * as Client from "@effect/sql/SqlClient"
-import { SqlError } from "@effect/sql/SqlError"
 import { Effect, Layer } from "effect"
-import type { ConfigError } from "effect/ConfigError"
+import type { ConfigError } from "effect/Config"
+import type * as Client from "effect/sql/SqlClient"
+import { SqlError, UnknownError } from "effect/sql/SqlError"
 import {
   type DatabaseConnectionInfo,
   LOCAL_SQLITE_BUSY_TIMEOUT_MS,
@@ -23,14 +23,11 @@ const loadLayer = (
   load: () => Promise<PfcliDatabaseLayer>,
   message: string,
 ): PfcliDatabaseLayer =>
-  Layer.unwrapEffect(
+  Layer.unwrap(
     Effect.tryPromise({
       try: load,
       catch: (cause) =>
-        new SqlError({
-          cause,
-          message,
-        }),
+        new SqlError({ reason: new UnknownError({ cause, message }) }),
     }),
   )
 

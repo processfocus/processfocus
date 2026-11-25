@@ -1,19 +1,16 @@
-import { FileSystem } from "@effect/platform"
+import { QueueService } from "@processfocus/runtime"
+import type { Context } from "effect"
 import {
   DateTime,
   Schema as ES,
   Effect,
-  FiberRef,
+  FileSystem,
   Layer,
   ManagedRuntime,
 } from "effect"
 import { graphql } from "graphql"
 import { createSchema } from "graphql-yoga"
-import {
-  AuthorizationService,
-  CurrentPrincipal,
-  type ProviderUserPrincipal,
-} from "@pf/auth-policy"
+import { AuthorizationService, CurrentPrincipal } from "@pf/auth-policy"
 import {
   CalendarSlotField,
   FormDefault,
@@ -21,6 +18,7 @@ import {
   ProviderUserField,
   RadioField,
 } from "@pf/form-schema"
+import { withFormRules } from "@pf/form-submission-schema"
 import {
   BusinessCalendarQueries,
   type CompletedStepData,
@@ -33,12 +31,10 @@ import {
   StepCompletionOperations,
   StepRoleQueries,
   UserDetails,
-  type UserDetailsValue,
   WorkflowQueries,
 } from "@pf/graphql-db-operations"
 import {
   Form,
-  FormComponentType,
   NodeStep,
   OrgUnit,
   Organisation,
@@ -47,15 +43,14 @@ import {
   Role,
   type StaticFormDeclaration,
 } from "@pf/process"
-import { QueueService } from "@pf/queue-service"
-import { RequestTime } from "@pf/request-time"
-import { transformSchemaWithAuthDirective } from "../src/lib/auth-directive-plugin"
 import {
   PUBLIC_TODO_TOKEN_AUDIENCE,
   buildPublicTodoUrl,
   decryptPublicTodoToken,
   encryptPublicTodoToken,
-} from "../src/lib/public-todo-token"
+} from "@pf/public-completion/credentials"
+import { RequestTime } from "@pf/request-time"
+import { transformSchemaWithAuthDirective } from "../src/lib/auth-directive-plugin"
 import { createResolverExecutor } from "../src/lib/resolver-utils"
 import { systemSchema } from "../src/lib/system-resolvers"
 import type { UserContext } from "../src/lib/types"
@@ -77,7 +72,7 @@ afterAll(() => {
 })
 
 const makeContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "frontend",
     id: null,
@@ -87,7 +82,7 @@ const makeContext = (): UserContext => ({
 })
 
 const makeCiPipelineContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "ci-pipeline",
     id: null,
@@ -109,7 +104,7 @@ const makeCiPipelineContext = (): UserContext => ({
 })
 
 const makeOfficeStaffContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "office-staff-e2e@example.com",
     id: "usr-office",
@@ -157,8 +152,8 @@ const makeOrganisation = ({
   withPublicCompletion = true,
   withStringPublicCompletion = false,
   withIndependentLookup = false,
+  localLookupCount,
   withDependentLookup = false,
-  withQueryNameLookup = false,
   withLookupOverride = false,
   withPermissionLookup = false,
   withProviderUserField = false,
@@ -168,8 +163,8 @@ const makeOrganisation = ({
   withPublicCompletion?: boolean
   withStringPublicCompletion?: boolean
   withIndependentLookup?: boolean
+  localLookupCount?: number
   withDependentLookup?: boolean
-  withQueryNameLookup?: boolean
   withLookupOverride?: boolean
   withPermissionLookup?: boolean
   withProviderUserField?: boolean
@@ -203,40 +198,50 @@ const makeOrganisation = ({
   if (withSchoolTourProjection) {
     const complete = new Form(startFlow, "Complete", {
       role,
-      form: () => ({
-        waitingTourOutcome: ES.optional(
-          RadioField({
-            label: "Outcome",
-            permission: { modify: role },
-            options: [
-              { value: "scheduled-tour", label: "Book a scheduled tour slot" },
-              { value: "tour-booked-manually", label: "Tour booked manually" },
-            ],
-          }),
-        ).annotations({ [FormDefault]: "scheduled-tour" }),
-        selectedEnrolmentSlotEventId: ES.optional(
-          CalendarSlotField({
-            label: "Available school tour slots",
-            timeZone: "Pacific/Auckland",
-            locale: "en-NZ",
-            query: () => Effect.succeed([]),
-          }),
-        ),
-      }),
+      form: withFormRules(
+        ES.Struct({
+          waitingTourOutcome: ES.optional(
+            RadioField({
+              label: "Outcome",
+              permission: { modify: role },
+              options: [
+                {
+                  value: "scheduled-tour",
+                  label: "Book a scheduled tour slot",
+                },
+                {
+                  value: "tour-booked-manually",
+                  label: "Tour booked manually",
+                },
+              ],
+            }),
+          ).annotate({ [FormDefault]: "scheduled-tour" }),
+          selectedEnrolmentSlotEventId: ES.optional(
+            CalendarSlotField({
+              label: "Available school tour slots",
+              timeZone: "Pacific/Auckland",
+              locale: "en-NZ",
+              query: () => Effect.succeed([]),
+            }),
+          ),
+        }),
+        (value) => ({
+          selectedEnrolmentSlotEventId: {
+            required: !value.selectedEnrolmentSlotEventId,
+          },
+        }),
+        (value) =>
+          value.waitingTourOutcome === "tour-booked-manually"
+            ? {
+                selectedEnrolmentSlotEventId: { hidden: true, required: false },
+              }
+            : {},
+      ),
       publicCompletion: {
         recipient: () => "parent@example.com",
-        expiresAt: () => DateTime.unsafeMake("2026-04-07T10:00:00.000Z"),
+        expiresAt: () => DateTime.makeUnsafe("2026-04-07T10:00:00.000Z"),
       },
-    }).rules((value, rule) => [
-      rule.when(value.selectedEnrolmentSlotEventId.blank()).effects({
-        selectedEnrolmentSlotEventId: { required: true },
-      }),
-      rule
-        .when(value.waitingTourOutcome.equals("tour-booked-manually"))
-        .effects({
-          selectedEnrolmentSlotEventId: { hidden: true, required: false },
-        }),
-    ])
+    })
     startFlow.end(complete)
     return org
   }
@@ -261,7 +266,7 @@ const makeOrganisation = ({
                 email: "fresh@example.com",
                 displayName: "Fresh Recipient",
               }),
-              expiresAt: () => DateTime.unsafeMake("2026-04-07T10:00:00.000Z"),
+              expiresAt: () => DateTime.makeUnsafe("2026-04-07T10:00:00.000Z"),
               subject: (_state, _ctx, _item, publicUrl) =>
                 `Fresh invitation ${publicUrl}`,
               body: () => "Fresh invitation body",
@@ -287,7 +292,7 @@ const makeOrganisation = ({
     return complete
   }
   // Select a fixed, precisely typed schema before configuring its public accessors.
-  const complete = (() => {
+  ;(() => {
     if (withProviderUserField) {
       return makeComplete(() => ({
         classId: ProviderUserField({ label: "Class" }),
@@ -295,8 +300,8 @@ const makeOrganisation = ({
     }
     if (
       withDependentLookup ||
+      localLookupCount !== undefined ||
       withIndependentLookup ||
-      withQueryNameLookup ||
       withLookupOverride ||
       withPermissionLookup
     ) {
@@ -307,8 +312,27 @@ const makeOrganisation = ({
         }),
         classId: LookupField({
           label: "Class",
+          resolve: (value) =>
+            Effect.succeed(
+              value === "restored-class"
+                ? { value, label: "Restored class" }
+                : null,
+            ),
           ...lookupPermissionOptions,
-          query: () => Effect.succeed([{ value: "class-1", label: "Class 1" }]),
+          ...(localLookupCount !== undefined
+            ? { mode: "local", maxItems: 500 }
+            : {}),
+          query: (filter, limit) =>
+            Effect.succeed(
+              localLookupCount === undefined
+                ? [{ value: "class-1", label: "Class 1" }]
+                : Array.from({ length: localLookupCount }, (_, i) => ({
+                    value: `class-${i}`,
+                    label: `Class ${i}`,
+                  }))
+                    .filter((item) => item.label.includes(filter))
+                    .slice(0, limit),
+            ),
         }),
       }))
       if (withDependentLookup) {
@@ -327,20 +351,6 @@ const makeOrganisation = ({
     }
     return makeComplete(() => ({ comment: ES.String }))
   })()
-  if (withQueryNameLookup) {
-    complete.clientFormDefinition = () =>
-      Effect.succeed({
-        components: {
-          classId: {
-            _tag: FormComponentType.Lookup,
-            field: "classId",
-            label: "Class",
-            queryName: "ClassLookup",
-          },
-        },
-        rules: [],
-      }) as ReturnType<typeof complete.clientFormDefinition>
-  }
   return org
 }
 
@@ -351,8 +361,8 @@ const makeLayers = ({
   withPublicCompletion = true,
   withStringPublicCompletion = false,
   withIndependentLookup = false,
+  localLookupCount,
   withDependentLookup = false,
-  withQueryNameLookup = false,
   withLookupOverride = false,
   withPermissionLookup = false,
   withProviderUserField = false,
@@ -370,8 +380,8 @@ const makeLayers = ({
   readonly withPublicCompletion?: boolean
   readonly withStringPublicCompletion?: boolean
   readonly withIndependentLookup?: boolean
+  readonly localLookupCount?: number
   readonly withDependentLookup?: boolean
-  readonly withQueryNameLookup?: boolean
   readonly withLookupOverride?: boolean
   readonly withPermissionLookup?: boolean
   readonly withProviderUserField?: boolean
@@ -390,19 +400,30 @@ const makeLayers = ({
     readonly id: string
     readonly email: string
   } | null
-  readonly canAccessField?: AuthorizationService["Type"]["canAccessField"]
+  readonly canAccessField?: Context.Service.Shape<
+    typeof AuthorizationService
+  >["canAccessField"]
 }) =>
   Layer.mergeAll(
     Layer.succeed(FileSystem.FileSystem, {
       readFileString: () => Effect.succeed("type Query { _: Boolean }"),
     } as unknown as FileSystem.FileSystem),
-    Layer.succeed(OrgQueries, {} as unknown as OrgQueries["Type"]),
-    Layer.succeed(ProcessQueries, {} as unknown as ProcessQueries["Type"]),
+    Layer.succeed(
+      OrgQueries,
+      {} as unknown as Context.Service.Shape<typeof OrgQueries>,
+    ),
+    Layer.succeed(
+      ProcessQueries,
+      {} as unknown as Context.Service.Shape<typeof ProcessQueries>,
+    ),
     Layer.succeed(
       ProviderUserQueries,
-      {} as unknown as ProviderUserQueries["Type"],
+      {} as unknown as Context.Service.Shape<typeof ProviderUserQueries>,
     ),
-    Layer.succeed(WorkflowQueries, {} as unknown as WorkflowQueries["Type"]),
+    Layer.succeed(
+      WorkflowQueries,
+      {} as unknown as Context.Service.Shape<typeof WorkflowQueries>,
+    ),
     Layer.succeed(StepRoleQueries, {
       queryRolePathsByStepPath: () =>
         Effect.succeed({
@@ -411,16 +432,16 @@ const makeLayers = ({
           startsProcess: false,
           embedded: false,
         }),
-    } as unknown as StepRoleQueries["Type"]),
+    } as unknown as Context.Service.Shape<typeof StepRoleQueries>),
     Layer.succeed(BusinessCalendarQueries, {
       getCalendarData: () => Effect.succeed(new Map()),
-    } as unknown as BusinessCalendarQueries["Type"]),
+    } as unknown as Context.Service.Shape<typeof BusinessCalendarQueries>),
     Layer.succeed(FlowExecutionOperations, {
       getProcessIdForExecution: () => Effect.succeed("proc-1"),
-    } as unknown as FlowExecutionOperations["Type"]),
+    } as unknown as Context.Service.Shape<typeof FlowExecutionOperations>),
     Layer.succeed(ScheduledFlowOperations, {
       insertScheduledFlow: () => Effect.succeed("sf-1"),
-    } as unknown as ScheduledFlowOperations["Type"]),
+    } as unknown as Context.Service.Shape<typeof ScheduledFlowOperations>),
     Layer.succeed(QueueService, {
       queueInTransaction,
       enqueue: (queue: string, payload: unknown) =>
@@ -428,23 +449,17 @@ const makeLayers = ({
           enqueuedJobs?.push({ queue, payload })
           return `job-${enqueuedJobs?.length ?? 0}`
         }),
-    } as unknown as QueueService["Type"]),
-    Layer.succeed(
-      RequestTime,
-      FiberRef.unsafeMake(DateTime.unsafeMake("2026-04-06T10:00:00.000Z")),
-    ),
-    Layer.succeed(
-      UserDetails,
-      FiberRef.unsafeMake<UserDetailsValue>({ by: "frontend", id: null }),
-    ),
+    } as unknown as Context.Service.Shape<typeof QueueService>),
+    Layer.succeed(RequestTime, DateTime.makeUnsafe("2026-04-06T10:00:00.000Z")),
+    Layer.succeed(UserDetails, { by: "frontend", id: null }),
     Layer.succeed(OrganisationProvider, {
       organisation: makeOrganisation({
         withForm,
         withPublicCompletion,
         withStringPublicCompletion,
         withIndependentLookup,
+        ...(localLookupCount !== undefined && { localLookupCount }),
         withDependentLookup,
-        withQueryNameLookup,
         withLookupOverride,
         withPermissionLookup,
         withProviderUserField,
@@ -458,13 +473,13 @@ const makeLayers = ({
       canListDelegationTokens: () => Effect.succeed(false),
       canManageDelegation: () => Effect.succeed(false),
       canLogin: () => Effect.succeed(false),
-      canCompleteStep: () => Effect.succeed(false),
-      canCompleteTodo: () => Effect.succeed(false),
+      policyVersion: Effect.succeed("test-policy"),
+      canCompleteStep: (principal) =>
+        Effect.succeed(principal.uid.type === "PF::PublicLink" && canComplete),
+      canViewEmbeddedForm: () => Effect.succeed(false),
       canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-      canCompletePublicTodo: () => Effect.succeed(canComplete),
       canModifyField: () => Effect.succeed(false),
       canRequestRole: () => Effect.succeed(false),
-      canRequestProviderUserPermissions: () => Effect.succeed(false),
       canActOnBehalfOf: () => Effect.succeed(false),
       canViewExecution: () => Effect.succeed(false),
       canRestartExecution: () => Effect.succeed(false),
@@ -506,7 +521,7 @@ const makeLayers = ({
           processExecutionId: "pex-1",
           processStateId: "pst-1",
           state: {},
-          processStartedAt: DateTime.unsafeMake("2026-04-06T09:00:00.000Z"),
+          processStartedAt: DateTime.makeUnsafe("2026-04-06T09:00:00.000Z"),
         }),
       getCompletedStepsForExecution: () =>
         Effect.succeed([] satisfies CompletedStepData[]),
@@ -524,7 +539,15 @@ const makeLayers = ({
           hasForEach: false,
           barrierScheduledFlowId: null,
         }),
-    } as unknown as StepCompletionOperations["Type"]),
+      queryTodoForCompletionById: (todoId: string) =>
+        Effect.succeed({
+          id: todoId,
+          targetStepPath: "/ops/todo/Complete",
+          processPath: "/ops/todo",
+          orgUnitPath: "/ops",
+          assignedToProviderUserEmail: null,
+        }),
+    } as unknown as Context.Service.Shape<typeof StepCompletionOperations>),
   )
 
 const resolvePublicTodo = async (
@@ -570,13 +593,7 @@ const queryPublicCompletionUrlWithAuth = async (
   context: UserContext,
 ) => {
   const runtime = ManagedRuntime.make(
-    Layer.mergeAll(
-      layers,
-      Layer.succeed(
-        CurrentPrincipal,
-        FiberRef.unsafeMake<ProviderUserPrincipal | null>(null),
-      ),
-    ),
+    Layer.mergeAll(layers, Layer.succeed(CurrentPrincipal, null)),
   )
 
   try {
@@ -633,6 +650,7 @@ const publicTodoLookupSuggestions = async (
   token: string,
   layers: ReturnType<typeof makeLayers>,
   field: string,
+  options: { filter?: string; limit?: number; selectedValue?: string } = {},
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -641,11 +659,15 @@ const publicTodoLookupSuggestions = async (
         "publicTodoLookupSuggestions"
       ] as unknown as (
         parent: unknown,
-        args: { token: string; field: string },
+        args: { token: string; field: string; filter?: string; limit?: number },
         context: UserContext,
       ) => Effect.Effect<ReadonlyArray<Record<string, unknown>>, unknown>
 
-      return yield* resolver(undefined, { token, field }, makeContext())
+      return yield* resolver(
+        undefined,
+        { token, field, ...options },
+        makeContext(),
+      )
     }).pipe(Effect.provide(layers)),
   )
 
@@ -709,12 +731,7 @@ describe("public todo GraphQL capability", () => {
         publicFormDescription: "Fill in the details and submit this form.",
         processPath: "ops/todo",
         completeMutationName: "completeOpsTodoComplete",
-        formDefinition: {
-          components: {
-            comment: expect.objectContaining({ field: "comment" }),
-          },
-          rules: [],
-        },
+        defaultValues: expect.any(Object),
       },
     })
   })
@@ -730,35 +747,13 @@ describe("public todo GraphQL capability", () => {
       }),
     )
     const formMetadata = result["formMetadata"] as {
-      readonly formDefinition: {
-        readonly components: Record<string, unknown>
-        readonly rules: readonly unknown[]
-      }
       readonly defaultValues: Record<string, unknown>
-      readonly jsonSchema: {
-        readonly properties?: Record<string, unknown>
-        readonly required?: readonly string[]
-      }
+      readonly requestData: { readonly inaccessible: readonly string[] }
     }
-
-    expect(formMetadata.formDefinition.components).toHaveProperty(
-      "selectedEnrolmentSlotEventId",
-    )
-    expect(formMetadata.formDefinition.components).not.toHaveProperty(
-      "waitingTourOutcome",
-    )
     expect(formMetadata.defaultValues).not.toHaveProperty("waitingTourOutcome")
-    expect(formMetadata.jsonSchema.properties).not.toHaveProperty(
+    expect(formMetadata.requestData.inaccessible).toContain(
       "waitingTourOutcome",
     )
-    expect(formMetadata.jsonSchema.required ?? []).not.toContain(
-      "waitingTourOutcome",
-    )
-    expect(formMetadata.formDefinition.rules).toHaveLength(1)
-    expect(JSON.stringify(formMetadata.formDefinition.rules)).not.toContain(
-      "waitingTourOutcome",
-    )
-    expect(JSON.stringify(formMetadata)).not.toContain("waitingTourOutcome")
   })
 
   it("returns unavailable when an active token predates the latest invitation", async () => {
@@ -830,6 +825,79 @@ describe("public todo GraphQL capability", () => {
     ).resolves.toEqual([{ value: "class-1", label: "Class 1" }])
   })
 
+  it("returns complete bounded local public choices and an overflow sentinel", async () => {
+    const token = await makeToken("todo-1", 1_775_558_000)
+    for (const count of [500, 501, 600]) {
+      const items = await publicTodoLookupSuggestions(
+        token,
+        makeLayers({ status: "active", localLookupCount: count }),
+        "classId",
+        { limit: 501 },
+      )
+      expect(items).toHaveLength(Math.min(count, 501))
+      expect(items[499]).toEqual({ value: "class-499", label: "Class 499" })
+    }
+    await expect(
+      publicTodoLookupSuggestions(
+        token,
+        makeLayers({ status: "active", localLookupCount: 500 }),
+        "classId",
+        { filter: "does not match", limit: 20 },
+      ),
+    ).resolves.toHaveLength(500)
+    await expect(
+      publicTodoLookupSuggestions(
+        token,
+        makeLayers({ status: "completed", localLookupCount: 501 }),
+        "classId",
+      ),
+    ).resolves.toEqual([])
+  })
+
+  it("resolves a public selection independently while preserving capability and field restrictions", async () => {
+    const token = await makeToken("todo-1", 1_775_558_000)
+    const options = { selectedValue: "restored-class" }
+    await expect(
+      publicTodoLookupSuggestions(
+        token,
+        makeLayers({ status: "active", withIndependentLookup: true }),
+        "classId",
+        options,
+      ),
+    ).resolves.toEqual([{ value: "restored-class", label: "Restored class" }])
+    await expect(
+      publicTodoLookupSuggestions(
+        token,
+        makeLayers({ status: "active", withIndependentLookup: true }),
+        "classId",
+        { selectedValue: "unavailable" },
+      ),
+    ).resolves.toEqual([])
+    await expect(
+      publicTodoLookupSuggestions(
+        token,
+        makeLayers({ status: "completed", withIndependentLookup: true }),
+        "classId",
+        options,
+      ),
+    ).resolves.toEqual([])
+    for (const restricted of [
+      { withDependentLookup: true },
+      { withLookupOverride: true },
+      { withPermissionLookup: true },
+      { withProviderUserField: true },
+    ]) {
+      await expect(
+        publicTodoLookupSuggestions(
+          token,
+          makeLayers({ status: "active", ...restricted }),
+          "classId",
+          options,
+        ),
+      ).rejects.toThrow("not authorized")
+    }
+  })
+
   it("returns no lookup suggestions for completed public todos", async () => {
     const token = await makeToken("todo-1", 1_775_558_000)
 
@@ -852,20 +920,6 @@ describe("public todo GraphQL capability", () => {
         "classId",
       ),
     ).rejects.toThrow("Public dependent lookup field classId is not authorized")
-  })
-
-  it("rejects public lookup fields marked with a query name", async () => {
-    const token = await makeToken("todo-1", 1_775_558_000)
-
-    await expect(
-      publicTodoLookupSuggestions(
-        token,
-        makeLayers({ status: "active", withQueryNameLookup: true }),
-        "classId",
-      ),
-    ).rejects.toThrow(
-      "Public query-name lookup field classId is not authorized",
-    )
   })
 
   it("rejects public lookup fields with lookup overrides", async () => {
@@ -1207,7 +1261,7 @@ describe("public todo GraphQL capability", () => {
       expect(payload.exp).toBe(
         Math.floor(
           DateTime.toEpochMillis(
-            DateTime.unsafeMake("2026-04-07T10:00:00.000Z"),
+            DateTime.makeUnsafe("2026-04-07T10:00:00.000Z"),
           ) / 1000,
         ),
       )

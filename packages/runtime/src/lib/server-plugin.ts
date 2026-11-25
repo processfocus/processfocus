@@ -1,4 +1,8 @@
 import { Context, Data, Effect, Layer } from "effect"
+import {
+  type ConfigurationGroup,
+  parseConfigurationContract,
+} from "./configuration.js"
 
 export const SERVER_PLUGIN_HOST_INTERFACE_VERSION = 1
 
@@ -44,9 +48,7 @@ export class WebhookCallbackError extends Data.TaggedError(
  * Provider-neutral process callbacks exposed by runtime hosts to organisation
  * webhook handlers. Provider parsing and correlation remain plugin concerns.
  */
-export class WebhookCallbackHost extends Context.Tag(
-  "@processfocus/runtime/WebhookCallbackHost",
-)<
+export class WebhookCallbackHost extends Context.Service<
   WebhookCallbackHost,
   {
     readonly lookupDeferredTodo: (
@@ -67,7 +69,7 @@ export class WebhookCallbackHost extends Context.Tag(
       callback: PublicCompletionDeliveryCallback,
     ) => Effect.Effect<WebhookCallbackResult, WebhookCallbackError>
   }
->() {}
+>()("@processfocus/runtime/WebhookCallbackHost") {}
 
 export interface WebhookDescriptor {
   readonly path: string
@@ -80,6 +82,7 @@ export interface WebhookDescriptor {
 export interface ServerPluginRegistration {
   readonly identity: string
   readonly hostInterfaceVersion: typeof SERVER_PLUGIN_HOST_INTERFACE_VERSION
+  readonly configuration?: readonly ConfigurationGroup[]
   readonly jobLayer?: ServerPluginJobLayer
   readonly webhooks?: readonly WebhookDescriptor[]
 }
@@ -188,10 +191,27 @@ const parseRegistration = (
       webhooks.push(yield* parseWebhook(webhook, identity, webhookIndex))
     }
 
+    const configuration =
+      value["configuration"] === undefined
+        ? undefined
+        : yield* Effect.try({
+            try: () =>
+              parseConfigurationContract({
+                version: 1,
+                groups: value["configuration"],
+              }).groups,
+            catch: () =>
+              new ServerPluginContractError({
+                message: "Malformed server plugin configuration contract",
+                pluginIdentity: identity,
+              }),
+          })
+
     return {
       identity,
       hostInterfaceVersion,
       ...(jobLayer !== undefined && { jobLayer }),
+      ...(configuration !== undefined && { configuration }),
       ...(rawWebhooks !== undefined && { webhooks }),
     }
   })
@@ -263,7 +283,7 @@ export const dispatchServerPluginWebhook = ({
 }: {
   readonly request: Request
   readonly registrations: readonly ServerPluginRegistration[]
-  readonly callbackHost: WebhookCallbackHost["Type"]
+  readonly callbackHost: WebhookCallbackHost["Service"]
 }): Effect.Effect<Response> => {
   const descriptor = findWebhookDescriptor(
     registrations,

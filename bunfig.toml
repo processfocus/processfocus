@@ -1,2 +1,7 @@
+[install]
+# 3 days: only install package versions published at least this long ago
+minimumReleaseAge = 259200
+
 [test]
 pathIgnorePatterns = ["dist/**"]
+preload = ["./scripts/cdk-test-cleanup.ts"]

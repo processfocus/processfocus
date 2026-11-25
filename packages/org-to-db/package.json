@@ -3,14 +3,13 @@
   "version": "0.0.1",
   "main": "./src/index.ts",
   "dependencies": {
-    "@effect/sql": "^0.52.1",
     "@pf/auth-config": "workspace:*",
     "@pf/form-schema": "workspace:*",
     "@pf/process": "*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@types/bun": "1.4.2"
+    "@types/bun": "1.4.5"
   },
   "exports": {
     ".": {

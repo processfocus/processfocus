@@ -4,9 +4,6 @@ import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import { Data, Effect, Match } from "effect"
 
-/**
- * Error Types
- */
 export class CommandExecutionError extends Data.TaggedError(
   "CommandExecutionError",
 )<{
@@ -135,9 +132,6 @@ const copyTriggers = (
     )
   })
 
-/**
- * Main program logic
- */
 const program = Effect.sync(() =>
   console.log("Generating trigger migration..."),
 ).pipe(
@@ -183,8 +177,7 @@ const handleError = (error: ProgramError): Effect.Effect<void> =>
     Match.exhaustive,
   )
 
-// Execute the program
-Effect.runPromise(program.pipe(Effect.catchAll(handleError))).then(
+Effect.runPromise(program.pipe(Effect.catch(handleError))).then(
   () => process.exit(0),
   () => process.exit(1),
 )

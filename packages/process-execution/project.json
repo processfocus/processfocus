@@ -1,0 +1,21 @@
+{
+  "name": "@pf/process-execution",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/process-execution/src",
+  "projectType": "library",
+  "tags": [
+    "visibility:public-source",
+    "distribution:workspace-internal",
+    "npm:private"
+  ],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "outputs": ["{projectRoot}/out-tsc/lib"],
+      "options": {
+        "commands": ["tsgo --build tsconfig.lib.json"],
+        "cwd": "packages/process-execution"
+      }
+    }
+  }
+}

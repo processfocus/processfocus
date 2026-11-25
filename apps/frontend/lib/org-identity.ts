@@ -4,7 +4,10 @@ import { cacheTag } from "next/cache"
 import { getFrontendJwt } from "@pf/auth-session"
 import type { OrgIdentityQuery } from "./generated/gql/graphql"
 import { fetchOrgIdentity } from "./graphql/queries"
-import { createServerGraphqlClient } from "./graphql/server-client"
+import {
+  createServerGraphqlClient,
+  retryGraphqlRead,
+} from "./graphql/server-client"
 
 type OrgIdentity = NonNullable<OrgIdentityQuery["org"]>
 
@@ -40,8 +43,7 @@ interface PublicOrgIdentity {
  * Fetches public org identity without authentication.
  * Cached via Next.js Data Cache with "login-page" tag for on-demand invalidation.
  *
- * Throws on error so transient failures are not baked into the cache.
- * Callers should catch and degrade gracefully.
+ * Throws on error so prerendering fails rather than caching degraded content.
  */
 export async function getPublicOrgIdentity(): Promise<PublicOrgIdentity | null> {
   "use cache"
@@ -51,7 +53,7 @@ export async function getPublicOrgIdentity(): Promise<PublicOrgIdentity | null> 
     throw new Error("[OrgIdentity] FRONTEND_JWT_TOKEN not configured")
   }
   const client = createServerGraphqlClient(FRONTEND_JWT_TOKEN)
-  const org = await fetchOrgIdentity(client)
+  const org = await retryGraphqlRead(() => fetchOrgIdentity(client))
   if (!org) return null
   return { name: org.name ?? null, acronym: org.acronym ?? null }
 }

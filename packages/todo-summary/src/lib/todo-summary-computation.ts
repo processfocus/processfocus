@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
-import { Context, Effect, Layer, Option } from "effect"
+import { Cache, Context, Effect, Layer, Option } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import {
   type InvalidProcessStateError,
   ProviderUserQueries,
@@ -33,39 +33,46 @@ const providerUserDisplayValue = (row: ProviderUserRow): string => {
  * single in-flight query instead of racing a check-then-act Map.
  */
 export const makeProviderUserDisplayResolver = (
-  providerUserQueries: ProviderUserQueries["Type"],
+  providerUserQueries: ProviderUserQueries["Service"],
 ): Effect.Effect<ProviderUserDisplayResolver> =>
-  Effect.cachedFunction((providerUserIdOrEmail: string) => {
-    // Provider-user IDs use pvu-*; provider-user emails contain "@".
-    // Unknown non-email values use the ID path and safely fall back below.
-    const isProviderUserId = providerUserIdOrEmail.startsWith("pvu-")
-    const isProviderUserEmail = providerUserIdOrEmail.includes("@")
-    const query = isProviderUserId
-      ? providerUserQueries.queryProviderUserByProviderUserId(
-          providerUserIdOrEmail,
-        )
-      : isProviderUserEmail
-        ? providerUserQueries.queryProviderUserByEmail(providerUserIdOrEmail)
-        : providerUserQueries.queryProviderUserByProviderUserId(
+  Cache.make({
+    capacity: Number.MAX_SAFE_INTEGER,
+    lookup: (providerUserIdOrEmail: string) => {
+      // Provider-user IDs use pvu-*; provider-user emails contain "@".
+      // Unknown non-email values use the ID path and safely fall back below.
+      const isProviderUserId = providerUserIdOrEmail.startsWith("pvu-")
+      const isProviderUserEmail = providerUserIdOrEmail.includes("@")
+      const query = isProviderUserId
+        ? providerUserQueries.queryProviderUserByProviderUserId(
             providerUserIdOrEmail,
           )
+        : isProviderUserEmail
+          ? providerUserQueries.queryProviderUserByEmail(providerUserIdOrEmail)
+          : providerUserQueries.queryProviderUserByProviderUserId(
+              providerUserIdOrEmail,
+            )
 
-    return query.pipe(
-      Effect.map((providerUser) =>
-        Option.isSome(providerUser)
-          ? providerUserDisplayValue(providerUser.value)
-          : providerUserIdOrEmail,
-      ),
-      Effect.catchAllCause((cause) =>
-        Effect.logWarning("Failed to resolve provider-user display value", {
-          cause,
-          providerUserIdOrEmail,
-        }).pipe(Effect.as(providerUserIdOrEmail)),
-      ),
-    )
-  }).pipe(Effect.map((display) => ({ display })))
+      return query.pipe(
+        Effect.map((providerUser) =>
+          Option.isSome(providerUser)
+            ? providerUserDisplayValue(providerUser.value)
+            : providerUserIdOrEmail,
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Failed to resolve provider-user display value", {
+            cause,
+            providerUserIdOrEmail,
+          }).pipe(Effect.as(providerUserIdOrEmail)),
+        ),
+      )
+    },
+  }).pipe(
+    Effect.map((cache) => ({
+      display: (key: string) => Cache.get(cache, key),
+    })),
+  )
 
-/** Bound fan-out for per-execution and per-todo work to avoid DB exhaustion. */
+/** Bound summary callback fan-out to avoid DB exhaustion. */
 const ENRICH_CONCURRENCY = 10
 
 /**
@@ -74,9 +81,7 @@ const ENRICH_CONCURRENCY = 10
  * This service batch fetches process states and completed steps,
  * then uses Form.getSummary() to compute summary for each todo.
  */
-export class TodoSummaryComputation extends Context.Tag(
-  "@pf/todo-summary/TodoSummaryComputation",
-)<
+export class TodoSummaryComputation extends Context.Service<
   TodoSummaryComputation,
   {
     /**
@@ -96,7 +101,7 @@ export class TodoSummaryComputation extends Context.Tag(
       todos: readonly TodoRow[],
     ) => Effect.Effect<TodoRow[], SqlError | InvalidProcessStateError>
   }
->() {}
+>()("@pf/todo-summary/TodoSummaryComputation") {}
 
 /**
  * Live implementation of TodoSummaryComputation.
@@ -139,21 +144,18 @@ export const TodoSummaryComputationLive = Layer.effect(
             ]),
           )
 
-          // 2. Batch fetch completed steps for all unique process executions
+          // 2. Only fetch completed steps for executions that need summaries.
           const uniqueExecutionIds = [
-            ...new Set(processStates.map((ps) => ps.processExecutionId)),
-          ]
-          const completedStepsResults = yield* Effect.all(
-            uniqueExecutionIds.map((execId) =>
-              stepCompletionOps
-                .getCompletedStepsForExecution(execId)
-                .pipe(Effect.map((steps) => [execId, steps] as const)),
+            ...new Set(
+              processStates
+                .filter((ps) => org.formByPath(ps.stepPath)?.hasSummaryFunction)
+                .map((ps) => ps.processExecutionId),
             ),
-            { concurrency: ENRICH_CONCURRENCY },
-          )
-
-          // Create map: processExecutionId -> completed steps
-          const completedStepsMap = new Map(completedStepsResults)
+          ]
+          const completedStepsMap =
+            yield* stepCompletionOps.getCompletedStepsForExecutions(
+              uniqueExecutionIds,
+            )
           // Request-local: one cached resolver per enrichWithSummaries call
           const providerUserDisplay =
             yield* makeProviderUserDisplayResolver(providerUserQueries)

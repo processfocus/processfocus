@@ -13,6 +13,9 @@
       "path": "../request-time/tsconfig.lib.json"
     },
     {
+      "path": "../identity-management/tsconfig.lib.json"
+    },
+    {
       "path": "../graphql-schema/tsconfig.lib.json"
     },
     {

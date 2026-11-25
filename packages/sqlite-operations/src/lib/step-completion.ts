@@ -31,6 +31,9 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
         const result = yield* db
           .select({
             id: schema.toDo.id,
+            externalWriteAttemptId: schema.toDo.externalWriteAttemptId,
+            failureReason: schema.toDo.failureReason,
+            restartAttemptId: schema.toDo.restartAttemptId,
             createdBy: schema.toDo.createdBy,
             processExecutionId: schema.toDo.processExecutionId,
             processStateId: schema.processExecution.processStateId,
@@ -77,7 +80,10 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           )
           .where(
             includeCompleted
-              ? eq(schema.toDo.id, todoId)
+              ? and(
+                  eq(schema.toDo.id, todoId),
+                  isNull(schema.toDo.interruptedAt),
+                )
               : and(
                   eq(schema.toDo.id, todoId),
                   eq(schema.toDo._deleted, false),
@@ -86,6 +92,154 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           .limit(1)
 
         return result[0] ?? null
+      })
+
+    const getCompletedStepsForExecutions = (
+      processExecutionIds: readonly string[],
+    ) =>
+      Effect.gen(function* () {
+        const stepsByExecution = new Map<string, CompletedStepData[]>()
+        for (const executionId of processExecutionIds) {
+          stepsByExecution.set(executionId, [])
+        }
+        if (stepsByExecution.size === 0) return stepsByExecution
+        const executionIds = [...stepsByExecution.keys()]
+
+        // First, get the start step info from process_state/process_execution.
+        // The start step doesn't have a todo - it's completed directly by the mutation.
+        // We synthesize a CompletedStepData from process_state.startedByUserId.
+        const startStepResults = yield* db
+          .select({
+            executionId: schema.processExecution.id,
+            stepPath: schema.step.path,
+            userId: schema.user.id,
+            userSub: schema.user.sub,
+            providerUserId:
+              sql<string>`COALESCE(${schema.providerUser.id}, ${schema.user.id})`.as(
+                "assigned_to_provider_user_id",
+              ),
+            providerUserName:
+              sql<string>`COALESCE(${schema.providerUser.name}, ${schema.user.sub})`.as(
+                "provider_user_name",
+              ),
+            providerUserFirstName:
+              sql<string>`COALESCE(${schema.providerUser.firstName}, ${schema.user.sub})`.as(
+                "provider_user_first_name",
+              ),
+            providerUserLastName:
+              sql<string>`COALESCE(${schema.providerUser.lastName}, '')`.as(
+                "provider_user_last_name",
+              ),
+            providerUserEmail:
+              sql<string>`COALESCE(${schema.providerUser.email}, ${schema.user.sub})`.as(
+                "provider_user_email",
+              ),
+            providerUserPicture:
+              sql<string>`COALESCE(${schema.providerUser.picture}, '')`.as(
+                "provider_user_picture",
+              ),
+            // Start step completed when process execution was created
+            completedAt:
+              sql<number>`(${schema.processExecution.createdAt} - 2440587.5) * 86400000`.as(
+                "completed_at_millis",
+              ),
+          })
+          .from(schema.processExecution)
+          .innerJoin(
+            schema.processState,
+            eq(schema.processExecution.processStateId, schema.processState.id),
+          )
+          .innerJoin(
+            schema.step,
+            eq(schema.processState.startStepId, schema.step.id),
+          )
+          .innerJoin(
+            schema.user,
+            eq(schema.processState.startedByUserId, schema.user.id),
+          )
+          .leftJoin(
+            schema.providerUser,
+            eq(schema.user.id, schema.providerUser.userId),
+          )
+          .where(inArray(schema.processExecution.id, executionIds))
+
+        // Then, query completed todos (soft-deleted with completedByUserId set)
+        // joined with user and optionally providerUser to get step completer info.
+        // Use COALESCE to provide fallback values from user.sub when providerUser is null
+        // (e.g., for M2M/system users that don't have provider user records).
+        const todoResults = yield* db
+          .select({
+            executionId: schema.toDo.processExecutionId,
+            stepPath: schema.step.path,
+            userId: schema.user.id,
+            userSub: schema.user.sub,
+            // COALESCE: use providerUser fields if available, else use user.sub as fallback
+            providerUserId:
+              sql<string>`COALESCE(${schema.providerUser.id}, ${schema.user.id})`.as(
+                "assigned_to_provider_user_id",
+              ),
+            providerUserName:
+              sql<string>`COALESCE(${schema.providerUser.name}, ${schema.user.sub})`.as(
+                "provider_user_name",
+              ),
+            providerUserFirstName:
+              sql<string>`COALESCE(${schema.providerUser.firstName}, ${schema.user.sub})`.as(
+                "provider_user_first_name",
+              ),
+            providerUserLastName:
+              sql<string>`COALESCE(${schema.providerUser.lastName}, '')`.as(
+                "provider_user_last_name",
+              ),
+            providerUserEmail:
+              sql<string>`COALESCE(${schema.providerUser.email}, ${schema.user.sub})`.as(
+                "provider_user_email",
+              ),
+            providerUserPicture:
+              sql<string>`COALESCE(${schema.providerUser.picture}, '')`.as(
+                "provider_user_picture",
+              ),
+            // SQLite: Convert Julian day to JS Date via milliseconds
+            completedAt:
+              sql<number>`(${schema.toDo.updatedAt} - 2440587.5) * 86400000`.as(
+                "completed_at_millis",
+              ),
+          })
+          .from(schema.toDo)
+          .innerJoin(schema.flow, eq(schema.toDo.flowId, schema.flow.id))
+          .innerJoin(schema.step, eq(schema.flow.targetStepId, schema.step.id))
+          .innerJoin(
+            schema.user,
+            eq(schema.toDo.completedByUserId, schema.user.id),
+          )
+          .leftJoin(
+            schema.providerUser,
+            eq(schema.user.id, schema.providerUser.userId),
+          )
+          .where(
+            and(
+              inArray(schema.toDo.processExecutionId, executionIds),
+              // Completed history is soft-deleted; the active-only index does not cover it.
+              eq(schema.toDo._deleted, sql`1`),
+              isNotNull(schema.toDo.completedByUserId),
+            ),
+          )
+
+        // Keep start attribution before completed Todos within each execution.
+        for (const row of [...startStepResults, ...todoResults]) {
+          stepsByExecution.get(row.executionId)?.push({
+            stepPath: row.stepPath,
+            userId: row.userId,
+            userSub: row.userSub,
+            providerUserId: row.providerUserId,
+            providerUserName: row.providerUserName,
+            providerUserFirstName: row.providerUserFirstName,
+            providerUserLastName: row.providerUserLastName,
+            providerUserEmail: row.providerUserEmail,
+            providerUserPicture: row.providerUserPicture,
+            completedAt: DateTime.fromDateUnsafe(new Date(row.completedAt)),
+          })
+        }
+        return stepsByExecution
       })
 
     return {
@@ -512,7 +666,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             DateTime.toEpochMillis(requestTime) >
             DateTime.toEpochMillis(expectedUpdatedAt)
               ? requestTime
-              : DateTime.add(expectedUpdatedAt, { millis: 1 })
+              : DateTime.add(expectedUpdatedAt, { milliseconds: 1 })
           const rows = yield* db
             .update(schema.processState)
             .set({
@@ -534,7 +688,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           return row
             ? {
                 kind: "updated" as const,
-                updatedAt: DateTime.unsafeMake(row.updatedAtMs),
+                updatedAt: DateTime.makeUnsafe(row.updatedAtMs),
               }
             : { kind: "conflict" as const }
         }),
@@ -573,7 +727,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             DateTime.toEpochMillis(requestTime) >
             DateTime.toEpochMillis(expectedUpdatedAt)
               ? requestTime
-              : DateTime.add(expectedUpdatedAt, { millis: 1 })
+              : DateTime.add(expectedUpdatedAt, { milliseconds: 1 })
           const path = `$.${stateKey}`
           const itemJson = globalThis.JSON.stringify(item)
           const rows = yield* db
@@ -596,7 +750,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           return row
             ? {
                 kind: "updated" as const,
-                updatedAt: DateTime.unsafeMake(row.updatedAtMs),
+                updatedAt: DateTime.makeUnsafe(row.updatedAtMs),
               }
             : { kind: "conflict" as const }
         }),
@@ -634,7 +788,6 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             })
             .where(eq(schema.toDo.id, todoId))
 
-          // Fetch the complete todo with joins (same pattern as flow-execution.ts:61-105)
           const rows = yield* db
             .select({
               id: schema.toDo.id,
@@ -705,9 +858,8 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .where(eq(schema.toDo.id, todoId))
             .limit(1)
 
-          assert(rows[0]) // silence type checker
+          assert(rows[0])
 
-          // Map to TodoRow shape
           const row = rows[0]
           return {
             id: row.id,
@@ -723,9 +875,9 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             assignedToProviderUserEmail: row.assignedToProviderUserEmail,
             role: row.role,
             description: row.description,
-            status: "Active", // Phase 1: default value
-            priority: "Medium", // Phase 1: default value
-            assignedAt: row.createdAt, // Now ISO string
+            status: "Active",
+            priority: "Medium",
+            assignedAt: row.createdAt,
             dueAt: row.slaTargetAt, // Pre-calculated from SLA at todo creation
             dueWarningAt: row.slaWarningAt, // Pre-calculated from SLA at todo creation
             formComplexity: calculateFormComplexity(row.formFields),
@@ -745,6 +897,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               completedByUserId: input.userId,
               completedByExternalParticipantId: input.externalParticipantId,
               completedByRoleId: input.completedByRoleId,
+              completionFingerprint: input.completionFingerprint ?? null,
               businessDuration: input.businessDurationMs,
               failureReason: null,
               notStartedReason: null,
@@ -772,10 +925,16 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               completedByExternalParticipantId:
                 schema.toDo.completedByExternalParticipantId,
               completedByRoleId: schema.toDo.completedByRoleId,
+              completionFingerprint: schema.toDo.completionFingerprint,
               businessDuration: schema.toDo.businessDuration,
             })
             .from(schema.toDo)
-            .where(eq(schema.toDo.id, input.todoId))
+            .where(
+              and(
+                eq(schema.toDo.id, input.todoId),
+                isNull(schema.toDo.interruptedAt),
+              ),
+            )
             .limit(1)
 
           const row = existing[0]
@@ -785,7 +944,11 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             row.completedByUserId === input.userId &&
             row.completedByExternalParticipantId ===
               input.externalParticipantId &&
-            row.completedByRoleId === input.completedByRoleId
+            // A fingerprint identifies the original chat submission, not the
+            // role that currently authorizes the caller.
+            (input.completionFingerprint === undefined
+              ? row.completedByRoleId === input.completedByRoleId
+              : row.completionFingerprint === input.completionFingerprint)
           ) {
             return { kind: "already-completed" as const }
           }
@@ -914,15 +1077,19 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           }
 
           // Validate state is a Record<string, unknown>
-          const StateSchema = Schema.Record({
-            key: Schema.String,
-            value: Schema.Unknown,
-          })
-          const parseResult = Schema.decodeUnknownEither(StateSchema)(
+          const StateSchema = Schema.Unknown.check(
+            Schema.makeFilter(
+              (value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value),
+            ),
+          ).pipe(Schema.decodeTo(Schema.Record(Schema.String, Schema.Unknown)))
+          const parseResult = Schema.decodeUnknownResult(StateSchema)(
             result[0].state ?? {},
           )
 
-          if (parseResult._tag === "Left") {
+          if (parseResult._tag === "Failure") {
             return yield* new InvalidProcessStateError({
               processStateId: result[0].processStateId,
               message: `Process state has invalid format in database`,
@@ -932,9 +1099,9 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           return {
             processExecutionId: result[0].processExecutionId,
             processStateId: result[0].processStateId,
-            state: parseResult.right,
-            updatedAt: DateTime.unsafeMake(result[0].updatedAtMs),
-            processStartedAt: DateTime.unsafeFromDate(
+            state: parseResult.success,
+            updatedAt: DateTime.makeUnsafe(result[0].updatedAtMs),
+            processStartedAt: DateTime.fromDateUnsafe(
               new Date(result[0].processStartedAt),
             ),
           }
@@ -1027,18 +1194,22 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .where(inArray(schema.toDo.id, todoIds))
 
           // Validate and transform results
-          const StateSchema = Schema.Record({
-            key: Schema.String,
-            value: Schema.Unknown,
-          })
+          const StateSchema = Schema.Unknown.check(
+            Schema.makeFilter(
+              (value) =>
+                typeof value === "object" &&
+                value !== null &&
+                !Array.isArray(value),
+            ),
+          ).pipe(Schema.decodeTo(Schema.Record(Schema.String, Schema.Unknown)))
 
           const validated: TodoWithProcessState[] = []
           for (const result of results) {
-            const parseResult = Schema.decodeUnknownEither(StateSchema)(
+            const parseResult = Schema.decodeUnknownResult(StateSchema)(
               result.state ?? {},
             )
 
-            if (parseResult._tag === "Left") {
+            if (parseResult._tag === "Failure") {
               return yield* new InvalidProcessStateError({
                 processStateId: result.processStateId,
                 message: `Process state has invalid format in database`,
@@ -1049,9 +1220,9 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               todoId: result.todoId,
               processExecutionId: result.processExecutionId,
               processStateId: result.processStateId,
-              state: parseResult.right,
+              state: parseResult.success,
               stepPath: result.stepPath,
-              processStartedAt: DateTime.unsafeFromDate(
+              processStartedAt: DateTime.fromDateUnsafe(
                 new Date(result.processStartedAt),
               ),
               itemData: result.itemData,
@@ -1061,149 +1232,12 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           return validated
         }),
 
+      getCompletedStepsForExecutions,
+
       getCompletedStepsForExecution: (processExecutionId: string) =>
-        Effect.gen(function* () {
-          // First, get the start step info from process_state/process_execution.
-          // The start step doesn't have a todo - it's completed directly by the mutation.
-          // We synthesize a CompletedStepData from process_state.startedByUserId.
-          const startStepResults = yield* db
-            .select({
-              stepPath: schema.step.path,
-              userId: schema.user.id,
-              userSub: schema.user.sub,
-              providerUserId:
-                sql<string>`COALESCE(${schema.providerUser.id}, ${schema.user.id})`.as(
-                  "assigned_to_provider_user_id",
-                ),
-              providerUserName:
-                sql<string>`COALESCE(${schema.providerUser.name}, ${schema.user.sub})`.as(
-                  "provider_user_name",
-                ),
-              providerUserFirstName:
-                sql<string>`COALESCE(${schema.providerUser.firstName}, ${schema.user.sub})`.as(
-                  "provider_user_first_name",
-                ),
-              providerUserLastName:
-                sql<string>`COALESCE(${schema.providerUser.lastName}, '')`.as(
-                  "provider_user_last_name",
-                ),
-              providerUserEmail:
-                sql<string>`COALESCE(${schema.providerUser.email}, ${schema.user.sub})`.as(
-                  "provider_user_email",
-                ),
-              providerUserPicture:
-                sql<string>`COALESCE(${schema.providerUser.picture}, '')`.as(
-                  "provider_user_picture",
-                ),
-              // Start step completed when process execution was created
-              completedAt:
-                sql<number>`(${schema.processExecution.createdAt} - 2440587.5) * 86400000`.as(
-                  "completed_at_millis",
-                ),
-            })
-            .from(schema.processExecution)
-            .innerJoin(
-              schema.processState,
-              eq(
-                schema.processExecution.processStateId,
-                schema.processState.id,
-              ),
-            )
-            .innerJoin(
-              schema.step,
-              eq(schema.processState.startStepId, schema.step.id),
-            )
-            .innerJoin(
-              schema.user,
-              eq(schema.processState.startedByUserId, schema.user.id),
-            )
-            .leftJoin(
-              schema.providerUser,
-              eq(schema.user.id, schema.providerUser.userId),
-            )
-            .where(eq(schema.processExecution.id, processExecutionId))
-
-          // Then, query completed todos (soft-deleted with completedByUserId set)
-          // joined with user and optionally providerUser to get step completer info.
-          // Use COALESCE to provide fallback values from user.sub when providerUser is null
-          // (e.g., for M2M/system users that don't have provider user records).
-          const todoResults = yield* db
-            .select({
-              stepPath: schema.step.path,
-              userId: schema.user.id,
-              userSub: schema.user.sub,
-              // COALESCE: use providerUser fields if available, else use user.sub as fallback
-              providerUserId:
-                sql<string>`COALESCE(${schema.providerUser.id}, ${schema.user.id})`.as(
-                  "assigned_to_provider_user_id",
-                ),
-              providerUserName:
-                sql<string>`COALESCE(${schema.providerUser.name}, ${schema.user.sub})`.as(
-                  "provider_user_name",
-                ),
-              providerUserFirstName:
-                sql<string>`COALESCE(${schema.providerUser.firstName}, ${schema.user.sub})`.as(
-                  "provider_user_first_name",
-                ),
-              providerUserLastName:
-                sql<string>`COALESCE(${schema.providerUser.lastName}, '')`.as(
-                  "provider_user_last_name",
-                ),
-              providerUserEmail:
-                sql<string>`COALESCE(${schema.providerUser.email}, ${schema.user.sub})`.as(
-                  "provider_user_email",
-                ),
-              providerUserPicture:
-                sql<string>`COALESCE(${schema.providerUser.picture}, '')`.as(
-                  "provider_user_picture",
-                ),
-              // SQLite: Convert Julian day to JS Date via milliseconds
-              completedAt:
-                sql<number>`(${schema.toDo.updatedAt} - 2440587.5) * 86400000`.as(
-                  "completed_at_millis",
-                ),
-            })
-            .from(schema.toDo)
-            .innerJoin(schema.flow, eq(schema.toDo.flowId, schema.flow.id))
-            .innerJoin(
-              schema.step,
-              eq(schema.flow.targetStepId, schema.step.id),
-            )
-            .innerJoin(
-              schema.user,
-              eq(schema.toDo.completedByUserId, schema.user.id),
-            )
-            .leftJoin(
-              schema.providerUser,
-              eq(schema.user.id, schema.providerUser.userId),
-            )
-            .where(
-              and(
-                eq(schema.toDo.processExecutionId, processExecutionId),
-                eq(schema.toDo._deleted, true),
-                isNotNull(schema.toDo.completedByUserId),
-              ),
-            )
-
-          // Combine start step + completed todos
-          const allResults = [...startStepResults, ...todoResults]
-
-          // Map to CompletedStepData
-          return allResults.map(
-            (row): CompletedStepData => ({
-              stepPath: row.stepPath,
-              userId: row.userId,
-              userSub: row.userSub,
-              providerUserId: row.providerUserId,
-              providerUserName: row.providerUserName,
-              providerUserFirstName: row.providerUserFirstName,
-              providerUserLastName: row.providerUserLastName,
-              providerUserEmail: row.providerUserEmail,
-              providerUserPicture: row.providerUserPicture,
-              completedAt: DateTime.unsafeFromDate(new Date(row.completedAt)),
-            }),
-          )
-        }),
+        getCompletedStepsForExecutions([processExecutionId]).pipe(
+          Effect.map((steps) => steps.get(processExecutionId) ?? []),
+        ),
 
       queryFailedTodosForExecution: (executionId: string) =>
         Effect.gen(function* () {
@@ -1237,7 +1271,46 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
           }))
         }),
 
-      clearTodoFailures: (todoIds: string[]) =>
+      failSystemStepAttempt: ({
+        todoId,
+        expectedWriteAttemptId,
+        expectedRestartAttemptId,
+        failureReason,
+        nextWriteAttemptId,
+      }) =>
+        Effect.gen(function* () {
+          const requestTime = yield* getRequestTime()
+          const userDetails = yield* getUserDetails()
+          const rows = yield* db
+            .update(schema.toDo)
+            .set({
+              failureReason,
+              externalWriteAttemptId:
+                nextWriteAttemptId ?? expectedWriteAttemptId,
+              updatedAt: requestTime,
+              updatedBy: userDetails.by,
+            })
+            .where(
+              and(
+                eq(schema.toDo.id, todoId),
+                eq(schema.toDo._deleted, false),
+                isNull(schema.toDo.failureReason),
+                expectedRestartAttemptId === null
+                  ? isNull(schema.toDo.restartAttemptId)
+                  : eq(schema.toDo.restartAttemptId, expectedRestartAttemptId),
+                expectedWriteAttemptId === null
+                  ? isNull(schema.toDo.externalWriteAttemptId)
+                  : eq(
+                      schema.toDo.externalWriteAttemptId,
+                      expectedWriteAttemptId,
+                    ),
+              ),
+            )
+            .returning({ id: schema.toDo.id })
+          return rows.length === 1
+        }),
+
+      clearTodoFailures: (todoIds, restartAttemptId) =>
         Effect.gen(function* () {
           if (todoIds.length === 0) {
             return
@@ -1250,10 +1323,17 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .set({
               failureReason: null,
               notStartedReason: null,
+              restartAttemptId,
               updatedAt: requestTime,
               updatedBy: userDetails.by,
             })
-            .where(inArray(schema.toDo.id, todoIds))
+            .where(
+              and(
+                inArray(schema.toDo.id, todoIds),
+                isNotNull(schema.toDo.failureReason),
+                eq(schema.toDo._deleted, false),
+              ),
+            )
         }),
 
       clearProcessExecutionFinished: (executionId: string) =>
@@ -1276,7 +1356,10 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
             .where(eq(schema.processExecution.id, executionId))
         }),
 
-      reopenFailedSystemStartExecution: (executionId: string) =>
+      reopenFailedSystemStartExecution: (
+        executionId: string,
+        restartAttemptId: string,
+      ) =>
         Effect.gen(function* () {
           const requestTime = yield* getRequestTime()
           const userDetails = yield* getUserDetails()
@@ -1289,6 +1372,7 @@ export const SqliteStepCompletionOperationsLive = Layer.effect(
               // System-start failures store the failure text in abandonedReason
               // with abandonedAt null. Clear only that failure representation.
               abandonedReason: null,
+              restartAttemptId,
               updatedAt: requestTime,
               updatedBy: userDetails.by,
             })

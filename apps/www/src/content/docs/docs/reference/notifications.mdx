@@ -1,0 +1,28 @@
+---
+title: Notifications
+description: Configure who receives email when a process execution fails.
+---
+
+Use `ExecutionFailureNotifications` to choose which roles receive email
+when a process execution fails fatally. Add the construct to your
+organisation and pass the roles to notify:
+
+```typescript
+import { ExecutionFailureNotifications, Organisation, Role } from "@pf/process"
+
+export const org = new Organisation({ name: "Demo Store" })
+const operations = new Role(org, "Operations")
+
+new ExecutionFailureNotifications(org, { roles: [operations] })
+```
+
+Role members need an email address and the **Execution failures** email
+preference enabled. In the Dashboard, open **Settings → Users**, select
+the user, and find **Notification Preferences**.
+
+The email identifies the execution and includes the failure reason. After
+correcting the cause, see [Retrying a process execution](/docs/frontend/retrying-a-process-execution/)
+to resume the failed work.
+
+For alerts about new To-Dos while the Dashboard is open, see
+[desktop notifications](/docs/frontend/notifications/).

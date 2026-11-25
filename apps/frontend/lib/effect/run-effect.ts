@@ -5,7 +5,7 @@ import { StdoutJsonLoggerLive } from "@pf/effect-json-logger"
 export const LoggerLive =
   process.env["NODE_ENV"] === "production"
     ? StdoutJsonLoggerLive
-    : Logger.pretty
+    : Logger.layer([Logger.consolePretty()])
 
 export const runEffect = <A, E>(
   effect: Effect.Effect<A, E, never>,

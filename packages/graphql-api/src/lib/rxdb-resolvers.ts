@@ -1,7 +1,6 @@
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { FileSystem } from "@effect/platform"
-import { Effect } from "effect"
+import { Effect, FileSystem } from "effect"
 import type { GraphQLResolveInfo } from "graphql"
 import { AuthorizationService } from "@pf/auth-policy"
 import {
@@ -19,32 +18,34 @@ import type {
   RequireFields,
 } from "@pf/graphql-schema"
 import { NotAuthorized, PullCheckpointMode } from "@pf/graphql-schema"
+import { checkExecutionAbandonAuthorizations } from "@pf/process-execution/authorization"
+import { hasPendingSystemStartRestartDispatch } from "@pf/process-execution/recovery"
 import { TodoSummaryComputation } from "@pf/todo-summary"
 import {
   buildExecutionAuthorizationResource,
   buildPrincipal,
   buildStepPrincipal,
   canSkipScheduleWaits,
-  checkStepAuthorization,
   filterAuthorizedExecutionRows,
-  filterAuthorizedProcessRows,
   filterAuthorizedTodoRows,
-  trySequentialStepAuthorization,
 } from "./authorization"
 import { DraftProcessEvents } from "./draft-process-events"
-import { checkExecutionAbandonAuthorization } from "./execution-abandon-authorization"
 import { ExecutionEvents } from "./execution-events"
-import { hasPendingSystemStartRestartDispatch } from "./execution-restart"
 import { ResolverRuntime } from "./graphql-api"
 import { ProcessDurationService } from "./process-duration-service"
 import { ProcessEvents } from "./process-events"
+import { createResolverExecutor } from "./resolver-utils"
 import {
-  createResolverExecutor,
-  getProcessPathFromStepPath,
-} from "./resolver-utils"
-import { DraftProcessExecutionCollectionOps } from "./rxdb/draft-process-execution"
+  DraftProcessExecutionCollectionOps,
+  canSaveStartForm,
+} from "./rxdb/draft-process-execution"
 import { ExecutionCollectionOps } from "./rxdb/execution"
 import { ProcessCollectionOps, formatDurationRange } from "./rxdb/process"
+import {
+  buildProcessReplicationPrincipal,
+  pullReplicatedProcesses,
+} from "./rxdb/process-visibility"
+import { withProcessVisibilityTransaction } from "./rxdb/process-visibility-transaction"
 import {
   makeAuthorizedStreamSubscription,
   makePushResolver,
@@ -114,7 +115,7 @@ export const rxdbSchema = Effect.gen(function* () {
     ProcessEvents,
     "streamProcess",
     filterAuthorizedProcesses,
-    buildStepPrincipal,
+    buildProcessReplicationPrincipal,
     runPromise,
   )
 
@@ -140,9 +141,7 @@ export const rxdbSchema = Effect.gen(function* () {
         Effect.gen(function* () {
           const draftOps = yield* DraftProcessExecutionCollectionOps
           const stepRoleQueries = yield* StepRoleQueries
-          const auth = yield* AuthorizationService
-
-          const principal = yield* buildPrincipal(context)
+          const principal = yield* buildStepPrincipal(context)
           const authorizedRows = yield* scanAuthorizedPull({
             initialCheckpoint: args.checkpoint ?? null,
             limit: args.limit,
@@ -156,19 +155,12 @@ export const rxdbSchema = Effect.gen(function* () {
                   )
                 const authorized: typeof rows = []
                 for (const row of rows) {
-                  const stepRoleInfo = stepRolesMap.get(row.startStepPath) ?? {
-                    rolePath: null,
-                    supportingRolePaths: [],
-                    startsProcess: true,
-                    embedded: false,
-                  }
-                  const canDraft = yield* trySequentialStepAuthorization(
-                    stepRoleInfo,
+                  const allowed = yield* canSaveStartForm(
+                    principal,
                     row.startStepPath,
-                    getProcessPathFromStepPath(row.startStepPath),
-                    (resource) => auth.canDraftStep(principal, resource),
+                    stepRolesMap.get(row.startStepPath),
                   )
-                  if (canDraft) authorized.push(row)
+                  if (allowed) authorized.push(row)
                 }
                 return authorized
               }),
@@ -189,21 +181,22 @@ export const rxdbSchema = Effect.gen(function* () {
         Effect.gen(function* () {
           const processOps = yield* ProcessCollectionOps
           const durationService = yield* ProcessDurationService
+          const principal = yield* buildProcessReplicationPrincipal(context)
 
-          const authorizedRows = yield* scanAuthorizedPull({
-            initialCheckpoint: args.checkpoint ?? null,
-            limit: args.limit,
-            pull: processOps.pull,
-            checkpointOf: (row) => ({ id: row.id, updatedAt: row.updatedAt }),
-            authorizeRows: (rows) => filterAuthorizedProcessRows(context, rows),
-            idOfAuthorized: (row) => row.id,
-          })
+          const { rows: authorizedRows, checkpoint } =
+            yield* pullReplicatedProcesses(
+              principal,
+              args.checkpoint ?? null,
+              args.limit,
+            )
 
           const businessDurations = yield* durationService.calculateDurations(
-            authorizedRows.map((row) => ({
-              id: row.id,
-              orgUnitId: row.orgUnit.id,
-            })),
+            authorizedRows
+              .filter((row) => !row.deleted)
+              .map((row) => ({
+                id: row.id,
+                orgUnitId: row.orgUnit.id,
+              })),
           )
 
           const documents = yield* Effect.all(
@@ -211,6 +204,8 @@ export const rxdbSchema = Effect.gen(function* () {
               processOps.mapToGraphql(row).pipe(
                 Effect.flatMap((doc) =>
                   Effect.gen(function* () {
+                    if (row.deleted)
+                      return { ...doc, canSkipScheduleWaits: false }
                     const canSkip = yield* canSkipScheduleWaits(
                       context,
                       row.path,
@@ -233,8 +228,8 @@ export const rxdbSchema = Effect.gen(function* () {
             ),
             { concurrency: "unbounded" },
           )
-          return wrapAsPullBulk(documents)
-        }),
+          return wrapAsPullBulk(documents, { checkpoint })
+        }).pipe(withProcessVisibilityTransaction),
       pullTodo: (
         _parent: unknown,
         args: RequireFields<QueryPullTodoArgs, "limit">,
@@ -363,6 +358,11 @@ export const rxdbSchema = Effect.gen(function* () {
                   principal,
                   rows,
                 )
+                const abandonAuthorizations =
+                  yield* checkExecutionAbandonAuthorizations(
+                    principal,
+                    visibleRows.map((row) => row.execution),
+                  )
                 const authorized: Array<{
                   row: (typeof rows)[number]
                   canAbandonExecution: boolean
@@ -396,17 +396,10 @@ export const rxdbSchema = Effect.gen(function* () {
                     return yield* auth.canRestartExecution(principal, resource)
                   })
 
-                  const abandonAuthorization =
-                    yield* checkExecutionAbandonAuthorization(
-                      principal,
-                      row.execution.id,
-                      row.execution.status,
-                      { startStepPath: row.execution.startStepPath },
-                    )
-
                   authorized.push({
                     row,
-                    canAbandonExecution: abandonAuthorization.authorized,
+                    canAbandonExecution:
+                      abandonAuthorizations.get(row.execution.id) ?? false,
                     canRestartExecution,
                   })
                 }
@@ -443,50 +436,28 @@ export const rxdbSchema = Effect.gen(function* () {
         Effect.gen(function* () {
           const draftOps = yield* DraftProcessExecutionCollectionOps
           const stepRoleQueries = yield* StepRoleQueries
-          const auth = yield* AuthorizationService
+          const principal = yield* buildStepPrincipal(context)
 
-          // Check authorization for each write row
-          // For drafts, we check if user can start the process (via the start step)
-          if (args.writeRows) {
-            for (const row of args.writeRows) {
-              const persisted = (yield* draftOps.getByIds([
-                row.newDocumentState.id,
-              ]))[0]
-
-              if (!persisted && !row.assumedMasterState) {
-                yield* checkStepAuthorization(
-                  context,
-                  row.newDocumentState.startStepPath,
-                )
-                continue
-              }
-
-              if (!persisted) {
-                return yield* new NotAuthorized({
-                  action: "write",
-                  resource: row.newDocumentState.id,
-                  message: "Draft process execution is not accessible",
-                })
-              }
-
-              const stepRoleInfo =
-                yield* stepRoleQueries.queryRolePathsByStepPath(
-                  persisted.startStepPath,
-                )
-              const principal = yield* buildPrincipal(context)
-              const canDraft = yield* trySequentialStepAuthorization(
-                stepRoleInfo,
-                persisted.startStepPath,
-                getProcessPathFromStepPath(persisted.startStepPath),
-                (resource) => auth.canDraftStep(principal, resource),
-              )
-              if (!canDraft) {
-                return yield* new NotAuthorized({
-                  action: "write",
-                  resource: persisted.id,
-                  message: "Draft process execution is not accessible",
-                })
-              }
+          for (const {
+            newDocumentState,
+            assumedMasterState,
+          } of args.writeRows ?? []) {
+            // Lookup is scoped to the persisted owner, not just the Cedar role.
+            const [persisted] = yield* draftOps.getByIds([newDocumentState.id])
+            const path =
+              persisted?.startStepPath ?? newDocumentState.startStepPath
+            const step = yield* stepRoleQueries.queryRolePathsByStepPath(path)
+            const allowed =
+              context._userDetails.id &&
+              (persisted ||
+                (!assumedMasterState && !newDocumentState.deleted)) &&
+              (yield* canSaveStartForm(principal, path, step))
+            if (!allowed) {
+              return yield* new NotAuthorized({
+                action: "write",
+                resource: newDocumentState.id,
+                message: "Draft process execution is not accessible",
+              })
             }
           }
 

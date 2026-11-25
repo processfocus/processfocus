@@ -1,14 +1,7 @@
-import { HttpClient, HttpClientRequest } from "@effect/platform"
-import {
-  Config,
-  Context,
-  Data,
-  Effect,
-  Layer,
-  Option,
-  Redacted,
-  Schema,
-} from "effect"
+import { readConfiguration } from "@processfocus/runtime"
+import { Context, Data, Effect, Layer, Option, Redacted, Schema } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/http"
+import { ResendConfiguration } from "./resend-configuration"
 
 export interface ResendEmailTemplate {
   readonly id: string
@@ -41,9 +34,7 @@ export interface ResendEmailResponse {
   readonly sentTo: string | readonly string[]
 }
 
-export class ResendClientConfig extends Context.Tag(
-  "@processfocus/plugin-resend/ResendClientConfig",
-)<
+export class ResendClientConfig extends Context.Service<
   ResendClientConfig,
   {
     readonly apiKey: Redacted.Redacted<string>
@@ -51,20 +42,18 @@ export class ResendClientConfig extends Context.Tag(
     readonly rerouteEmail: Option.Option<string>
     readonly environment: Option.Option<string>
   }
->() {}
+>()("@processfocus/plugin-resend/ResendClientConfig") {}
 
-export class ResendClient extends Context.Tag(
-  "@processfocus/plugin-resend/ResendClient",
-)<
+export class ResendClient extends Context.Service<
   ResendClient,
   {
     readonly sendEmail: (
       message: ResendEmailRequest,
     ) => Effect.Effect<ResendEmailResponse, ResendError, never>
   }
->() {}
+>()("@processfocus/plugin-resend/ResendClient") {}
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 const normalizeEmail = (email: string): string => email.trim().toLowerCase()
 
@@ -86,37 +75,25 @@ const targetsOnlyRerouteEmail = (
 /**
  * Runtime capability for deferred Resend delivery.
  *
- * When this service is provided (e.g. by the AWS runtime), the Resend step
+ * When waiting is enabled, the registered plugin provides this service. The step
  * sends the email, tags it for webhook correlation, persists tracking
  * metadata into process state, and returns a deferred result instead of
  * completing inline.
  *
- * When this service is absent (e.g. local development), the Resend step
- * keeps its current immediate-completion behavior.
+ * When waiting is disabled, this service is absent and the step completes after
+ * provider acceptance. This policy is independent of recipient rerouting.
  */
-export class ResendDeferredDelivery extends Context.Tag(
-  "@processfocus/plugin-resend/ResendDeferredDelivery",
-)<
+export class ResendDeferredDelivery extends Context.Service<
   ResendDeferredDelivery,
   {
     /** Environment tag for webhook correlation and metadata (e.g. "production", "staging") */
     readonly environment: string
   }
->() {}
+>()("@processfocus/plugin-resend/ResendDeferredDelivery") {}
 
 export const ResendClientConfigFromEnv = Layer.effect(
   ResendClientConfig,
-  Effect.gen(function* () {
-    return {
-      apiKey: yield* Config.redacted("RESEND_API_KEY"),
-      enabled: yield* Config.withDefault(
-        Config.boolean("RESEND_ENABLED"),
-        false,
-      ),
-      rerouteEmail: yield* Config.option(Config.string("RESEND_REROUTE_EMAIL")),
-      environment: yield* Config.option(Config.string("PF_ENV")),
-    }
-  }),
+  readConfiguration(ResendConfiguration),
 )
 
 export const ResendClientLive = Layer.effect(
@@ -255,7 +232,7 @@ export const ResendClientLive = Layer.effect(
 
       if (response.status < 200 || response.status >= 300) {
         const errorBody = yield* response.text.pipe(
-          Effect.catchAll(() => Effect.succeed("")),
+          Effect.catch(() => Effect.succeed("")),
         )
 
         return yield* new ResendError({
@@ -278,7 +255,9 @@ export const ResendClientLive = Layer.effect(
         responseLength: responseBody.length,
       })
 
-      const result = yield* Schema.decodeUnknown(JsonValue)(responseBody).pipe(
+      const result = yield* Schema.decodeUnknownEffect(JsonValue)(
+        responseBody,
+      ).pipe(
         Effect.map((value) => value as { id?: string }),
         Effect.mapError(
           (cause) =>

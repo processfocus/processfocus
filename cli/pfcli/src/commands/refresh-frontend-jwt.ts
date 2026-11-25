@@ -4,6 +4,10 @@ import { getAudience, getClientId } from "@pf/auth-session"
 import { DATABASE_PATH_NOT_CONFIGURED, resolveDatabasePath } from "@pf/db-info"
 import { OrgLoadError } from "../errors"
 import { makeFrontendJwtStorageLayer } from "../utils/frontend-jwt-storage-layer"
+import {
+  type FrontendJwtOptions,
+  validateUrlOption,
+} from "../utils/operator-inputs"
 import { resolveIssuerUrl } from "../utils/resolve-issuer-url"
 
 /**
@@ -24,9 +28,14 @@ interface RefreshFrontendJwtDependencies {
 export const runRefreshFrontendJwt = (
   orgPath: string,
   dependencies: RefreshFrontendJwtDependencies = {},
+  options: FrontendJwtOptions = {},
 ) =>
   Effect.gen(function* () {
-    const databasePath = resolveDatabasePath(orgPath)
+    const issuerUrl =
+      options.issuerUrl === undefined
+        ? resolveIssuerUrl()
+        : yield* validateUrlOption(options.issuerUrl, "--issuer-url")
+    const databasePath = options.databasePath ?? resolveDatabasePath(orgPath)
 
     if (!databasePath) {
       return yield* new OrgLoadError({
@@ -37,7 +46,6 @@ export const runRefreshFrontendJwt = (
 
     const appLayer = makeFrontendJwtStorageLayer(databasePath)
 
-    const issuerUrl = resolveIssuerUrl()
     const clientId = getClientId()
     const audience = getAudience()
 

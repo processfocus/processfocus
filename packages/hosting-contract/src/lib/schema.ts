@@ -14,24 +14,15 @@ export const ExecutionStart = Schema.Struct({
   processPath: Schema.String,
 })
 
-export const SubscriptionTransportKind = Schema.Literal(
+export const SubscriptionTransportKind = Schema.Literals([
   "GRAPHQL_WS",
   "APPSYNC_EVENTS",
-)
+])
 
 export const SubscriptionTransport = Schema.Struct({
   kind: SubscriptionTransportKind,
   /** Null when kind is "GRAPHQL_WS". */
   appSyncEventsHttpHost: Schema.NullOr(Schema.String),
-})
-
-// --- auth -------------------------------------------------------------------
-
-export const RequestProviderUserPermissions = Schema.Struct({
-  requestProviderUserPermissions: Schema.Struct({
-    success: Schema.Boolean,
-    error: Schema.optionalWith(Schema.NullOr(Schema.String), { exact: true }),
-  }),
 })
 
 // --- projects ---------------------------------------------------------------
@@ -73,14 +64,14 @@ export const DnsRecords = Schema.Struct({
   getDnsRecords: Schema.Struct({
     defaultDomain: Schema.optional(Schema.String),
     frontendUrl: Schema.String,
-    frontendUrlNote: Schema.Union(Schema.Null, Schema.String),
-    customDomain: Schema.Union(Schema.Null, Schema.String),
-    certificateStatus: Schema.Union(Schema.Null, Schema.String),
+    frontendUrlNote: Schema.Union([Schema.Null, Schema.String]),
+    customDomain: Schema.Union([Schema.Null, Schema.String]),
+    certificateStatus: Schema.Union([Schema.Null, Schema.String]),
     warnings: Schema.Array(Schema.String),
     validationRecords: Schema.Array(DnsRecord),
-    validationNote: Schema.Union(Schema.Null, Schema.String),
-    siteAccessRecord: Schema.Union(Schema.Null, DnsRecord),
-    siteAccessNote: Schema.Union(Schema.Null, Schema.String),
+    validationNote: Schema.Union([Schema.Null, Schema.String]),
+    siteAccessRecord: Schema.Union([Schema.Null, DnsRecord]),
+    siteAccessNote: Schema.Union([Schema.Null, Schema.String]),
     postscriptNotes: Schema.Array(Schema.String),
   }),
 })
@@ -89,11 +80,11 @@ export const SubscriptionTransportResponse = Schema.Struct({
   subscriptionTransport: SubscriptionTransport,
 })
 
-export const DeployProgressStatus = Schema.Literal(
+export const DeployProgressStatus = Schema.Literals([
   "progress",
   "completed",
   "failed",
-)
+])
 
 export const DeployProgressEvent = Schema.Struct({
   version: Schema.Literal(1),
@@ -111,7 +102,7 @@ export const RuntimeLogEvent = Schema.Struct({
   message: Schema.String,
 })
 
-export const RuntimeLogTarget = Schema.Literal("PRIMARY", "CANARY")
+export const RuntimeLogTarget = Schema.Literals(["PRIMARY", "CANARY"])
 
 export const GetRuntimeLogs = Schema.Struct({
   getRuntimeLogs: Schema.Struct({
@@ -122,7 +113,7 @@ export const GetRuntimeLogs = Schema.Struct({
 // --- database operations ----------------------------------------------------
 
 export const DATABASE_UPLOAD_MODES = ["data-copy", "exact-restore"] as const
-export const DatabaseUploadMode = Schema.Literal(...DATABASE_UPLOAD_MODES)
+export const DatabaseUploadMode = Schema.Literals(DATABASE_UPLOAD_MODES)
 export type DatabaseUploadMode = typeof DatabaseUploadMode.Type
 
 export const DatabaseDownloadSession = Schema.Struct({
@@ -130,7 +121,7 @@ export const DatabaseDownloadSession = Schema.Struct({
     databaseUrl: Schema.String,
     authToken: Schema.String,
     databaseName: Schema.String,
-    engine: Schema.Literal("libsql", "tursodb"),
+    engine: Schema.Literals(["libsql", "tursodb"]),
     target: Schema.Struct({ stageName: Schema.String }),
   }),
 })
@@ -175,12 +166,12 @@ export const DatabaseShellSession = Schema.Struct({
 
 export const ConfigParameter = Schema.Struct({
   name: Schema.String,
-  value: Schema.Union(Schema.Null, Schema.String),
+  value: Schema.Union([Schema.Null, Schema.String]),
   isSecret: Schema.Boolean,
 })
 
 export const GetConfigParameter = Schema.Struct({
-  getConfigParameter: Schema.Union(Schema.Null, ConfigParameter),
+  getConfigParameter: Schema.Union([Schema.Null, ConfigParameter]),
 })
 
 export const ListConfigParameters = Schema.Struct({
@@ -251,12 +242,12 @@ export const GrantProjectUserRole = Schema.Struct({
     email: Schema.String,
     rolePath: Schema.String,
     alreadyHadRole: Schema.Boolean,
-    error: Schema.optionalWith(Schema.NullOr(Schema.String), { exact: true }),
+    error: Schema.optionalKey(Schema.NullOr(Schema.String)),
   }),
 })
 
 export const GenerateProjectRegistrationLink = Schema.Struct({
-  generateProjectRegistrationLink: Schema.Union(
+  generateProjectRegistrationLink: Schema.Union([
     Schema.Struct({
       __typename: Schema.Literal("ProjectRegistrationLinkSuccess"),
       email: Schema.String,
@@ -267,5 +258,5 @@ export const GenerateProjectRegistrationLink = Schema.Struct({
       __typename: Schema.Literal("ProjectRegistrationLinkFailure"),
       error: Schema.String,
     }),
-  ),
+  ]),
 })

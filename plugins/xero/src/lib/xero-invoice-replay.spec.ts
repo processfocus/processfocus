@@ -1,4 +1,4 @@
-import { Effect, Either, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { CurrentStepJobContext } from "@pf/process"
 import {
   XERO_IDEMPOTENCY_RETENTION_MS,
@@ -22,8 +22,7 @@ const sampleInput = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
     postalCode: "6011",
     country: "New Zealand",
   },
-  productSku: "TBS-100",
-  agreedPrice: "100.00",
+  lines: [{ productSku: "TBS-100", quantity: 1, unitAmount: "100.00" }],
   currency: "NZD",
   reference: "ORD-1001",
   date: "2026-03-15",
@@ -52,6 +51,7 @@ const seedCatalogItem = (
   plugin.controller.seedItem({
     itemCode: "TBS-100",
     name: "TBS Product",
+    description: "TBS Product",
     taxType: "NONE",
     taxPercent: 0,
   })
@@ -135,11 +135,11 @@ describe("Xero Sales Invoice replay safety", () => {
     plugin.controller.scriptTimeoutAfterCommit("contact.create")
 
     const first = await Effect.runPromise(
-      issue(plugin.layer).pipe(Effect.either),
+      issue(plugin.layer).pipe(Effect.result),
     )
-    expect(Either.isLeft(first)).toBe(true)
-    if (Either.isLeft(first)) {
-      expect(first.left.retryable).toBe(true)
+    expect(Result.isFailure(first)).toBe(true)
+    if (Result.isFailure(first)) {
+      expect(first.failure.retryable).toBe(true)
     }
     expect(plugin.controller.listContacts()).toHaveLength(3)
     expect(plugin.controller.listInvoices()).toHaveLength(0)
@@ -156,9 +156,9 @@ describe("Xero Sales Invoice replay safety", () => {
     plugin.controller.scriptTimeoutAfterCommit("contact.create")
 
     const first = await Effect.runPromise(
-      issue(plugin.layer).pipe(Effect.either),
+      issue(plugin.layer).pipe(Effect.result),
     )
-    expect(Either.isLeft(first)).toBe(true)
+    expect(Result.isFailure(first)).toBe(true)
     expect(plugin.controller.listContacts()).toHaveLength(1)
     expect(plugin.controller.listInvoices()).toHaveLength(0)
 
@@ -179,11 +179,11 @@ describe("Xero Sales Invoice replay safety", () => {
     plugin.controller.scriptTimeoutAfterCommit("invoice.create")
 
     const first = await Effect.runPromise(
-      issue(plugin.layer).pipe(Effect.either),
+      issue(plugin.layer).pipe(Effect.result),
     )
-    expect(Either.isLeft(first)).toBe(true)
-    if (Either.isLeft(first)) {
-      expect(first.left.retryable).toBe(true)
+    expect(Result.isFailure(first)).toBe(true)
+    if (Result.isFailure(first)) {
+      expect(first.failure.retryable).toBe(true)
     }
     expect(plugin.controller.listInvoices()).toHaveLength(1)
     const committed = plugin.controller.listInvoices()[0]
@@ -205,15 +205,15 @@ describe("Xero Sales Invoice replay safety", () => {
     })
 
     const result = await Effect.runPromise(
-      issue(plugin.layer).pipe(Effect.either),
+      issue(plugin.layer).pipe(Effect.result),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isRight(result)) {
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isSuccess(result)) {
       throw new Error("expected idempotency conflict")
     }
-    expect(result.left.retryable).toBe(false)
-    expect(result.left.code).toBe("idempotency_conflict")
+    expect(result.failure.retryable).toBe(false)
+    expect(result.failure.code).toBe("idempotency_conflict")
     expect(plugin.controller.listInvoices()).toHaveLength(0)
   })
 
@@ -249,15 +249,15 @@ describe("Xero Sales Invoice replay safety", () => {
     })
 
     const result = await Effect.runPromise(
-      issue(plugin.layer).pipe(Effect.either),
+      issue(plugin.layer).pipe(Effect.result),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isRight(result)) {
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isSuccess(result)) {
       throw new Error("expected ambiguous Reference")
     }
-    expect(result.left.retryable).toBe(false)
-    expect(result.left.code).toBe("ambiguous_reference")
+    expect(result.failure.retryable).toBe(false)
+    expect(result.failure.code).toBe("ambiguous_reference")
     expect(plugin.controller.listInvoices()).toHaveLength(2)
   })
 
@@ -276,16 +276,16 @@ describe("Xero Sales Invoice replay safety", () => {
     })
 
     const result = await Effect.runPromise(
-      issue(plugin.layer).pipe(Effect.either),
+      issue(plugin.layer).pipe(Effect.result),
     )
     const after = plugin.controller.listInvoices()[0]
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isRight(result)) {
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isSuccess(result)) {
       throw new Error("expected intent conflict")
     }
-    expect(result.left.retryable).toBe(false)
-    expect(result.left.code).toBe("intent_conflict")
+    expect(result.failure.retryable).toBe(false)
+    expect(result.failure.code).toBe("intent_conflict")
     expect(after).toEqual(seeded)
   })
 
@@ -322,12 +322,12 @@ describe("Xero Sales Invoice replay safety", () => {
       })
 
       const result = await Effect.runPromise(
-        issue(plugin.layer).pipe(Effect.either),
+        issue(plugin.layer).pipe(Effect.result),
       )
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left.code).toBe("intent_conflict")
-        expect(result.left.retryable).toBe(false)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure.code).toBe("intent_conflict")
+        expect(result.failure.retryable).toBe(false)
       }
       expect(plugin.controller.listInvoices()).toHaveLength(1)
     }

@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, Data, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import type { UserDetails } from "./user-details"
 
@@ -24,9 +24,7 @@ export const normalizeExternalParticipantEmail = (
   return normalized
 }
 
-export class ExternalParticipantOperations extends Context.Tag(
-  "@pf/graphql-db-operations/ExternalParticipantOperations",
-)<
+export class ExternalParticipantOperations extends Context.Service<
   ExternalParticipantOperations,
   {
     readonly upsertByEmail: (
@@ -37,4 +35,4 @@ export class ExternalParticipantOperations extends Context.Tag(
       RequestTime | UserDetails
     >
   }
->() {}
+>()("@pf/graphql-db-operations/ExternalParticipantOperations") {}

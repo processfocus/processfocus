@@ -5,17 +5,10 @@ import {
   type Effect,
   Effect as EffectModule,
   String as EffectString,
-  JSONSchema,
   Option,
   SchemaAST,
   Schema as SchemaModule,
 } from "effect"
-import type { JsonSchema7Root } from "effect/JSONSchema"
-import {
-  type ClientFormDefinition,
-  type WalkError,
-  asClientRepresentation,
-} from "@pf/form-client-representation"
 import {
   METRIC_BREAKDOWN_SYMBOL,
   type MetricBreakdownControl,
@@ -25,6 +18,7 @@ import {
 import {
   type DeepWritable,
   type FlattenFields,
+  type FlattenFieldsKeepingReadOnly,
   getSchemaDefaults,
   submissionSchemaSync as makeSubmissionSchema,
 } from "@pf/form-submission-schema"
@@ -127,15 +121,9 @@ const defaultSchemaDescriptions = new Set(["a string", "a number", "a boolean"])
 // only when the decoded form is not object-like.
 function isObjectLikeListColumnAst(ast: SchemaAST.AST): boolean {
   switch (ast._tag) {
-    case "TypeLiteral":
-    case "TupleType":
+    case "Objects":
+    case "Arrays":
       return true
-    case "Refinement":
-      return isObjectLikeListColumnAst(ast.from)
-    case "Transformation":
-      // Object-like decoded forms are not transparent scalar sort keys, even
-      // when the encoded input side is scalar.
-      return isObjectLikeListColumnAst(ast.to)
     case "Union":
       return ast.types.some((type) => isObjectLikeListColumnAst(type))
     default:
@@ -144,10 +132,15 @@ function isObjectLikeListColumnAst(ast: SchemaAST.AST): boolean {
 }
 
 function isScalarListColumnAst(ast: SchemaAST.AST): boolean {
+  if (ast.encoding)
+    return (
+      !isObjectLikeListColumnAst(ast) &&
+      isScalarListColumnAst(SchemaAST.toEncoded(ast))
+    )
   switch (ast._tag) {
-    case "StringKeyword":
-    case "NumberKeyword":
-    case "BooleanKeyword":
+    case "String":
+    case "Number":
+    case "Boolean":
       return true
     case "Literal":
       return (
@@ -155,20 +148,12 @@ function isScalarListColumnAst(ast: SchemaAST.AST): boolean {
         typeof ast.literal === "number" ||
         typeof ast.literal === "boolean"
       )
-    case "Refinement":
-      return isScalarListColumnAst(ast.from)
-    case "Transformation":
-      // Transformed fields sort by their encoded scalar representation, but
-      // transforms that decode into objects or arrays are not sortable by default.
-      return (
-        isScalarListColumnAst(ast.from) && !isObjectLikeListColumnAst(ast.to)
-      )
     case "Union": {
       const sortableMembers = ast.types.filter(
         (type) =>
-          !(type._tag === "Literal" && type.literal === null) &&
-          type._tag !== "UndefinedKeyword" &&
-          type._tag !== "VoidKeyword",
+          type._tag !== "Null" &&
+          type._tag !== "Undefined" &&
+          type._tag !== "Void",
       )
       return (
         sortableMembers.length > 0 &&
@@ -182,23 +167,27 @@ function isScalarListColumnAst(ast: SchemaAST.AST): boolean {
 
 function toListColumn(
   field: string,
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.Codec<unknown, unknown>,
   options?: { readonly sortable?: boolean },
 ): ListColumn {
-  const titleAnnotation = schema.ast.annotations[SchemaAST.TitleAnnotationId]
+  const titleAnnotation = SchemaAST.resolveTitle(schema.ast)
   const label =
     typeof titleAnnotation === "string"
       ? titleAnnotation
       : EffectString.capitalize(field)
-  const visibleInList = schema.ast.annotations[ListVisibleInList] !== false
-  const sortableAnnotation = schema.ast.annotations[ListSortable]
+  const visibleInList =
+    Reflect.get(SchemaAST.resolve(schema.ast) ?? {}, ListVisibleInList) !==
+    false
+  const sortableAnnotation = Reflect.get(
+    SchemaAST.resolve(schema.ast) ?? {},
+    ListSortable,
+  )
   const sortable =
     options?.sortable ??
     (typeof sortableAnnotation === "boolean"
       ? sortableAnnotation
       : visibleInList && isScalarListColumnAst(schema.ast))
-  const descriptionAnnotation =
-    schema.ast.annotations[SchemaAST.DescriptionAnnotationId]
+  const descriptionAnnotation = SchemaAST.resolveDescription(schema.ast)
   const description =
     typeof descriptionAnnotation === "string" &&
     !defaultSchemaDescriptions.has(descriptionAnnotation)
@@ -276,6 +265,11 @@ export type ListQueryFunction<
 /**
  * Function type for fetching a single list item by ID.
  * Returns the item or null if not found.
+ *
+ * The returned data is flat: wrapper fields are visual-only containers whose
+ * children flatten into the parent, structural-only elements are omitted, and
+ * read-only fields stay because they are display data. This matches the
+ * flattened GraphQL detail type and the browser renderer's value paths.
  */
 export type ListItemQueryFunction<
   TForm extends Schema.Struct.Fields,
@@ -283,12 +277,24 @@ export type ListItemQueryFunction<
 > = (
   id: string,
   ctx?: ListItemQueryContext,
-) => Effect.Effect<OutputItem<TForm> | null, never, R>
+) => Effect.Effect<ListItemDetail<TForm> | null, never, R>
+
+/**
+ * Type for the data an item query returns for a list form: flattened wrapper
+ * fields, no structural-only elements, read-only fields kept.
+ */
+export type ListItemDetail<TForm extends Schema.Struct.Fields> =
+  FlattenFieldsKeepingReadOnly<TForm> extends infer F extends
+    Schema.Struct.Fields
+    ? Schema.Schema.Type<Schema.Struct<F>>
+    : never
 
 const collectMetricBreakdownControlsFromAst = (
   ast: SchemaAST.AST,
 ): readonly MetricBreakdownControl[] => {
-  const metricAnnotation = SchemaAST.getAnnotation(ast, METRIC_BREAKDOWN_SYMBOL)
+  const metricAnnotation = Option.fromNullishOr(
+    Reflect.get(SchemaAST.resolve(ast) ?? {}, METRIC_BREAKDOWN_SYMBOL),
+  )
   const metricOptions = Option.getOrUndefined(metricAnnotation)
 
   const ownControls =
@@ -298,20 +304,13 @@ const collectMetricBreakdownControlsFromAst = (
       : []
 
   switch (ast._tag) {
-    case "TypeLiteral":
+    case "Objects":
       return [
         ...ownControls,
         ...ast.propertySignatures.flatMap((property) =>
           collectMetricBreakdownControlsFromAst(property.type),
         ),
       ]
-    case "Refinement":
-      return [
-        ...ownControls,
-        ...collectMetricBreakdownControlsFromAst(ast.from),
-      ]
-    case "Transformation":
-      return [...ownControls, ...collectMetricBreakdownControlsFromAst(ast.to)]
     case "Union":
       return [
         ...ownControls,
@@ -380,6 +379,10 @@ export interface ListProps<
   readonly output: TOutput
   /** Optional button opening this process's single start form. Uses its start permission. */
   readonly startProcess?: Process
+  /** Additional starts alongside the primary start button. */
+  readonly additionalStartProcesses?: readonly Process[]
+  /** Reveal this process's Anonymous Page to callers who may view the List. */
+  readonly anonymousPage?: Process
   /** Default page size (default: 20, max: 100) */
   readonly defaultPageSize?: number
   /** Query function returning paginated results */
@@ -391,7 +394,12 @@ export interface ListProps<
     ListExportOutputFields<TOutput, TExportOutput>,
     R
   >
-  /** Optional form schema defining detail view fields (can differ from output) */
+  /** Portable detail/edit schema export, loaded from the organisation artifact. */
+  readonly browser?: {
+    readonly entrypoint: string
+    readonly exportName: string
+  }
+  /** Static detail/edit fields from the same exported schema. */
   readonly form?: () => TForm
   /** Optional query function for fetching a single item by ID */
   readonly itemQuery?: ListItemQueryFunction<TForm, R>
@@ -401,6 +409,10 @@ export interface ListProps<
   readonly delete?: ListDeleteFunction<R>
   /** Opt-in creation, with an independent form and server-owned record ID. */
   readonly create?: {
+    readonly browser?: {
+      readonly entrypoint: string
+      readonly exportName: string
+    }
     readonly form: () => TCreate
     readonly submit: (
       input: ListCreateInput<TCreate>,
@@ -420,9 +432,9 @@ export const MAX_PAGE_SIZE = 100
 
 function isScalarExportAst(ast: SchemaAST.AST): boolean {
   switch (ast._tag) {
-    case "StringKeyword":
-    case "NumberKeyword":
-    case "BooleanKeyword":
+    case "String":
+    case "Number":
+    case "Boolean":
       return true
     case "Literal":
       return (
@@ -431,16 +443,12 @@ function isScalarExportAst(ast: SchemaAST.AST): boolean {
         typeof ast.literal === "number" ||
         typeof ast.literal === "boolean"
       )
-    case "Refinement":
-      return isScalarExportAst(ast.from)
-    case "Transformation":
-      return isScalarExportAst(ast.to)
     case "Union": {
       const allowedMembers = ast.types.filter(
         (type) =>
-          !(type._tag === "Literal" && type.literal === null) &&
-          type._tag !== "UndefinedKeyword" &&
-          type._tag !== "VoidKeyword",
+          type._tag !== "Null" &&
+          type._tag !== "Undefined" &&
+          type._tag !== "Void",
       )
       return (
         allowedMembers.length > 0 &&
@@ -457,7 +465,7 @@ function assertScalarExportFields(
   fields: Schema.Struct.Fields,
 ): void {
   for (const [field, schema] of Object.entries(fields)) {
-    if (!isScalarExportAst((schema as Schema.Schema.AnyNoContext).ast)) {
+    if (!isScalarExportAst((schema as Schema.Codec<unknown, unknown>).ast)) {
       throw new Error(
         `List ${normalizePath(listPath)} export field "${field}" must be a flat scalar value (string, number, boolean, or null)`,
       )
@@ -529,6 +537,16 @@ export class List<
     TExportOutput,
     TCreate
   >["create"]
+  readonly browser: ListProps<
+    TOutput,
+    R,
+    TForm,
+    TExportOutput,
+    TCreate
+  >["browser"]
+  readonly createBrowser: NonNullable<
+    ListProps<TOutput, R, TForm, TExportOutput, TCreate>["create"]
+  >["browser"]
   readonly createFormFields: TCreate | undefined
 
   /** Display name for the list */
@@ -552,6 +570,13 @@ export class List<
         readonly name: string
         readonly startStepPath: string
       }
+    | undefined
+
+  readonly additionalStartProcesses: ReadonlyArray<
+    NonNullable<List["startProcess"]>
+  >
+  readonly anonymousPage:
+    | { readonly name: string; readonly path: string }
     | undefined
 
   /** Default page size */
@@ -596,6 +621,8 @@ export class List<
     props: ListProps<TOutput, R, TForm, TExportOutput, TCreate>,
   ) {
     super(scope, id)
+    this.browser = props.browser
+    this.createBrowser = props.create?.browser
     this._create = props.create
     this.createFormFields = props.create?.form()
     if (
@@ -620,6 +647,35 @@ export class List<
         path: normalizePath(props.startProcess.node.path),
         name: props.startProcess.props.name,
         startStepPath: normalizePath(start.node.path),
+      }
+    }
+    this.additionalStartProcesses = (props.additionalStartProcesses ?? []).map(
+      (process) => {
+        const starts = process.startNodes()
+        const start = starts[0]
+        if (starts.length !== 1 || !isForm(start)) {
+          throw new Error(
+            "List additional starts require exactly one start form",
+          )
+        }
+        return {
+          path: normalizePath(process.node.path),
+          name: process.props.name,
+          startStepPath: normalizePath(start.node.path),
+        }
+      },
+    )
+    if (props.anonymousPage) {
+      const starts = props.anonymousPage.startNodes()
+      const start = starts[0]
+      if (starts.length !== 1 || !isForm(start) || !start.anonymousPage) {
+        throw new Error(
+          "List Anonymous Page must reference a configured start form",
+        )
+      }
+      this.anonymousPage = {
+        name: props.anonymousPage.props.name,
+        path: `/public/start/${start.anonymousPage.address}`,
       }
     }
     this.name = props.name
@@ -654,7 +710,6 @@ export class List<
       props.output) as ListExportOutputFields<TOutput, TExportOutput>
     this._exportQuery = props.exportQuery
 
-    // Store form and itemQuery if provided
     if (props.form) {
       this._form = props.form
       this._formFields = props.form()
@@ -692,31 +747,23 @@ export class List<
 
   createFormMetadata(currentProviderUser?: string): EffectModule.Effect<
     {
-      readonly formDefinition: ClientFormDefinition
       readonly defaultValues: Record<string, DeepWritable<unknown>>
-      readonly jsonSchema: JsonSchema7Root
       readonly createMutationName: string
       readonly createInputTypeName: string
     } | null,
-    WalkError
+    never
   > {
     if (!this.createFormFields) return EffectModule.succeed(null)
     const fields = this.createFormFields
-    const submission = makeSubmissionSchema(SchemaModule.Struct(fields))
     const createMutationName = this.createMutationName()
     const createInputTypeName = this.createInputTypeName()
     return EffectModule.gen(function* () {
-      const components = yield* asClientRepresentation(
-        SchemaModule.Struct(fields),
-      )
       const defaults = yield* resolveFormFieldDefaults(
         fields,
         currentProviderUser,
       )
       return {
-        formDefinition: { components, rules: [] },
         defaultValues: mergeFormDefaults(getSchemaDefaults(fields), defaults),
-        jsonSchema: JSONSchema.make(submission),
         createMutationName,
         createInputTypeName,
       }
@@ -777,7 +824,7 @@ export class List<
    */
   outputColumns(): ListColumn[] {
     return Object.entries(this.output).map(([field, schema]) =>
-      toListColumn(field, schema as Schema.Schema.AnyNoContext),
+      toListColumn(field, schema as Schema.Codec<unknown, unknown>),
     )
   }
 
@@ -793,7 +840,7 @@ export class List<
    */
   exportColumns(): ListColumn[] {
     return Object.entries(this._exportOutput).map(([field, schema]) =>
-      toListColumn(field, schema as Schema.Schema.AnyNoContext),
+      toListColumn(field, schema as Schema.Codec<unknown, unknown>),
     )
   }
 
@@ -851,7 +898,11 @@ export class List<
   executeItemQuery(
     id: string,
     ctx: ListItemQueryContext = {},
-  ): Effect.Effect<OutputItem<TForm> | null, ListItemQueryNotDefinedError, R> {
+  ): Effect.Effect<
+    ListItemDetail<TForm> | null,
+    ListItemQueryNotDefinedError,
+    R
+  > {
     if (!this._itemQuery) {
       return EffectModule.fail(
         new ListItemQueryNotDefinedError({ listPath: this.node.path }),
@@ -868,7 +919,7 @@ export class List<
 
     const controls = Object.values(this._formFields).flatMap((schema) =>
       collectMetricBreakdownControlsFromAst(
-        (schema as Schema.Schema.AnyNoContext).ast,
+        (schema as Schema.Codec<unknown, unknown>).ast,
       ),
     )
     const seen = new Set<string>()
@@ -897,43 +948,10 @@ export class List<
 
     return Object.entries(this._formFields).map(([field, schema]) =>
       // Form fields are detail/edit metadata, not backend-authored list sort keys.
-      toListColumn(field, schema as Schema.Schema.AnyNoContext, {
+      toListColumn(field, schema as Schema.Codec<unknown, unknown>, {
         sortable: false,
       }),
     )
-  }
-
-  /**
-   * Generate the browser-safe form definition for the form fields.
-   * List forms do not currently support dynamic rules, so the canonical rule
-   * channel is always an empty array.
-   * Returns null if no form is defined.
-   */
-  clientFormDefinition(): EffectModule.Effect<
-    ClientFormDefinition | null,
-    WalkError
-  > {
-    if (!this._formFields) return EffectModule.succeed(null)
-    const effectSchema = SchemaModule.Struct(this._formFields)
-    return asClientRepresentation(effectSchema).pipe(
-      EffectModule.map((components) => ({ components, rules: [] })),
-    )
-  }
-
-  /**
-   * Generate JSON Schema for the form's submittable fields.
-   * Strips read-only and structural-only fields; removes additionalProperties.
-   * Returns null if no form is defined.
-   */
-  formSubmissionSchema(): Record<string, unknown> | null {
-    if (!this._formFields) return null
-
-    const effectSchema = SchemaModule.Struct(this.editableFormFields())
-    const submission = makeSubmissionSchema(effectSchema)
-    const { additionalProperties: _, ...schema } = JSONSchema.make(
-      submission,
-    ) as JsonSchema7Root & { additionalProperties?: boolean }
-    return schema
   }
 
   /**
@@ -1032,18 +1050,21 @@ export class List<
   /**
    * Filter form field entries to only those NOT annotated FormReadOnly=true.
    */
-  private editableFormFieldEntries(): [string, Schema.Schema.AnyNoContext][] {
+  private editableFormFieldEntries(): [
+    string,
+    Schema.Codec<unknown, unknown>,
+  ][] {
     if (!this._formFields) return []
     return Object.entries(this._formFields).filter(
-      ([, schema]) => !isReadOnlyField(schema as Schema.Schema.Any),
-    ) as [string, Schema.Schema.AnyNoContext][]
+      ([, schema]) => !isReadOnlyField(schema as Schema.Top),
+    ) as [string, Schema.Codec<unknown, unknown>][]
   }
 
   /**
    * Get editable form fields as a record (excludes FormReadOnly fields).
    * Useful for schema generation where the full field schemas are needed.
    */
-  editableFormFields(): Record<string, Schema.Schema.AnyNoContext> {
+  editableFormFields(): Record<string, Schema.Codec<unknown, unknown>> {
     return Object.fromEntries(this.editableFormFieldEntries())
   }
 

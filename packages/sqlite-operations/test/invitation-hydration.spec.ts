@@ -1,7 +1,7 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
 
 import { and, eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   InvitationLifecycleStatus,
@@ -19,15 +19,12 @@ import { describe, expect, it } from "bun:test"
 
 const TestLayer = Layer.mergeAll(
   SqliteDbOperationsLive,
-  Layer.succeed(
-    RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
-  ),
+  Layer.succeed(RequestTime, DateTime.makeUnsafe(Date.now())),
   DatabaseTest,
 )
 
 const runTest = <A, E>(
-  test: Effect.Effect<A, E, Layer.Layer.Success<typeof TestLayer>>,
+  test: Effect.Effect<A, E, Layer.Success<typeof TestLayer>>,
 ): Promise<A> => Effect.runPromise(Effect.provide(test, TestLayer))
 
 const makeOrgWithInvitations = (
@@ -268,7 +265,7 @@ describe("authored invitation hydration", () => {
           .set({
             invitationStatus: InvitationLifecycleStatus.Accepted,
             invitationPendingEmail: null,
-            invitationAcceptedAt: DateTime.unsafeMake(Date.now()),
+            invitationAcceptedAt: DateTime.makeUnsafe(Date.now()),
             invitationAcceptedByProvider: "google",
             invitationAcceptedBySubject: "sub-1",
           })
@@ -331,7 +328,7 @@ describe("authored invitation hydration", () => {
           .set({
             invitationStatus: InvitationLifecycleStatus.LegacyClosed,
             invitationPendingEmail: null,
-            invitationLegacyClosedAt: DateTime.unsafeMake(Date.now()),
+            invitationLegacyClosedAt: DateTime.makeUnsafe(Date.now()),
             invitationLegacyClosureReason: "preexisting_provider_user",
           })
           .where(eq(schema.invitation.invitationId, "legacy-closed-invite"))
@@ -369,7 +366,7 @@ describe("authored invitation hydration", () => {
           .set({
             invitationStatus: InvitationLifecycleStatus.Accepted,
             invitationPendingEmail: null,
-            invitationAcceptedAt: DateTime.unsafeMake(Date.now()),
+            invitationAcceptedAt: DateTime.makeUnsafe(Date.now()),
             invitationAcceptedByProvider: "google",
             invitationAcceptedBySubject: "sub-repeat",
           })

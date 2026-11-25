@@ -1,0 +1,1 @@
+ALTER TABLE "pf_to_do" ADD COLUMN "restart_attempt_id" varchar(36);

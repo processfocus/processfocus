@@ -126,7 +126,6 @@ export const PostgresBusinessCalendarQueriesLive = Layer.effect(
             })
           }
 
-          // Populate weekly schedules
           for (const row of weeklySchedules) {
             const data = result.get(row.orgUnitId)
             if (data) {
@@ -139,7 +138,6 @@ export const PostgresBusinessCalendarQueriesLive = Layer.effect(
             }
           }
 
-          // Populate date exceptions
           for (const row of dateExceptions) {
             const data = result.get(row.orgUnitId)
             if (data) {
@@ -157,7 +155,6 @@ export const PostgresBusinessCalendarQueriesLive = Layer.effect(
             }
           }
 
-          // Populate holidays
           for (const row of holidays) {
             const data = result.get(row.orgUnitId)
             if (data) {
@@ -173,7 +170,6 @@ export const PostgresBusinessCalendarQueriesLive = Layer.effect(
             }
           }
 
-          // Populate periods
           for (const row of periods) {
             const data = result.get(row.orgUnitId)
             if (data) {

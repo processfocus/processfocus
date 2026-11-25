@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 import { and, eq, inArray } from "drizzle-orm"
-import { Cause, DateTime, Effect, Exit, FiberRef, Layer, Option } from "effect"
+import { Cause, DateTime, Effect, Exit, Layer, Option } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   type AuthenticationDatabase,
   InviteRequiredError,
@@ -11,7 +11,6 @@ import * as schema from "@pf/drizzle-sqlite"
 import {
   InvitationLifecycleStatus,
   InvitationSource,
-  ProviderUserQueries,
   SettingsQueries,
 } from "@pf/graphql-db-operations"
 import type {
@@ -24,7 +23,6 @@ import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { DatabaseTest } from "@pf/service-drizzle-sqlite/test"
 import { SqliteAuthenticationDatabaseLive } from "../src/lib/authentication-database.js"
 import { SqliteDbOperationsLive } from "../src/lib/org-to-db.js"
-import { SqliteProviderUserQueriesLive } from "../src/lib/query-provider-user.js"
 import { SqliteSettingsQueriesLive } from "../src/lib/settings-queries.js"
 import { describe, expect, it } from "bun:test"
 
@@ -258,7 +256,7 @@ describe("invitation lifecycle", () => {
         expect(results).toHaveLength(2)
 
         if (Exit.isFailure(failures[0]!)) {
-          const error = Cause.failureOption(failures[0]!.cause)
+          const error = Cause.findErrorOption(failures[0]!.cause)
           // Prefer typed domain failures; unique-index races may still surface as
           // untyped SQL failures depending on Effect SQL wrapping.
           if (Option.isSome(error)) {
@@ -323,131 +321,17 @@ describe("invitation lifecycle", () => {
     )
   })
 
-  it("M2M acceptPendingInvitationForProviderUser is single-winner and retryable on miss", async () => {
-    const runM2m = <A, E>(
-      test: Effect.Effect<
-        A,
-        E,
-        TypedSqliteDrizzle | ProviderUserQueries | SqlClient.SqlClient
-      >,
-    ): Promise<A> =>
-      Effect.runPromise(
-        Effect.provide(
-          Effect.provide(test, SqliteProviderUserQueriesLive),
-          DatabaseTest,
-        ),
-      )
-
-    await runM2m(
-      Effect.gen(function* () {
-        const email = "m2m-race@example.com"
-        const db = yield* TypedSqliteDrizzle
-        const sql = yield* SqlClient.SqlClient
-        const providerUsers = yield* ProviderUserQueries
-
-        const [org] = yield* db
-          .insert(schema.orgUnit)
-          .values({
-            name: "Root",
-            orgUnitLevel: "root",
-            path: "/",
-          })
-          .returning()
-        if (!org) throw new Error("org")
-
-        const [role] = yield* db
-          .insert(schema.role)
-          .values({
-            name: "Employee",
-            orgUnitId: org.id,
-            path: "/Employee",
-          })
-          .returning()
-        if (!role) throw new Error("role")
-
-        const [invitation] = yield* db
-          .insert(schema.invitation)
-          .values({
-            invitationId: "m2m-invite",
-            email,
-            invitationStatus: InvitationLifecycleStatus.Pending,
-            invitationSource: InvitationSource.Dashboard,
-            invitationPendingEmail: email,
-          })
-          .returning()
-        if (!invitation) throw new Error("invitation")
-        yield* db.insert(schema.invitationRole).values({
-          invitationId: invitation.id,
-          roleId: role.id,
-        })
-
-        // Same durable accept primitive used by requestProviderUserPermissions.
-        const created = yield* sql.withTransaction(
-          Effect.gen(function* () {
-            const row = yield* providerUsers.createProviderUserFromInvitation({
-              email,
-              orgUnitId: org.id,
-            })
-            const accepted =
-              yield* providerUsers.acceptPendingInvitationForProviderUser({
-                email,
-                providerUserId: row.providerUserId,
-                provider: "m2m",
-                subject: `m2m:${email}`,
-              })
-            expect(accepted).toBe(true)
-            return row
-          }),
-        )
-
-        // Conditional accept is single-winner: a second attempt is a miss.
-        const secondAccept =
-          yield* providerUsers.acceptPendingInvitationForProviderUser({
-            email,
-            providerUserId: created.providerUserId,
-            provider: "m2m",
-            subject: "m2m-subject-retry",
-          })
-        expect(secondAccept).toBe(false)
-
-        const [invitationAfter] = yield* db
-          .select({
-            status: schema.invitation.invitationStatus,
-            pending: schema.invitation.invitationPendingEmail,
-            acceptedBy: schema.invitation.acceptedByProviderUserId,
-          })
-          .from(schema.invitation)
-          .where(eq(schema.invitation.id, invitation.id))
-          .limit(1)
-        expect(invitationAfter?.status).toBe("accepted")
-        expect(invitationAfter?.pending).toBeNull()
-        expect(invitationAfter?.acceptedBy).toBe(created.providerUserId)
-
-        const activeProviderUsers = yield* db
-          .select({ id: schema.providerUser.id })
-          .from(schema.providerUser)
-          .where(
-            and(
-              eq(schema.providerUser.email, email),
-              eq(schema.providerUser._deleted, false),
-            ),
-          )
-        expect(activeProviderUsers).toHaveLength(1)
-      }),
-    )
-  })
-
   it("does not soft-delete a later re-invite when rehydrating accepted model history", async () => {
     const RequestTimeTest = Layer.succeed(
       RequestTime,
-      FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+      DateTime.makeUnsafe(Date.now()),
     )
     const rehydrateLayer = Layer.mergeAll(
       SqliteDbOperationsLive,
       RequestTimeTest,
       DatabaseTest,
     )
-    type RehydrateRequirements = Layer.Layer.Success<typeof rehydrateLayer>
+    type RehydrateRequirements = Layer.Success<typeof rehydrateLayer>
     const runRehydrate = <A, E>(
       test: Effect.Effect<A, E, RehydrateRequirements>,
     ): Promise<A> => Effect.runPromise(Effect.provide(test, rehydrateLayer))
@@ -521,7 +405,7 @@ describe("invitation lifecycle", () => {
         )
         expect(Exit.isFailure(result)).toBe(true)
         if (Exit.isFailure(result)) {
-          const error = Cause.failureOption(result.cause)
+          const error = Cause.findErrorOption(result.cause)
           expect(Option.isSome(error)).toBe(true)
           if (Option.isSome(error)) {
             expect(error.value).toBeInstanceOf(InviteRequiredError)
@@ -543,7 +427,7 @@ describe("invitation lifecycle", () => {
           .values({
             provider: "github",
             sub: "github-existing",
-            lastLoggedIn: DateTime.unsafeMake(Date.now()),
+            createdAt: DateTime.makeUnsafe(Date.now()),
           })
           .returning()
         if (!user) throw new Error("user")

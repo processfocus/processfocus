@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Effect } from "effect"
+import { Data, Effect, Option, Schema } from "effect"
 import { CliError } from "../errors"
 import type {
   DeployProgressEvent,
@@ -9,8 +9,14 @@ import type {
 } from "./deploy-progress-subscription.types"
 
 const DEPLOY_PROGRESS_CONNECT_TIMEOUT_MS = 30 * 1000
+const DEPLOY_PROGRESS_MAX_RECONNECT_ATTEMPTS = 3
+const DEPLOY_PROGRESS_RECONNECT_BASE_DELAY_MS = 500
 export const DEPLOY_PROGRESS_CONNECTION_LOST_MESSAGE =
   "Lost the deploy progress connection"
+
+export class DeployProgressTransportError extends Data.TaggedError(
+  "DeployProgressTransportError",
+)<{ readonly message: string; readonly cause?: unknown }> {}
 
 const DEPLOY_PROGRESS_STATUS_VALUES = [
   "progress",
@@ -192,6 +198,16 @@ const readCloseEventDetails = (event: unknown): CloseEventDetails => {
   return { code: undefined, reason: undefined }
 }
 
+const progressCloseError = ({ code, reason }: CloseEventDetails): Error => {
+  const message = `AppSync socket closed unexpectedly: code=${code ?? "unknown"}${reason ? ` reason=${reason}` : ""}`
+  // Normal disconnects and transient server/transport failures can reconnect.
+  // Protocol, policy and application-specific rejection codes remain fatal.
+  return code === undefined ||
+    [1000, 1001, 1005, 1006, 1011, 1012, 1013, 1014].includes(code)
+    ? new DeployProgressTransportError({ message })
+    : new Error(message)
+}
+
 const toError = (error: unknown): Error => {
   if (error instanceof Error) {
     return error
@@ -256,20 +272,67 @@ const normalizeDeployProgressEvent = (
 class AppSyncDeployProgressSocket {
   private socket: WebSocket | null = null
   private subscriptionId: string | null = null
+  private accessToken = ""
+  private channel = ""
+  private disconnected = false
 
   constructor(
     private readonly config: {
       readonly realtimeUrl: string
       readonly appSyncEventsHttpHost: string
       readonly accessToken: string
+      readonly acquireAccessToken?: () => Promise<string>
       readonly channel: string
+      readonly bindToTokenExpiry?: boolean
       readonly onEvent: (event: DeployProgressEvent) => void
       readonly onError: (error: Error) => void
+      readonly onTransportError: (error: Error) => void
       readonly onClose: (code?: number, reason?: string) => void
     },
   ) {}
 
-  connect(): Promise<void> {
+  async connect(): Promise<void> {
+    this.accessToken = this.config.acquireAccessToken
+      ? await this.config.acquireAccessToken()
+      : this.config.accessToken
+    if (this.disconnected)
+      throw new Error("Deploy progress connection cancelled")
+    this.channel = this.config.channel
+    const routingClaims = Schema.decodeUnknownOption(
+      Schema.fromJsonString(
+        Schema.Struct({
+          properties: Schema.optional(
+            Schema.Struct({ sso: Schema.optional(Schema.Unknown) }),
+          ),
+        }),
+      ),
+    )(
+      Buffer.from(this.accessToken.split(".")[1] ?? "", "base64url").toString(
+        "utf8",
+      ),
+    )
+    const sso =
+      Option.isSome(routingClaims) &&
+      routingClaims.value.properties?.sso !== undefined
+    if (this.config.bindToTokenExpiry || sso) {
+      // Routing only; the server verifies the signature, owner and deadline.
+      try {
+        const payload = this.accessToken.split(".")[1]
+        if (!payload) throw new Error("Missing payload")
+        const claims = Schema.decodeUnknownSync(
+          Schema.Struct({
+            exp: Schema.Number.pipe(
+              Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+            ),
+          }),
+        )(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")))
+        this.channel = `${this.config.channel}/${claims.exp}`
+      } catch {
+        throw new Error(
+          "Invalid token expiry for deployment progress; authenticate again",
+        )
+      }
+    }
     return new Promise((resolve, reject) => {
       if (typeof WebSocket === "undefined") {
         reject(new Error("WebSocket is not available in this runtime."))
@@ -278,7 +341,7 @@ class AppSyncDeployProgressSocket {
 
       const authorization = {
         host: this.config.appSyncEventsHttpHost,
-        authorization: this.config.accessToken,
+        authorization: this.accessToken,
       }
 
       const authProtocol = encodeAppSyncAuthHeader(authorization)
@@ -289,9 +352,9 @@ class AppSyncDeployProgressSocket {
 
       let connectionSettled = false
       const connectTimeout = setTimeout(() => {
-        const error = new Error(
-          `Timed out waiting for AppSync deploy progress connection after ${DEPLOY_PROGRESS_CONNECT_TIMEOUT_MS / 1000}s`,
-        )
+        const error = new DeployProgressTransportError({
+          message: `Timed out waiting for AppSync deploy progress connection after ${DEPLOY_PROGRESS_CONNECT_TIMEOUT_MS / 1000}s`,
+        })
         if (!connectionSettled) {
           connectionSettled = true
           reject(error)
@@ -408,29 +471,32 @@ class AppSyncDeployProgressSocket {
 
       this.socket.addEventListener("error", (event) => {
         const normalized = toError(event)
-        if (rejectConnection(normalized)) {
-          return
-        }
-        this.config.onError(normalized)
-      })
-
-      this.socket.addEventListener("close", (event) => {
-        const { code, reason } = readCloseEventDetails(event)
         if (
           rejectConnection(
-            new Error(
-              `AppSync socket closed unexpectedly: code=${code ?? "unknown"}${reason ? ` reason=${reason}` : ""}`,
-            ),
+            new DeployProgressTransportError({
+              message: "Deployment progress connection failed",
+              cause: normalized,
+            }),
           )
         ) {
           return
         }
-        this.config.onClose(code, reason)
+        this.config.onTransportError(normalized)
+      })
+
+      this.socket.addEventListener("close", (event) => {
+        const { code, reason } = readCloseEventDetails(event)
+        const error = progressCloseError({ code, reason })
+        if (rejectConnection(error)) return
+        if (error instanceof DeployProgressTransportError)
+          this.config.onClose(code, reason)
+        else this.config.onError(error)
       })
     })
   }
 
   disconnect(): void {
+    this.disconnected = true
     this.socket?.close()
     this.socket = null
   }
@@ -440,10 +506,10 @@ class AppSyncDeployProgressSocket {
     this.send({
       type: "subscribe",
       id: this.subscriptionId,
-      channel: this.config.channel,
+      channel: this.channel,
       authorization: {
         host: this.config.appSyncEventsHttpHost,
-        authorization: this.config.accessToken,
+        authorization: this.accessToken,
       },
     })
   }
@@ -463,40 +529,109 @@ const createAppSyncDeployProgressEventSource = async (
 ): Promise<DeployProgressEventSource> => {
   const queue = new AsyncDeployProgressQueue()
   let isClosed = false
+  let reconnectAttempts = 0
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let socket: Pick<AppSyncDeployProgressSocket, "connect" | "disconnect">
 
-  const socket = new AppSyncDeployProgressSocket({
-    realtimeUrl: config.realtimeUrl,
-    appSyncEventsHttpHost: config.appSyncEventsHttpHost,
-    accessToken: config.accessToken,
-    channel: config.channel,
-    onEvent: (event) => {
-      queue.push(event)
-    },
-    onError: (error) => {
-      if (isClosed) {
-        return
-      }
-      queue.fail(error)
-    },
-    onClose: (code, reason) => {
-      if (isClosed) {
-        return
-      }
-      const detail =
-        code !== undefined
-          ? ` (close code ${code}${reason ? `: ${reason}` : ""})`
-          : ""
-      process.stderr.write(`\nDeploy progress WebSocket closed${detail}\n`)
+  const reconnect = (detail: string, cause?: unknown) => {
+    if (isClosed) return
+    if (reconnectAttempts >= DEPLOY_PROGRESS_MAX_RECONNECT_ATTEMPTS) {
       queue.fail(
         new Error(
-          `${DEPLOY_PROGRESS_CONNECTION_LOST_MESSAGE}${detail}. The deployment may still be running; check the Backend or deployment logs.`,
+          `${DEPLOY_PROGRESS_CONNECTION_LOST_MESSAGE}${detail}. Reconnection attempts exhausted.`,
+          { cause },
         ),
       )
-    },
-  })
+      return
+    }
+    const delayMs =
+      DEPLOY_PROGRESS_RECONNECT_BASE_DELAY_MS *
+      2 ** reconnectAttempts *
+      (1 + Math.random())
+    reconnectAttempts++
+    process.stderr.write(
+      `\nDeploy progress connection interrupted${detail}; reconnecting (attempt ${reconnectAttempts}/${DEPLOY_PROGRESS_MAX_RECONNECT_ATTEMPTS}). Deployment continues.\n`,
+    )
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined
+      if (isClosed) return
+      socket = createSocket()
+      void socket.connect().then(
+        () => {
+          if (!isClosed) {
+            reconnectAttempts = 0
+            process.stderr.write("\nDeploy progress connection restored.\n")
+          }
+        },
+        (cause: unknown) => {
+          socket.disconnect()
+          if (!(cause instanceof DeployProgressTransportError)) {
+            queue.fail(toError(cause))
+            return
+          }
+          reconnect(" (reconnection failed)", cause)
+        },
+      )
+    }, delayMs)
+  }
+
+  const createSocket = (): Pick<
+    AppSyncDeployProgressSocket,
+    "connect" | "disconnect"
+  > => {
+    // A retired socket may still dispatch its close event after its replacement
+    // has connected. Only the current socket may schedule a reconnect.
+    let retired = false
+    const retire = () => {
+      retired = true
+      connection.disconnect()
+    }
+    const connection = new AppSyncDeployProgressSocket({
+      realtimeUrl: config.realtimeUrl,
+      appSyncEventsHttpHost: config.appSyncEventsHttpHost,
+      accessToken: config.accessToken,
+      ...(config.acquireAccessToken
+        ? { acquireAccessToken: config.acquireAccessToken }
+        : {}),
+      channel: config.channel,
+      ...(config.bindToTokenExpiry ? { bindToTokenExpiry: true } : {}),
+      onEvent: (event) => {
+        queue.push(event)
+      },
+      onError: (error) => {
+        if (isClosed || retired) {
+          return
+        }
+        queue.fail(error)
+        retire()
+      },
+      onTransportError: (error) => {
+        if (isClosed || retired) return
+        retire()
+        reconnect(" (transport error)", error)
+      },
+      onClose: (code, reason) => {
+        if (isClosed || retired) {
+          return
+        }
+        retire()
+        const detail =
+          code !== undefined
+            ? ` (close code ${code}${reason ? `: ${reason}` : ""})`
+            : ""
+        reconnect(detail)
+      },
+    })
+    return {
+      connect: () => connection.connect(),
+      disconnect: retire,
+    }
+  }
+  socket = createSocket()
 
   const abort = () => {
     isClosed = true
+    clearTimeout(reconnectTimer)
     socket.disconnect()
     queue.finish()
   }
@@ -505,6 +640,7 @@ const createAppSyncDeployProgressEventSource = async (
   try {
     await socket.connect()
   } catch (error) {
+    isClosed = true
     signal.removeEventListener("abort", abort)
     socket.disconnect()
     throw error
@@ -517,6 +653,7 @@ const createAppSyncDeployProgressEventSource = async (
         return
       }
       isClosed = true
+      clearTimeout(reconnectTimer)
       signal.removeEventListener("abort", abort)
       socket.disconnect()
       queue.finish()

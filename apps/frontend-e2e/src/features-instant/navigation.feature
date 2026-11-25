@@ -1,7 +1,12 @@
 Feature: Production Dashboard destination shells
 
   Background:
-    Given I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager" using client "e2e-employee-finance-manager"
+    Given I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager"
+
+  @sidebar-browser-only
+  Scenario: Authenticated sidebar HTML does not bail out to browser rendering
+    When I inspect the authenticated sidebar HTML
+    Then the deferred sidebar navigation becomes available
 
   Scenario: Sidebar process navigation preserves the local catalog
     When I inspect instant sidebar process navigation
@@ -23,4 +28,4 @@ Feature: Production Dashboard destination shells
     When I visit the processes page
     And I start the "Purchase Request" process
     And I fill in the purchase request form with item "Navigation draft" and value "750"
-    Then the unsaved process form survives back, forward and full-page reopening
+    Then the process form values survive back, forward and full-page reopening

@@ -58,5 +58,6 @@
         "cwd": "{projectRoot}"
       }
     }
-  }
+  },
+  "implicitDependencies": ["@processfocus/cli"]
 }

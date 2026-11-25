@@ -11,6 +11,7 @@ export function toClientSession(session: SessionWithTokenAndExpiry): Session {
       orgUnitId: session.orgUnitId,
       orgUnitPath: session.orgUnitPath,
       roles: session.roles,
+      ...(session.workload ? { workload: session.workload } : {}),
       ...(session.delegation ? { delegation: session.delegation } : {}),
       ...(session.delegationRoleSelection !== undefined
         ? { delegationRoleSelection: session.delegationRoleSelection }
@@ -21,6 +22,7 @@ export function toClientSession(session: SessionWithTokenAndExpiry): Session {
   return {
     userId: session.userId,
     clientId: session.clientId,
+    ...(session.workload ? { workload: session.workload } : {}),
     ...(session.roles ? { roles: session.roles } : {}),
     ...(session.orgUnitId !== undefined
       ? { orgUnitId: session.orgUnitId }

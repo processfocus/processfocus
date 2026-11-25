@@ -1,0 +1,142 @@
+---
+title: Passkeys
+description: Passkey registration, sign-in, and recovery.
+---
+
+Use passkeys if you cannot use Single-Sign-On. Passkeys use the WebAuthn
+standard, supported by modern browsers and devices. Users sign in with a
+fingerprint, face recognition, device PIN, or security key instead of a
+password. Passkeys are resistant to phishing because they are tied to the
+site where they were registered.
+
+## Enabling passkeys
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const configureOrg: Effect.Effect<Organisation, Config.ConfigError> =
+  Effect.gen(function* () {
+    new AuthenticationConfig(org, "auth", {
+      passkey: {
+        rpName: "ACME Ltd",
+      },
+    })
+    return org
+  })
+```
+
+Enabling this will offer a login with passkey option on the login page
+in the frontend.
+
+## Inviting users with a registration link
+
+In order to allow a user to log in with a passkey:
+
+1. Create an invitation in the front-end. See [Invitations](/docs/reference/authentication/invitations/) for full details.
+2. Click create registration link or use `pfcli` to create a link.
+
+### Creating an invitation in the front-end
+
+In the frontend, visit "Users & Sign-in", then click on "Invited User",
+then on "New invitation". This will take you to the path `settings/invitations/new`.
+
+Fill in the form with an email and tick any applicable roles (a user
+must have at least one role before being able to log in):
+
+![New invitation form for inviting a user to register a passkey](/images/docs/passkey-invitation-form.png)
+
+Then on the invited users screen, click on the user, and then click
+generate registration link:
+
+![Generating a passkey registration link](/images/docs/passkey-registration-link.png)
+
+This will give you a link you can copy and email, or if the intended
+recipient has a phone handy they can simply scan the QR code:
+
+![Passkey registration QR code](/images/docs/passkey-registration-qr-code.png)
+
+Ask recipients to use a mobile phone to create passkeys as this is
+easiest. The passkey will be stored on the phone and can also be used
+when logging in on the desktop.
+
+Other devices for storing passkeys, such as YubiKeys, work fine too.
+
+### Creating an invitation with pfcli
+
+For local bootstrap before an authorised Dashboard user is available, build
+and import your organisation, then create an Invitation with explicit role paths:
+
+```bash
+pfcli invitation create ./my-org --email alice@example.com --role /Admin --role /Employee
+```
+
+Replace the example role paths with exact paths from your imported organisation.
+At least one `--role` is required; repeat it for multiple roles. The command
+accepts `--database-path ./data.db` for a custom local database file. Without
+that option, it normally uses `db/pf.db` in the organisation directory. It only
+supports local database files. See the [pfcli reference](/docs/reference/pfcli/)
+for environment variable fallbacks.
+
+Local database write access is the authority to grant these initial roles; no
+Dashboard sign-in or GraphQL API is needed. Restrict access to the database and
+its WAL sidecars. Creation trims and lowercases email, rejects existing users,
+duplicate pending Invitations and unknown roles, and saves the Invitation and
+roles together. It prints no Registration Link or secret.
+
+### Creating a registration link with pfcli
+
+With your local frontend running at `http://localhost:3000/`, generate the
+registration link for that invitation:
+
+```bash
+pfcli invitation registration-link ./my-org --email alice@example.com
+```
+
+This prints a registration link and its expiry time, for example:
+
+```text
+http://localhost:3000/register/passkey#token=<token>
+expires at: 2026-11-19T01:57:28.000Z
+```
+
+The command reads the invitation from the local database and prints a
+registration link pointing to your local frontend. Open it on the same
+computer to register a passkey. `localhost` on a phone refers to the phone
+itself, so this URL is for testing on your computer. If your frontend uses a
+different host or port, pass `--frontend-url https://app.example.com` (include
+the port when needed). Use an HTTP(S) origin without a path, query, fragment,
+or credentials. Without an override, the command can discover the local
+frontend port.
+Use `--database-path ./data.db` if the local database is elsewhere. Both options
+are local-only and also apply when rotating a Registration Link or issuing a
+Passkey Recovery Link with `--rotate`.
+
+To replace an existing registration link, run the same command with `--rotate`:
+
+```bash
+pfcli invitation registration-link ./my-org --email alice@example.com --rotate
+```
+
+Creating a registration link without an invitation will fail.
+
+## Resetting a passkey
+
+If a user loses access to their passkey, run
+`pfcli invitation registration-link` with their email and `--rotate` to
+generate a recovery link. The link lets them register another passkey while
+keeping their existing roles. See the [pfcli reference](/docs/reference/pfcli/).
+
+## Multiple passkeys
+
+Multiple passkeys are supported. Visit `/passkeys` or click on the profile dropdown
+and select "Passkeys":
+
+![Profile dropdown showing the Passkeys option](/images/docs/passkey-profile-menu.png)
+
+You can then rename existing passkeys or add new ones:
+
+![Passkeys page showing an existing passkey and the form for adding a new one](/images/docs/passkey-management.png)

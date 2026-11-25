@@ -1,13 +1,10 @@
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import type { OAuth2Tokens } from "arctic"
 import { Effect } from "effect"
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { OauthError } from "../error.js"
 import { getRelativeUrl } from "../request.js"
 import { errorJson } from "../response.js"
+import { makeRouter } from "../router"
 import type { Provider, ProviderOptions } from "./provider.js"
 
 export interface ArcticProviderOptions {
@@ -94,7 +91,7 @@ export function ArcticProvider(
 
         return yield* options.success({ tokenset: tokens })
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.gen(function* () {
             yield* Effect.logError("Arctic callback failed").pipe(
               Effect.annotateLogs({ error: String(error) }),
@@ -104,10 +101,10 @@ export function ArcticProvider(
         ),
       )
 
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", authorizeHandler),
-        HttpRouter.get("/callback", callbackHandler),
-      )
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", authorizeHandler),
+        HttpRouter.route("GET", "/callback", callbackHandler),
+      ])
     },
   }
 }

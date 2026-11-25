@@ -1,7 +1,6 @@
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { FileSystem } from "@effect/platform"
-import { Console, Effect } from "effect"
+import { Console, Effect, FileSystem } from "effect"
 import {
   DATABASE_PATH_NOT_CONFIGURED,
   isLocalFilePath,
@@ -12,6 +11,7 @@ import {
   makeMigrationLayer,
   runDrizzleMigrations,
 } from "../utils/migration-layer"
+import type { DatabaseOptions } from "../utils/operator-inputs"
 import { runMigrateCustom } from "./migrate-custom"
 
 declare const PFCLI_DISTRIBUTION_BUILD: boolean
@@ -32,9 +32,9 @@ const SYSTEM_MIGRATIONS_FOLDER = fileURLToPath(
  *
  * @param orgPath - Path to organisation directory
  */
-export const runMigrate = (orgPath: string) =>
+export const runMigrate = (orgPath: string, options: DatabaseOptions = {}) =>
   Effect.gen(function* () {
-    const databasePath = resolveDatabasePath(orgPath)
+    const databasePath = options.databasePath ?? resolveDatabasePath(orgPath)
 
     if (!databasePath) {
       // return needed for type narrowing in Effect.gen
@@ -70,7 +70,6 @@ export const runMigrate = (orgPath: string) =>
 
     const appLayer = makeMigrationLayer(databasePath)
 
-    // Run system migrations
     yield* runDrizzleMigrations({
       migrationsFolder: SYSTEM_MIGRATIONS_FOLDER,
       migrationsTable: "__drizzle_migrations_pf",
@@ -80,7 +79,7 @@ export const runMigrate = (orgPath: string) =>
     )
 
     // Run org custom migrations (silently skip if no drizzle config)
-    yield* runMigrateCustom(orgPath).pipe(
+    yield* runMigrateCustom(orgPath, options).pipe(
       Effect.catchTag("NoDrizzleConfigError", () => Effect.void),
     )
   })

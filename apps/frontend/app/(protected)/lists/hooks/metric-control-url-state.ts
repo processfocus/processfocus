@@ -1,9 +1,8 @@
-import type { FormComponent } from "@pf/form-client-representation/types"
-import { FormComponentType } from "@pf/form-client-representation/types"
+import type { MetricBreakdownOptions } from "@pf/form-schema"
 
 const graphqlNamePattern = /^[_A-Za-z][_0-9A-Za-z]*$/
 
-export const isGraphqlName = (value: string) => graphqlNamePattern.test(value)
+const isGraphqlName = (value: string) => graphqlNamePattern.test(value)
 
 export interface MetricControlUrlState {
   readonly values: Record<string, string>
@@ -16,23 +15,15 @@ export const keepPreviousMetricDetail = <T>(
 ): T | undefined => previousData
 
 export const collectMetricControlUrlState = (
-  components: Record<string, FormComponent> | null,
+  metrics: Record<string, MetricBreakdownOptions> | null,
   searchParams: URLSearchParams,
 ): MetricControlUrlState => {
   const values = new Map<string, string>()
   const normalizedSearchParams = new URLSearchParams(searchParams)
   let normalized = false
 
-  const collect = (component: FormComponent) => {
-    if (component._tag === FormComponentType.FieldSet) {
-      Object.values(component.children).forEach(collect)
-      return
-    }
-
-    if (
-      component._tag !== FormComponentType.MetricBreakdown ||
-      component.dataSource !== "item"
-    ) {
+  const collect = (component: MetricBreakdownOptions) => {
+    if (component.dataSource !== "item") {
       return
     }
 
@@ -59,8 +50,8 @@ export const collectMetricControlUrlState = (
     }
   }
 
-  if (components) {
-    Object.values(components).forEach(collect)
+  if (metrics) {
+    Object.values(metrics).forEach(collect)
   }
 
   return {

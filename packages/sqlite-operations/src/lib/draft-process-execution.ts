@@ -1,6 +1,6 @@
-import type { SqlError } from "@effect/sql/SqlError"
-import { and, eq, gt, inArray, or, sql } from "drizzle-orm"
+import { and, eq, gt, inArray, notExists, or, sql } from "drizzle-orm"
 import { Effect, Layer } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   type DraftProcessExecutionMaster,
@@ -16,6 +16,32 @@ import {
 import { getRequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 
+const draftStateMatches = (state: ProcessState) => {
+  const expectedJson = JSON.stringify(state)
+  // Compare parsed values in both directions, independent of object key order.
+  // Turso does not support EXCEPT in these correlated WHERE subqueries.
+  return sql<boolean>`
+    NOT EXISTS (
+      SELECT 1 FROM json_tree(${schema.processState.state}) AS actual
+      WHERE NOT EXISTS (
+        SELECT 1 FROM json_tree(${expectedJson}) AS expected
+        WHERE expected.fullkey = actual.fullkey
+          AND expected.type = actual.type
+          AND expected.atom IS actual.atom
+      )
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM json_tree(${expectedJson}) AS expected
+      WHERE NOT EXISTS (
+        SELECT 1 FROM json_tree(${schema.processState.state}) AS actual
+        WHERE actual.fullkey = expected.fullkey
+          AND actual.type = expected.type
+          AND actual.atom IS expected.atom
+      )
+    )
+  `
+}
+
 /**
  * Live implementation of DraftProcessExecutionQueries service for SQLite.
  *
@@ -25,6 +51,17 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
   DraftProcessExecutionQueries,
   Effect.gen(function* () {
     const db = yield* TypedSqliteDrizzle
+    const isDraft = notExists(
+      db
+        .select({ one: sql`1` })
+        .from(schema.processExecution)
+        .where(
+          and(
+            eq(schema.processExecution.processStateId, schema.processState.id),
+            eq(schema.processExecution._deleted, sql`0`),
+          ),
+        ),
+    )
 
     return {
       pullDraftProcessExecution: (
@@ -37,7 +74,7 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
 
           // Build WHERE conditions
           const conditions = [
-            eq(schema.processStateItsIsDraft.isDraft, true),
+            isDraft,
             eq(schema.processState.startedByUserId, userDetails.id),
           ]
 
@@ -84,10 +121,6 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
               schema.step,
               eq(schema.processState.startStepId, schema.step.id),
             )
-            .innerJoin(
-              schema.processStateItsIsDraft,
-              eq(schema.processState.id, schema.processStateItsIsDraft.id),
-            )
             .leftJoin(
               schema.providerUser,
               and(
@@ -95,7 +128,7 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
                   schema.processState.startedByUserId,
                   schema.providerUser.userId,
                 ),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .where(and(...conditions))
@@ -194,19 +227,6 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
             })
           }
           const persistedUpdatedAt = sql<number>`CAST(ROUND((${schema.processState.updatedAt} - 2440587.5) * 86400000) AS INTEGER)`
-          const assumedStateJson = JSON.stringify(assumedMasterState.state)
-          const persistedStateMatches = sql<boolean>`
-            NOT EXISTS (
-              SELECT fullkey, atom, type FROM json_tree(${schema.processState.state})
-              EXCEPT
-              SELECT fullkey, atom, type FROM json_tree(${assumedStateJson})
-            )
-            AND NOT EXISTS (
-              SELECT fullkey, atom, type FROM json_tree(${assumedStateJson})
-              EXCEPT
-              SELECT fullkey, atom, type FROM json_tree(${schema.processState.state})
-            )
-          `
 
           const result = yield* db
             .update(schema.processState)
@@ -220,20 +240,14 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
               and(
                 eq(schema.processState.id, processStateId),
                 eq(schema.processState.processId, assumedMasterState.processId),
-                persistedStateMatches,
+                draftStateMatches(assumedMasterState.state),
                 eq(schema.processState._deleted, false),
                 eq(
                   persistedUpdatedAt,
                   Math.round(assumedMasterState.updatedAt),
                 ),
                 eq(schema.processState.startedByUserId, userId),
-                inArray(
-                  schema.processState.id,
-                  db
-                    .select({ id: schema.processStateItsIsDraft.id })
-                    .from(schema.processStateItsIsDraft)
-                    .where(eq(schema.processStateItsIsDraft.isDraft, true)),
-                ),
+                isDraft,
               ),
             )
             .returning({ id: schema.processState.id })
@@ -276,19 +290,6 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
             })
           }
           const persistedUpdatedAt = sql<number>`CAST(ROUND((${schema.processState.updatedAt} - 2440587.5) * 86400000) AS INTEGER)`
-          const assumedStateJson = JSON.stringify(assumedMasterState.state)
-          const persistedStateMatches = sql<boolean>`
-            NOT EXISTS (
-              SELECT fullkey, atom, type FROM json_tree(${schema.processState.state})
-              EXCEPT
-              SELECT fullkey, atom, type FROM json_tree(${assumedStateJson})
-            )
-            AND NOT EXISTS (
-              SELECT fullkey, atom, type FROM json_tree(${assumedStateJson})
-              EXCEPT
-              SELECT fullkey, atom, type FROM json_tree(${schema.processState.state})
-            )
-          `
 
           const result = yield* db
             .update(schema.processState)
@@ -301,20 +302,14 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
               and(
                 eq(schema.processState.id, processStateId),
                 eq(schema.processState.processId, assumedMasterState.processId),
-                persistedStateMatches,
+                draftStateMatches(assumedMasterState.state),
                 eq(schema.processState._deleted, false),
                 eq(
                   persistedUpdatedAt,
                   Math.round(assumedMasterState.updatedAt),
                 ),
                 eq(schema.processState.startedByUserId, userId),
-                inArray(
-                  schema.processState.id,
-                  db
-                    .select({ id: schema.processStateItsIsDraft.id })
-                    .from(schema.processStateItsIsDraft)
-                    .where(eq(schema.processStateItsIsDraft.isDraft, true)),
-                ),
+                isDraft,
               ),
             )
             .returning({ id: schema.processState.id })
@@ -363,10 +358,6 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
               schema.step,
               eq(schema.processState.startStepId, schema.step.id),
             )
-            .innerJoin(
-              schema.processStateItsIsDraft,
-              eq(schema.processState.id, schema.processStateItsIsDraft.id),
-            )
             .leftJoin(
               schema.providerUser,
               and(
@@ -374,13 +365,13 @@ export const SqliteDraftProcessExecutionQueriesLive = Layer.effect(
                   schema.processState.startedByUserId,
                   schema.providerUser.userId,
                 ),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .where(
               and(
                 inArray(schema.processState.id, processStateIds),
-                eq(schema.processStateItsIsDraft.isDraft, true),
+                isDraft,
                 eq(schema.processState.startedByUserId, userDetails.id),
               ),
             )

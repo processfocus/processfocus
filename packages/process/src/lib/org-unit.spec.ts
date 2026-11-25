@@ -46,28 +46,6 @@ describe("OrgUnit - Organizational hierarchy", () => {
     expect(organisation.type).toBe("organisation")
   })
 
-  it("should create nested org units", () => {
-    const board = new OrgUnit(organisation, "board", {
-      name: "Board of Directors",
-      type: "board",
-    })
-
-    const operations = new OrgUnit(board, "operations", {
-      name: "Operations Division",
-      type: "division",
-    })
-
-    const finance = new OrgUnit(operations, "finance", {
-      name: "Finance Department",
-      type: "department",
-    })
-
-    expect(operations).toBeDefined()
-    expect(operations.name).toBe("Operations Division")
-    expect(finance).toBeDefined()
-    expect(finance.name).toBe("Finance Department")
-  })
-
   it("should support arbitrarily deep hierarchies", () => {
     const level1 = new OrgUnit(organisation, "level1", {
       name: "Level 1",

@@ -1,7 +1,7 @@
-import { SqlClient } from "@effect/sql"
 import type { Job } from "@processfocus/runtime"
+import { DocumentStoreService } from "@processfocus/runtime"
 import { Effect, Schema } from "effect"
-import { DocumentStoreService } from "@pf/document-store-service"
+import { SqlClient } from "effect/sql"
 import {
   CompletedJobOperations,
   FileOperations,
@@ -80,7 +80,7 @@ const handleUploadComplete = Effect.fn("upload-complete")(
             )
             const docStore = yield* DocumentStoreService
             yield* docStore.deleteFile(fileId, storePrefix).pipe(
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 Effect.log("Failed to delete S3 object (best-effort)", {
                   fileId,
                   error: String(error),

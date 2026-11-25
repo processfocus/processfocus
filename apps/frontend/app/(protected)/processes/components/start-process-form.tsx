@@ -1,21 +1,24 @@
 "use client"
 
+import type { StandardSchemaV1 } from "@standard-schema/spec"
 import type { Collection } from "@tanstack/db"
+import { Schema } from "effect"
 import { ClientError } from "graphql-request"
 import { Suspense, use, useCallback, useRef } from "react"
-import {
-  type FieldError,
-  type FormActionsContext,
-  type JsonSchemaRoot,
-  dynamicForm,
-} from "@pf/form"
-import type { ClientFormDefinition } from "@pf/form-client-representation/client-form-definition"
+import type { FieldError, FormActionsContext } from "@pf/form"
+import { EffectSchemaForm } from "@pf/form/effect-schema-form"
+import type { FormRequestData } from "@pf/form-schema"
+import { submissionSchemaSync } from "@pf/form-submission-schema"
+import { Button } from "@pf/shadcn-components"
 import { getNoSchemaStartActionLabels } from "../lib/start-process-actions"
-import { ProcessFormActions } from "./process-form-actions"
 import { ProcessSubmitButton } from "./process-submit-button"
-import { useProcessesQuery } from "@/hooks/use-processes-query"
+import { findProcessDraft, useProcessDraft } from "@/hooks/use-process-draft"
 import type { DraftProcessExecutionDocType } from "@/lib/collections/draft-process-execution"
-import { useDraftProcessCollection } from "@/lib/collections/draft-process-execution-collection-provider"
+import {
+  DraftProcessCollectionProvider,
+  useDraftProcessCollection,
+} from "@/lib/collections/draft-process-execution-collection-provider"
+import { loadBrowserFormDefinition } from "@/lib/frontend-form-loaders"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 
 /**
@@ -37,18 +40,18 @@ interface StartProcessResponse {
 }
 
 interface StartProcessFormProps {
+  processId: string
+  canSkipScheduleWaits: boolean
   startStepPath: string
   mutationName: string
   inputTypeName: string
+  pluginConfiguration?: Readonly<Record<string, unknown>>
   defaultValues: Record<string, unknown> | null
-  formDefinition: ClientFormDefinition | null
-  jsonSchema: JsonSchemaRoot | null
+  requestData?: FormRequestData | null | undefined
   processName: string
   totalFields: number
-  /** Optional draft ID to continue from saved state */
-  draftId: string | undefined
   /** Called when form is cancelled or submitted successfully */
-  onClose: () => void
+  onClose: (result: "cancelled" | "submitted") => void
 }
 
 export function FormSkeleton() {
@@ -64,49 +67,51 @@ export function FormSkeleton() {
 }
 
 interface StartProcessFormInnerProps extends StartProcessFormProps {
-  collectionPromise: Promise<Collection<DraftProcessExecutionDocType, string>>
+  draftCollection?: Collection<DraftProcessExecutionDocType, string>
+  storageKey?: string | undefined
 }
 
 function StartProcessFormInner({
+  processId,
+  canSkipScheduleWaits,
   startStepPath,
   mutationName,
   inputTypeName,
+  pluginConfiguration,
   defaultValues,
-  formDefinition,
-  jsonSchema,
+  requestData,
   processName,
   totalFields,
-  draftId,
   onClose,
-  collectionPromise,
+  draftCollection,
+  storageKey,
 }: StartProcessFormInnerProps) {
   const graphqlClient = useGraphqlClient()
   const submissionWithoutWaiting = useRef(false)
-
-  // Suspend until collection is ready
-  const draftProcessExecutionCollection = use(collectionPromise)
-
-  // Look up the database process ID by start step path
-  const { processes } = useProcessesQuery()
-  const process = processes.find((p) => p.startStepPath === startStepPath)
-  const processId = process?.id ?? ""
-
-  const handleCancel = useCallback(() => {
-    onClose()
-  }, [onClose])
-
-  // Check if we're continuing from an existing draft (draftId starts with "pst-")
-  const isExistingDraft = draftId?.startsWith("pst-") ?? false
-  const effectiveDraftId = draftId ?? `process-start-draft-${startStepPath}`
+  const {
+    save,
+    clear,
+    error: draftError,
+    isDiscarding,
+  } = useProcessDraft({
+    collection: draftCollection,
+    processId,
+    name: processName,
+    startStepPath,
+    totalFields,
+  })
 
   const handleSubmit = useCallback(
     async (
       values: Record<string, unknown>,
+      hasSchemaInput?: boolean,
     ): Promise<FieldError[] | undefined> => {
       const withoutWaiting = submissionWithoutWaiting.current
       submissionWithoutWaiting.current = false
       // Build GraphQL mutation dynamically based on whether we have input
-      const hasInput = inputTypeName && Object.keys(values).length > 0
+      const hasInput =
+        hasSchemaInput ??
+        Boolean(inputTypeName && Object.keys(values).length > 0)
       const mutation = hasInput
         ? `
           mutation StartProcess($input: ${inputTypeName}!, $withoutWaiting: Boolean!) {
@@ -138,16 +143,8 @@ function StartProcessFormInner({
           mutation,
           variables,
         )
-        // Success - delete draft from RxDB if exists
-        if (isExistingDraft) {
-          if (draftId) {
-            if (draftProcessExecutionCollection.has(draftId)) {
-              draftProcessExecutionCollection.delete(draftId)
-            }
-          }
-        }
-        // Close the form
-        onClose()
+        await clear()
+        onClose("submitted")
         return
       } catch (error) {
         submissionError = error
@@ -157,12 +154,11 @@ function StartProcessFormInner({
       if (submissionError instanceof ClientError) {
         const gqlError = submissionError.response.errors?.[0]
         if (gqlError?.extensions?.["code"] === "InputValidationError") {
-          // Extract structured validation errors
           const validationErrors = gqlError.extensions["errors"] as
             | ValidationError[]
             | undefined
           if (validationErrors && validationErrors.length > 0) {
-            // Return field errors to dynamicForm for setting on fields
+            // Return field errors to EffectSchemaForm for setting on fields
             return validationErrors
           }
         }
@@ -181,79 +177,72 @@ function StartProcessFormInner({
       console.error("Form submission error:", errorMessage)
       return [{ field: "", message: errorMessage }]
     },
-    [
-      graphqlClient,
-      mutationName,
-      inputTypeName,
-      onClose,
-      isExistingDraft,
-      draftId,
-      draftProcessExecutionCollection,
-    ],
+    [graphqlClient, mutationName, inputTypeName, onClose, clear],
   )
 
-  // Render action buttons with draft persistence logic
   const renderActions = useCallback(
-    (context: FormActionsContext) => {
-      // For simple forms (no jsonSchema), render basic buttons
-      if (!jsonSchema) {
-        const labels = getNoSchemaStartActionLabels(totalFields)
-
-        return (
-          <div className="flex justify-between gap-3">
-            <button
-              type="button"
-              className="rounded-full bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 shadow hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
-              onClick={handleCancel}
-            >
-              {labels.cancelLabel}
-            </button>
-            <ProcessSubmitButton
-              canSkipScheduleWaits={process?.canSkipScheduleWaits ?? false}
-              isSubmitting={context.formState.isSubmitting}
-            />
-          </div>
-        )
-      }
-
-      return (
-        <ProcessFormActions
-          context={context}
-          canSkipScheduleWaits={process?.canSkipScheduleWaits ?? false}
-          draftCollection={draftProcessExecutionCollection}
-          draftId={effectiveDraftId}
-          processId={processId}
-          name={processName}
-          startStepPath={startStepPath}
-          totalFields={totalFields}
-          jsonSchema={jsonSchema}
-          onDiscard={handleCancel}
-        />
-      )
-    },
+    ({ clearLocalStorage, formState }: FormActionsContext) => (
+      <div className="space-y-3">
+        <div className="flex justify-between gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={isDiscarding || formState.isSubmittingRequest}
+            // Blurring a field can move the button before the click fires.
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={async () => {
+              if (!(await clear())) return
+              clearLocalStorage()
+              onClose("cancelled")
+            }}
+          >
+            {draftCollection
+              ? "Discard"
+              : getNoSchemaStartActionLabels(totalFields).cancelLabel}
+          </Button>
+          <ProcessSubmitButton
+            canSkipScheduleWaits={canSkipScheduleWaits}
+            isSubmitting={formState.isSubmitting || isDiscarding}
+          />
+        </div>
+        {draftError && (
+          <p role="alert" className="text-sm text-rose-600">
+            {draftError}
+          </p>
+        )}
+      </div>
+    ),
     [
-      jsonSchema,
-      process?.canSkipScheduleWaits,
-      draftProcessExecutionCollection,
-      effectiveDraftId,
-      processId,
-      processName,
-      startStepPath,
+      canSkipScheduleWaits,
+      clear,
+      draftCollection,
+      draftError,
+      isDiscarding,
+      onClose,
       totalFields,
-      handleCancel,
     ],
   )
 
-  const form = dynamicForm({
-    draftId: effectiveDraftId,
-    formDefinition,
-    defaultValues,
-    handleCancel,
-    handleSubmit,
-    jsonSchema,
-    renderActions,
-    stepPath: startStepPath,
-  })
+  const form = inputTypeName ? (
+    <BrowserStartForm
+      requestData={requestData}
+      stepPath={startStepPath}
+      pluginConfiguration={pluginConfiguration ?? {}}
+      defaultValues={defaultValues ?? {}}
+      onSubmit={handleSubmit}
+      draftId={storageKey}
+      onDraftChange={save}
+      renderActions={renderActions}
+    />
+  ) : (
+    <EffectSchemaForm
+      schema={emptyStartSchema}
+      defaultValues={{}}
+      onSubmit={handleSubmit}
+    >
+      {renderActions}
+    </EffectSchemaForm>
+  )
 
   return (
     <div
@@ -272,11 +261,98 @@ function StartProcessFormInner({
 }
 
 export function StartProcessForm(props: StartProcessFormProps) {
-  const { collectionPromise } = useDraftProcessCollection()
-
   return (
     <Suspense fallback={<FormSkeleton />}>
-      <StartProcessFormInner {...props} collectionPromise={collectionPromise} />
+      {props.inputTypeName ? (
+        <DraftProcessCollectionProvider>
+          <StartProcessWithDraft {...props} />
+        </DraftProcessCollectionProvider>
+      ) : (
+        <StartProcessFormInner {...props} />
+      )}
     </Suspense>
+  )
+}
+
+function StartProcessWithDraft(props: StartProcessFormProps) {
+  const { collectionPromise, db, initialSync, retryInitialSync } =
+    useDraftProcessCollection()
+  const draftCollection = use(collectionPromise)
+  if (initialSync.status === "loading") return <FormSkeleton />
+  if (initialSync.status === "error") {
+    return (
+      <div role="alert">
+        <p>Couldn't load your last saved values.</p>
+        <Button type="button" onClick={retryInitialSync}>
+          Retry
+        </Button>
+      </div>
+    )
+  }
+  const draft = findProcessDraft(draftCollection, props.processId)
+  return (
+    <StartProcessFormInner
+      {...props}
+      draftCollection={draftCollection}
+      storageKey={
+        db ? `process-start-draft-${db.name}/${props.startStepPath}` : undefined
+      }
+      defaultValues={
+        draft?.startStepPath === props.startStepPath
+          ? { ...props.defaultValues, ...draft.state }
+          : props.defaultValues
+      }
+    />
+  )
+}
+
+const emptyStartSchema = Schema.Struct({})
+
+function BrowserStartForm({
+  requestData,
+  stepPath,
+  draftId,
+  pluginConfiguration,
+  defaultValues,
+  onDraftChange,
+  onSubmit,
+  renderActions,
+}: {
+  requestData?: FormRequestData | null | undefined
+  stepPath: string
+  draftId: string | undefined
+  pluginConfiguration?: Readonly<Record<string, unknown>>
+  defaultValues: Record<string, unknown>
+  onDraftChange: NonNullable<
+    React.ComponentProps<typeof EffectSchemaForm>["onDraftChange"]
+  >
+  onSubmit: (
+    values: Record<string, unknown>,
+    hasInput: boolean,
+  ) => Promise<FieldError[] | undefined>
+  renderActions: (
+    context: FormActionsContext,
+    validator: StandardSchemaV1,
+  ) => React.ReactNode
+}) {
+  const schema = use(loadBrowserFormDefinition(stepPath))
+  return (
+    <EffectSchemaForm
+      stepPath={stepPath}
+      requestData={requestData}
+      schema={schema}
+      pluginConfiguration={pluginConfiguration ?? {}}
+      draftId={draftId}
+      defaultValues={defaultValues}
+      onDraftChange={onDraftChange}
+      onSubmit={(values) =>
+        onSubmit(
+          values,
+          Object.keys(submissionSchemaSync(schema).fields).length > 0,
+        )
+      }
+    >
+      {renderActions}
+    </EffectSchemaForm>
   )
 }

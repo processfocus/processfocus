@@ -193,7 +193,9 @@ describe("pforg todos list", () => {
 
     expect(result.exitCode).toBe(1)
     expect(result.stdout).toBe("")
-    expect(result.stderr).toBe("❌ 'not-a-number' is not a integer\n")
+    expect(result.stderr).toBe(
+      '❌ Invalid value for flag --limit: "not-a-number". Expected a string representing a finite number\n',
+    )
   })
 
   test("prints GraphQL failures on stderr", async () => {

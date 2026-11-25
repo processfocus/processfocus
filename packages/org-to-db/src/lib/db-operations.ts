@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, Data, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type {
   ExtractedDocumentStoreData,
   ExtractedFlowData,
@@ -60,6 +60,13 @@ export class FlowCrossProcessError extends Data.TaggedError(
  * Upsert operations return the database-generated primary key for the inserted/updated record.
  */
 export interface DbOperationsService<R = never> {
+  readonly nextProcessReplicationRevision: Effect.Effect<number, SqlError, R>
+  readonly setProcessReplicationRevision: (
+    revision: number,
+  ) => Effect.Effect<string[], SqlError, R>
+  readonly enqueueProcessChanges: (
+    ids: readonly string[],
+  ) => Effect.Effect<void, SqlError, R>
   /**
    * Upserts a single organizational unit and returns its database PK.
    * @param orgUnit - The org unit data to upsert
@@ -250,6 +257,8 @@ export interface DbOperationsService<R = never> {
     clientId: string,
     secretHash: string,
     audience: string,
+    workloadTrust?: Record<string, unknown>,
+    awsRoleBindings?: Record<string, unknown>[],
   ) => Effect.Effect<void, SqlError, R>
 
   /**
@@ -343,8 +352,8 @@ export interface DbOperationsService<R = never> {
  * Type safety is maintained through the specific implementation layers
  * (PostgresDbOperationsLive, SqliteDbOperationsLive) which have explicit requirements.
  */
-export class DbOperations extends Context.Tag("@pf/org-to-db/DbOperations")<
+export class DbOperations extends Context.Service<
   DbOperations,
-  // biome-ignore lint/suspicious/noExplicitAny: Required for generic service tag accepting multiple DB implementations; never/unknown will not work
+  // biome-ignore lint/suspicious/noExplicitAny: Generic service accepts database implementations with different requirements
   DbOperationsService<any>
->() {}
+>()("@pf/org-to-db/DbOperations") {}

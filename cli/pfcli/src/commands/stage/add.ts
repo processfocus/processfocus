@@ -1,5 +1,6 @@
 import { Console, Effect } from "effect"
 import { CliError } from "../../errors"
+import { acquireAccessToken } from "../../utils/credentials"
 import {
   buildExecutionEventSource,
   closeExecutionEventSource,
@@ -68,7 +69,7 @@ export const runStageAdd = (
     const subscriptionTransport =
       yield* graphqlRequest<SubscriptionTransportResponse>(
         endpoint,
-        credentials.accessToken,
+        acquireAccessToken(credentials),
         SUBSCRIPTION_TRANSPORT_QUERY,
         {},
       )
@@ -89,7 +90,7 @@ export const runStageAdd = (
     return yield* Effect.gen(function* () {
       const addStageResult = yield* graphqlRequest<StartAddStageResponse>(
         endpoint,
-        credentials.accessToken,
+        acquireAccessToken(credentials),
         START_ADD_STAGE_MUTATION,
         {
           projectId,

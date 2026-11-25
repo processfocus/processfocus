@@ -1,0 +1,149 @@
+---
+title: Google
+description: Google single sign-on reference.
+---
+
+Google is an identity-provider option for Process Focus. For the shared
+registration behaviour, see [Single-Sign-On (SSO)](/docs/reference/authentication/sso/).
+
+## Google Workspace
+
+Setting up a Google Workspace identity provider requires injecting two
+secrets. We recommend you use the
+`configureOrg` method to do that, as this will provide proper error
+feedback when configuration is missing.
+
+Export `configureOrg` as an Effect to load the required configuration. When
+the runtime executes it, a missing value fails configuration with an error
+identifying the missing key.
+See [Configuration](/docs/reference/configuration/) for how `Config`,
+`yield*`, and `configureOrg` work together.
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const configureOrg = Effect.gen(function* () {
+  const googleClientId = yield* Config.String("GOOGLE_CLIENT_ID")
+  const googleClientSecret = yield* Config.String("GOOGLE_CLIENT_SECRET")
+
+  new AuthenticationConfig(org, "auth", {
+    identityProviders: {
+      google: {
+        clientID: googleClientId,
+        clientSecret: googleClientSecret,
+        scopes: ["openid", "email", "profile"],
+      },
+    },
+  })
+
+  return org
+})
+```
+
+You need two pieces of configuration here:
+1. Client ID.
+2. Client secret.
+
+Google doesn't make creating these values easy. Detailed steps are in the next section.
+
+This configuration does not allow anyone to log in yet, unless they
+have an invitation.
+
+## Organisational Units
+
+If you use organisational units in your Google Directory, it's possible to use
+them as well. For example, you could surface the organisational unit as
+the role. That makes Process Focus seamless: a new user logs in and
+is immediately assigned the right role based on the
+organisational unit they are in.
+
+The role construct IDs must match the Google organisational unit paths.
+For example, a role with ID `Office Staff` directly under the organisation
+has the path `/Office Staff`.
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation, Role } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const officeStaff = new Role(org, "Office Staff")
+export const supportStaff = new Role(org, "Support Staff")
+export const management = new Role(org, "Management")
+
+export const configureOrg = Effect.gen(function* () {
+  const googleClientId = yield* Config.String("GOOGLE_CLIENT_ID")
+  const googleClientSecret = yield* Config.String("GOOGLE_CLIENT_SECRET")
+  const googleServiceAccountKey = yield* Config.String("GOOGLE_SERVICE_ACCOUNT_KEY")
+  const googleAdminEmail = yield* Config.String("GOOGLE_ADMIN_EMAIL")
+
+  new AuthenticationConfig(org, "auth", {
+    identityProviders: {
+      google: {
+        clientID: googleClientId,
+        clientSecret: googleClientSecret,
+        scopes: ["openid", "email", "profile"],
+        invitedOrgUnits: [
+          "/Office Staff",
+          "/Support Staff",
+          "/Management",
+        ],
+        orgUnitAsRole: true,
+        serviceAccountKey: googleServiceAccountKey,
+        adminEmail: googleAdminEmail,
+      },
+    },
+  })
+
+  return org
+})
+```
+
+## Allowing access to Gmail accounts
+
+You can still use Google for SSO even if you don't use Google
+Directory. Create an OAuth token as per the next section, and select
+External for Audience when creating the app in your project.
+
+## Creating a Google OAuth token
+
+The steps below summarise the process; Google's console changes often:
+
+1. Log in to the [Google Console](https://console.cloud.google.com/).
+2. Create a project: it's best to create a new project for every new app or project.
+3. Select that project.
+4. Go to the [credentials
+   page](https://console.cloud.google.com/auth/clients/). For a new
+   project (which you should have created), you will need to start
+   creating an app, so click "Get started":
+
+   ![Google auth platform setup prompt with Get started button](/images/docs/google-auth-platform-get-started.png)
+
+5. Create an app by providing a name. Note you can have only one app per project.
+6. Then, for Audience, select Internal if you rely on your Google
+   Workspace Directory, or External if you want to use Google purely
+   as social login. For external apps, you can add a list of Gmail
+   addresses which should have access.
+7. Follow the instructions, or go to the [Clients page](https://console.cloud.google.com/auth/clients/) to create an OAuth client.
+
+   ![Google Cloud credentials page showing OAuth 2.0 client IDs](/images/docs/google-cloud-credentials.png)
+8. Click Create credentials and select OAuth client ID:
+
+   ![Create credentials menu with OAuth client ID selected](/images/docs/google-cloud-select-oauth-client.png)
+9. For Application type, select "Web application". For Authorised
+   redirect URIs supply a list of callbacks, for example for local
+   testing, a localhost and port. You can also pass in URLs created
+   when deploying via the Process Focus Cloud Console, or if you use
+   custom domains, those as well.
+
+   ![Google OAuth web application client configuration with authorised redirect URIs](/images/docs/google-oauth-web-client.png)
+
+   Then press Create (or Save when editing).
+10. Click Download JSON to store the credentials locally, and your agent will then know how to use this to configure your SSO in Process Focus:
+
+    ![OAuth client created dialog with Download JSON button; credentials redacted](/images/docs/google-oauth-client-created.png)

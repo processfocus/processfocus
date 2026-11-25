@@ -1,18 +1,9 @@
-# About
+# @pf/rxdb-collections
 
-Defines rxdb collections used in the frontend as Effect Schema.
+Effect Schema definitions for the frontend's replicated RxDB collections.
 
-# Architecture
+These definitions feed the replication GraphQL schema and the JSON schemas
+required by RxDB, keeping client storage and the replication API aligned.
 
-It uses the `generate-rxdb` tool to generate `rxdb.graphql` from the schema.
-
-Run with:
-
-```sh
-npx nx run graphql-schema:build-rxdb
-```
-
-# JSON schema
-
-RxDb only handles a limited form of the JSON schema, we deal with this
-complexity in `toRxDbJsonSchema()`.
+See [`@pf/graphql-schema`](../graphql-schema/README.md) for the API schema and
+[`@pf/graphql-api`](../graphql-api/README.md) for its server implementation.

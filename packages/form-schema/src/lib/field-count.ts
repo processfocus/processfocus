@@ -1,5 +1,4 @@
-import { Either, Schema } from "effect"
-import { ArrayFormatter } from "effect/ParseResult"
+import { Result, Schema, SchemaIssue } from "effect"
 
 const isKeyObject = (segment: unknown): segment is { key: PropertyKey } =>
   typeof segment === "object" &&
@@ -21,30 +20,33 @@ const extractKey = (segment: unknown): PropertyKey | undefined => {
  * @returns Number of top-level fields with validation errors
  */
 export const countInvalidFields = (
-  schema: Schema.Schema.Any,
+  schema: Schema.Top,
   data: unknown,
 ): number => {
   // Cast to context-free schema since our form schemas don't require context
-  const contextFreeSchema = schema as Schema.Schema<unknown, unknown, never>
+  const contextFreeSchema = schema as Schema.Codec<
+    unknown,
+    unknown,
+    never,
+    never
+  >
 
-  // Try to decode - if it succeeds, no invalid fields
-  const result = Schema.decodeUnknownEither(contextFreeSchema)(data, {
+  const result = Schema.decodeUnknownResult(contextFreeSchema)(data, {
     errors: "all",
     onExcessProperty: "ignore",
   })
 
-  // If validation succeeds, no invalid fields
-  if (Either.isRight(result)) {
+  if (Result.isSuccess(result)) {
     return 0
   }
 
-  // Format the error to get individual issues
-  const issues = ArrayFormatter.formatErrorSync(result.left)
+  const issues = SchemaIssue.makeFormatterStandardSchemaV1()(
+    result.failure.issue,
+  ).issues
 
-  // Count unique top-level field paths
   const fieldsWithErrors = new Set(
     issues
-      .map((issue) => extractKey(issue.path[0]))
+      .map((issue) => extractKey(issue.path?.[0]))
       .filter((key): key is PropertyKey => key !== undefined),
   )
 
@@ -71,7 +73,7 @@ export const countTotalFields = (schema: {
  * @returns Object with fieldsCompleted and totalFields
  */
 export const calculateFieldCompletion = (
-  schema: { fields: Record<PropertyKey, unknown> } & Schema.Schema.Any,
+  schema: { fields: Record<PropertyKey, unknown> } & Schema.Top,
   data: unknown,
 ): { fieldsCompleted: number; totalFields: number } => {
   const totalFields = countTotalFields(schema)

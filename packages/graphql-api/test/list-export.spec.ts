@@ -1,6 +1,7 @@
-import { DateTime, Effect, Either, Layer, Schema, Stream } from "effect"
+import { DocumentStoreService } from "@processfocus/runtime"
+import type { Context } from "effect"
+import { DateTime, Effect, Layer, Result, Schema, Stream } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
-import { DocumentStoreService } from "@pf/document-store-service"
 import {
   ExportNonScalarError,
   ExportRowLimitError,
@@ -27,7 +28,7 @@ const TEST_USER_EMAIL = "test@example.com"
 const DEFAULT_LIST_PATH = "/operations/employees"
 
 const makeContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: TEST_USER_EMAIL,
     id: TEST_USER_EMAIL,
@@ -80,17 +81,16 @@ function mergeChunks(chunks: Uint8Array[]): Uint8Array {
 
 const makeAuthorizationService = (
   canAccess: boolean,
-): AuthorizationService["Type"] => ({
+): Context.Service.Shape<typeof AuthorizationService> => ({
   canIssueDelegationSecret: () => Effect.succeed(false),
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(false),
+  policyVersion: Effect.succeed("test-policy"),
   canCompleteStep: () => Effect.succeed(false),
-  canCompleteTodo: () => Effect.succeed(false),
+  canViewEmbeddedForm: () => Effect.succeed(false),
   canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-  canCompletePublicTodo: () => Effect.succeed(false),
   canRequestRole: () => Effect.succeed(false),
-  canRequestProviderUserPermissions: () => Effect.succeed(false),
   canActOnBehalfOf: () => Effect.succeed(false),
   canViewExecution: () => Effect.succeed(false),
   canRestartExecution: () => Effect.succeed(false),
@@ -110,9 +110,8 @@ const makeAuthorizationService = (
 
 const makeDocumentStoreService = (
   state: StoredExportState,
-): DocumentStoreService["Type"] => ({
-  requestUploadUrl: () =>
-    Effect.dieMessage("requestUploadUrl not used in tests"),
+): Context.Service.Shape<typeof DocumentStoreService> => ({
+  requestUploadUrl: () => Effect.die("requestUploadUrl not used in tests"),
   requestDownloadUrl: (_fileId, _storePrefix, filename) => {
     state.requestedFilename = filename
     return Effect.succeed({
@@ -121,10 +120,14 @@ const makeDocumentStoreService = (
     })
   },
   storeFile: (opts) =>
-    Stream.runFold(opts.content, [] as Uint8Array[], (chunks, chunk) => {
-      chunks.push(chunk)
-      return chunks
-    }).pipe(
+    Stream.runFold(
+      opts.content,
+      () => [] as Uint8Array[],
+      (chunks, chunk) => {
+        chunks.push(chunk)
+        return chunks
+      },
+    ).pipe(
       Effect.orDie,
       Effect.map((chunks) => {
         state.storedFilename = opts.filename
@@ -132,9 +135,9 @@ const makeDocumentStoreService = (
         return { fileId: opts.fileId }
       }),
     ),
-  getFileContent: () => Effect.dieMessage("getFileContent not used in tests"),
-  getFileMetadata: () => Effect.dieMessage("getFileMetadata not used in tests"),
-  deleteFile: () => Effect.dieMessage("deleteFile not used in tests"),
+  getFileContent: () => Effect.die("getFileContent not used in tests"),
+  getFileMetadata: () => Effect.die("getFileMetadata not used in tests"),
+  deleteFile: () => Effect.die("deleteFile not used in tests"),
 })
 
 function makeExportLayer(
@@ -192,25 +195,25 @@ async function runExport(
     ),
   )
 
-  return Effect.runPromise(Effect.either(effect))
+  return Effect.runPromise(Effect.result(effect))
 }
 
 type ExportOutcome = Awaited<ReturnType<typeof runExport>>
 
 function expectRight(result: ExportOutcome) {
-  expect(Either.isRight(result)).toBe(true)
-  if (Either.isLeft(result)) {
-    throw result.left
+  expect(Result.isSuccess(result)).toBe(true)
+  if (Result.isFailure(result)) {
+    throw result.failure
   }
-  return result.right
+  return result.success
 }
 
 function expectLeft(result: ExportOutcome) {
-  expect(Either.isLeft(result)).toBe(true)
-  if (Either.isRight(result)) {
-    throw result.right
+  expect(Result.isFailure(result)).toBe(true)
+  if (Result.isSuccess(result)) {
+    throw result.success
   }
-  return result.left
+  return result.failure
 }
 
 describe("ListExportService", () => {
@@ -249,6 +252,33 @@ describe("ListExportService", () => {
     expect(state.requestedFilename).toBe("Employee 'Records'.csv")
     expect(state.csv).toBe(
       '"last,name",notes\r\n"Smith, ""Jane""","line1\rline2"\r\n',
+    )
+  })
+
+  it("exports actor labels while retaining ordinary actors and suppressing malformed audit data", async () => {
+    const organisation = new Organisation({ name: "Test" })
+    const role = new Role(organisation, "viewer")
+    const by =
+      'pf:delegation:{"version":1,"ownerUserId":"owner","ownerEmail":"owner@example.com","delegationId":"old","generationId":"expired","name":"agent, exports"}'
+    new List(organisation, "actors", {
+      name: "Actors",
+      roles: [role],
+      output: { actor: Schema.String, keyType: Schema.String },
+      query: () =>
+        Effect.succeed({
+          items: [
+            by,
+            "human@example.com",
+            "SYSTEM",
+            "pf:delegation:invalid",
+          ].map((actor) => ({ actor, keyType: "pf:delegation:spare" })),
+          totalCount: 4,
+        }),
+    })
+    const state = makeStoredExportState()
+    expectRight(await runExport(organisation, state, { listPath: "actors" }))
+    expect(state.csv).toBe(
+      'actor,keyType\r\n"owner@example.com/agent, exports",pf:delegation:spare\r\nhuman@example.com,pf:delegation:spare\r\nSYSTEM,pf:delegation:spare\r\n,pf:delegation:spare\r\n',
     )
   })
 
@@ -517,7 +547,7 @@ describe("ListExportService", () => {
       roles: [viewer],
       output: {
         id: Schema.String,
-        hiddenCode: Schema.String.annotations({
+        hiddenCode: Schema.String.annotate({
           [ListVisibleInList]: false,
         }),
       },
@@ -621,7 +651,7 @@ describe("ListExportService", () => {
             id: Schema.String,
           },
           exportOutput: {
-            status: Schema.Union(Schema.String, Schema.Number),
+            status: Schema.Union([Schema.String, Schema.Number]),
           },
           query: () => Effect.succeed({ items: [], totalCount: 0 }),
           exportQuery: () =>

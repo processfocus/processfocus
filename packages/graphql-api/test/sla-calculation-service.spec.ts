@@ -1,3 +1,4 @@
+import type { Context } from "effect"
 import { Effect, Layer } from "effect"
 import {
   BusinessCalendarQueries,
@@ -16,7 +17,7 @@ import { describe, expect, it } from "bun:test"
 const mockCalendarQueries = (
   calendarData: Map<string, OrgUnitCalendarData>,
   rootOrgUnitId: string | null = null,
-): BusinessCalendarQueries["Type"] => ({
+): Context.Service.Shape<typeof BusinessCalendarQueries> => ({
   getCalendarData: (orgUnitIds) =>
     Effect.succeed(
       new Map(
@@ -636,9 +637,6 @@ describe("SlaCalculationService", () => {
 
     it("should calculate SLA target in NZ timezone correctly", async () => {
       // Start at 7:00 AM NZT on a Monday (which is 6:00 PM UTC Sunday)
-      // Since 7:00 AM is before business hours (8:30 AM), the SLA should
-      // start counting from 8:30 AM NZT
-      // With 1 business day SLA, it should end at end of that business day
       const input: SlaCalculationInput = {
         id: "exec-nz",
         // 2024-01-14T18:00:00Z = 2024-01-15T07:00:00 NZT (Monday 7:00 AM)

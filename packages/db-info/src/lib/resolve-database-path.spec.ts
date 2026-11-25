@@ -106,12 +106,16 @@ describe("DatabasePathConfig", () => {
   it("prefers SQLITE_DATABASE_PATH over PF_ORG", async () => {
     const result = await Effect.runPromise(
       DatabasePathConfig.pipe(
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["SQLITE_DATABASE_PATH", "/explicit/path.db"],
-              ["PF_ORG", "examples/demo"],
-            ]),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown(
+              Object.fromEntries(
+                new Map([
+                  ["SQLITE_DATABASE_PATH", "/explicit/path.db"],
+                  ["PF_ORG", "examples/demo"],
+                ]),
+              ),
+            ),
           ),
         ),
       ),
@@ -122,8 +126,12 @@ describe("DatabasePathConfig", () => {
   it("falls back to PF_ORG when SQLITE_DATABASE_PATH unset", async () => {
     const result = await Effect.runPromise(
       DatabasePathConfig.pipe(
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(new Map([["PF_ORG", "/tmp/my-org"]])),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown(
+              Object.fromEntries(new Map([["PF_ORG", "/tmp/my-org"]])),
+            ),
+          ),
         ),
       ),
     )
@@ -133,8 +141,12 @@ describe("DatabasePathConfig", () => {
   it("resolves relative PF_ORG paths to absolute", async () => {
     const result = await Effect.runPromise(
       DatabasePathConfig.pipe(
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(new Map([["PF_ORG", "examples/demo"]])),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown(
+              Object.fromEntries(new Map([["PF_ORG", "examples/demo"]])),
+            ),
+          ),
         ),
       ),
     )
@@ -145,7 +157,11 @@ describe("DatabasePathConfig", () => {
   it("fails when neither is set", async () => {
     const result = await Effect.runPromiseExit(
       DatabasePathConfig.pipe(
-        Effect.withConfigProvider(ConfigProvider.fromMap(new Map())),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown(Object.fromEntries(new Map())),
+          ),
+        ),
       ),
     )
     expect(result._tag).toBe("Failure")

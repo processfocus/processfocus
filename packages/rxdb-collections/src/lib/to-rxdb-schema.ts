@@ -1,5 +1,4 @@
-import { type Schema as ES, JSONSchema } from "effect"
-import type { JsonSchema7, JsonSchema7Object } from "effect/JSONSchema"
+import { Schema as ES } from "effect"
 
 /**
  * Converts Effect Schema JSON output to RxDB-compatible format.
@@ -13,9 +12,9 @@ import type { JsonSchema7, JsonSchema7Object } from "effect/JSONSchema"
  * so we need to transform the output for RxDB compatibility.
  */
 
-type GeneratedJsonSchema = JsonSchema7Object & {
-  $schema?: string
-  $defs?: Record<string, JsonSchema7>
+type GeneratedJsonSchema = {
+  properties: Record<string, unknown>
+  required?: readonly string[]
 }
 
 /**
@@ -46,7 +45,17 @@ export const toRxDbProperties = (
       continue
     }
 
-    const prop = value as Record<string, unknown>
+    let prop = value as Record<string, unknown>
+    // v4 emits optional codecs as a nullable union. Top-level definitions
+    // were inlined before making optional properties nullable in v3.
+    if (
+      Array.isArray(prop["anyOf"]) &&
+      prop["anyOf"].length === 2 &&
+      prop["anyOf"][1]?.type === "null" &&
+      prop["anyOf"][0]?.$ref
+    ) {
+      prop = prop["anyOf"][0]
+    }
 
     // Handle $ref by inlining the definition
     if ("$ref" in prop && typeof prop["$ref"] === "string") {
@@ -75,13 +84,50 @@ export const toRxDbProperties = (
 export const toRxDbProperty = (
   prop: Record<string, unknown>,
 ): Record<string, unknown> => {
+  // v4's JSON codec also encodes non-finite numbers as strings. Replication
+  // retains its existing JSON-number contract.
+  if (
+    Array.isArray(prop["anyOf"]) &&
+    (prop["anyOf"].length === 2 ||
+      (prop["anyOf"].length === 3 && prop["anyOf"][2]?.type === "null"))
+  ) {
+    const [number, special] = prop["anyOf"]
+    if (
+      number?.type === "number" &&
+      special?.type === "string" &&
+      JSON.stringify(special.enum) ===
+        JSON.stringify(["Infinity", "-Infinity", "NaN"])
+    ) {
+      return prop["anyOf"].length === 3
+        ? makeNullable({ type: "number" })
+        : { type: "number" }
+    }
+  }
+  if (Array.isArray(prop["anyOf"]) && prop["anyOf"].length === 2) {
+    const branches = prop["anyOf"].map(toRxDbProperty)
+    const value = branches.find((branch) => branch["type"] !== "null")
+    if (branches.some((branch) => branch["type"] === "null") && value) {
+      return makeNullable(value)
+    }
+  }
+  if (prop["type"] === "object" && !prop["properties"]) {
+    return { type: "object", properties: {}, required: [] }
+  }
+
   // Handle Effect Schema's "unknown" type - use object type for JSON values
   if (prop["$id"] === "/schemas/unknown") {
     return { type: "object" }
   }
 
   // Remove Effect Schema metadata that RxDB doesn't accept
-  const { $id, $ref, title, description, additionalProperties, ...clean } = prop
+  const { $id, $ref, title, description, additionalProperties, ...rest } = prop
+  const clean: Record<string, unknown> = { ...rest }
+
+  // Effect 4.0.4+ encodes the safe-integer range on plain `Schema.Int`. Those
+  // bounds carry no information for our counters, and adding them would change
+  // the schema hash of existing local collections without a version bump.
+  if (clean["minimum"] === Number.MIN_SAFE_INTEGER) delete clean["minimum"]
+  if (clean["maximum"] === Number.MAX_SAFE_INTEGER) delete clean["maximum"]
 
   // Recursively process nested objects
   if (
@@ -143,8 +189,12 @@ export const toRxDbJsonSchema = <Fields extends ES.Struct.Fields>(
   required: readonly string[]
 } => {
   // We have a struct, so we always have a JsonSchema7Object basically
-  const generated = JSONSchema.make(schema) as GeneratedJsonSchema
-  const allProperties = toRxDbProperties(generated.properties, generated.$defs)
+  const document = ES.toJsonSchemaDocument(schema)
+  const generated = document.schema as GeneratedJsonSchema
+  const allProperties = toRxDbProperties(
+    generated.properties,
+    document.definitions,
+  )
   const requiredSet = new Set(generated.required)
 
   // Make optional fields nullable (they're not in required array)
@@ -161,6 +211,6 @@ export const toRxDbJsonSchema = <Fields extends ES.Struct.Fields>(
 
   return {
     properties: propertiesWithNullable,
-    required: generated.required,
+    required: generated.required ?? [],
   }
 }

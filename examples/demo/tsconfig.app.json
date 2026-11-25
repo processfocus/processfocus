@@ -11,10 +11,22 @@
   "exclude": ["eslint.config.js", "eslint.config.cjs", "eslint.config.mjs"],
   "references": [
     {
+      "path": "../../runtime/local"
+    },
+    {
+      "path": "../../packages/graphql-api/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/runtime/tsconfig.lib.json"
+    },
+    {
       "path": "../../plugins/posthog/tsconfig.lib.json"
     },
     {
       "path": "../../plugins/aws/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/service-drizzle-sqlite/tsconfig.lib.json"
     },
     {
       "path": "../../packages/request-time/tsconfig.lib.json"
@@ -30,6 +42,9 @@
     },
     {
       "path": "../../packages/graphql-db-operations/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/form-submission-schema/tsconfig.lib.json"
     },
     {
       "path": "../../packages/form-schema/tsconfig.lib.json"

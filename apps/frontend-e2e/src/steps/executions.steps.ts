@@ -6,7 +6,7 @@ const EXECUTION_TIMEOUT = 30_000
 
 const getExecutionCard = (page: Page, name: string) =>
   page
-    .locator('[role="button"]', {
+    .locator("article", {
       has: page.getByRole("heading", { name, exact: true }),
     })
     .first()
@@ -15,6 +15,32 @@ const getExecutionTimelineStep = (page: Page, name: string) =>
   page.getByRole("listitem").filter({
     has: page.getByText(name, { exact: true }),
   })
+
+Then(
+  "the {string} execution timestamps should cycle independently without opening it",
+  async ({ page }, processName: string) => {
+    const card = getExecutionCard(page, processName)
+    const times = card.locator("button:has(time)")
+    await expect(times).toHaveCount(2)
+    const first = times.first()
+    const sibling = times.last()
+    const siblingLabel = await sibling.getAttribute("aria-label")
+    const url = page.url()
+    await expect(first).toHaveAccessibleName(/\. Relative time\. Show/)
+    await first.press("Enter")
+    await expect(first).toHaveAccessibleName(/\. Browser-local time\. Show/)
+    await expect(sibling).toHaveAttribute("aria-label", siblingLabel ?? "")
+    await expect(page).toHaveURL(url)
+    const hasUtcMode = (await first.getAttribute("aria-label"))?.endsWith(
+      "Show UTC.",
+    )
+    await first.click()
+    await expect(first).toHaveAccessibleName(
+      hasUtcMode ? /\. UTC\. Show/ : /\. Relative time\. Show/,
+    )
+    await expect(page).toHaveURL(url)
+  },
+)
 
 When("I visit the executions page", async ({ page }) => {
   await page.goto("/executions", { waitUntil: "domcontentloaded" })
@@ -32,7 +58,9 @@ When(
 When(
   "I open the {string} execution from the executions list",
   async ({ page }, processName: string) => {
-    await getExecutionCard(page, processName).click()
+    await getExecutionCard(page, processName)
+      .getByRole("button", { name: processName, exact: true })
+      .click()
   },
 )
 

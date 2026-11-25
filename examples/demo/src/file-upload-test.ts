@@ -1,18 +1,8 @@
-import { FileField } from "@pf/form-schema"
-import {
-  type DocumentStore,
-  Form,
-  type OrgUnit,
-  Process,
-  type Role,
-} from "@pf/process"
+import { Form, type OrgUnit, Process, type Role } from "@pf/process"
+import { uploadDocumentForm } from "./file-upload-test-forms"
 
 export class FileUploadTest extends Process {
-  constructor(
-    scope: OrgUnit,
-    id: string,
-    props: { role: Role; documentStore: DocumentStore },
-  ) {
+  constructor(scope: OrgUnit, id: string, props: { role: Role }) {
     super(scope, id, {
       name: "File Upload Test",
       purpose: "Test file upload and download permissions",
@@ -20,12 +10,11 @@ export class FileUploadTest extends Process {
 
     const upload = new Form(this, "Upload document", {
       name: "Upload a test document",
-      form: () => ({
-        fileId: FileField({
-          label: "Document",
-          documentStore: props.documentStore,
-        }),
-      }),
+      form: uploadDocumentForm,
+      browser: {
+        entrypoint: "src/file-upload-test-forms.ts",
+        exportName: "uploadDocumentForm",
+      },
       role: props.role,
     })
 

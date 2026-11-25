@@ -1,0 +1,61 @@
+---
+title: Invitations
+description: Define user invitations in code in Process Focus.
+---
+
+Invitations are the way to allow new identities to become users. Process
+Focus does not have a mechanism to create users. Users are always
+verified identities. Users must identify themselves first.
+
+But identification is not enough: they also must have permission to
+log in. This permission can be explicitly granted by creating
+invitations in code or via the frontend. It can also be implicitly
+granted to those who are members of a group, for example. Support for
+this depends on [SSO providers](/docs/reference/authentication/sso/).
+
+## Invitations in code
+
+During development it's useful to have invitations in code, so you can
+log into local systems more easily:
+
+```typescript
+import { Invitation, Organisation, Role } from "@pf/process"
+
+const employee = new Role(org, "Employee")
+
+new Invitation(org, "alice", {
+  email: "alice@example.com",
+  roles: [employee],
+})
+```
+
+## Invitations via pfcli
+
+For local development, build and import your organisation first so its database
+contains the current migrations and roles. Then create an invitation with
+`pfcli`, using existing roles' full paths:
+
+```bash
+pfcli invitation create path/to/your/project --email alice@example.com --role /Employee --role /Administrator
+```
+
+Supply at least one `--role`; repeat it to assign multiple roles. This command
+requires local database write access, not Dashboard authentication. It creates
+the invitation without a registration link. For passkeys, create a
+[registration link](/docs/reference/authentication/passkeys/#creating-a-registration-link-with-pfcli)
+afterwards.
+
+## Creating invitations in the frontend
+
+Click on "Users & Sign-in" on the sidebar to see pending invitations:
+
+![Pending invitations on the Users & Sign-in page](/images/docs/pending-invitations.png)
+
+Add an invitation by clicking "New invitation":
+
+![New invitation form with email and role assignments](/images/docs/new-invitation.png)
+
+Depending on your chosen identity provider, you may get the option to
+send the user a registration link. If you use an identity provider
+like Google Workspace, the user can simply go to the main URL and
+log in from there. No separate registration link is needed.

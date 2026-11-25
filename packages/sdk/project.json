@@ -59,7 +59,13 @@
       "options": {
         "command": "bun scripts/verify-external-authoring.ts"
       },
-      "outputs": []
+      "outputs": [],
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/scripts/verify-external-authoring.ts",
+        "{workspaceRoot}/fixtures/external-authoring/**/*"
+      ]
     },
     "nx-release-publish": {
       "executor": "@nx/js:release-publish",

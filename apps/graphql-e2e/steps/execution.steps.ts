@@ -27,7 +27,6 @@ interface PullExecutionResult {
   }
 }
 
-// Store executions in world for later assertions
 declare module "../support/world" {
   interface TestWorld {
     executionDocuments: Execution[] | undefined
@@ -83,7 +82,6 @@ Then("execution steps should have no duplicates", function (this: TestWorld) {
     const uniquePaths = new Set(stepPaths)
 
     if (stepPaths.length !== uniquePaths.size) {
-      // Find duplicates for error message
       const counts = new Map<string, number>()
       for (const path of stepPaths) {
         counts.set(path, (counts.get(path) ?? 0) + 1)

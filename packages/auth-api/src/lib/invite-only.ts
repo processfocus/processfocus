@@ -1,4 +1,4 @@
-import { Effect, Either, Option, Schema } from "effect"
+import { Effect, Option, Result, Schema } from "effect"
 import { AuthenticationDatabase } from "./authentication-database.js"
 
 const InviteOnlyConfigSchema = Schema.Struct({
@@ -6,8 +6,8 @@ const InviteOnlyConfigSchema = Schema.Struct({
 })
 
 const readInviteOnly = (config: unknown): boolean => {
-  const decoded = Schema.decodeUnknownEither(InviteOnlyConfigSchema)(config)
-  return Either.isRight(decoded) ? (decoded.right.inviteOnly ?? true) : true
+  const decoded = Schema.decodeUnknownResult(InviteOnlyConfigSchema)(config)
+  return Result.isSuccess(decoded) ? (decoded.success.inviteOnly ?? true) : true
 }
 
 export const resolveInviteOnlyForProvider = (provider: string) =>

@@ -44,9 +44,6 @@ import { useRuntimeConfig } from "@/components/config-provider"
 import { getSessionCacheScope } from "@/lib/auth/session-cache-scope"
 
 /**
- * Configuration for creating a collection provider
- */
-/**
  * Base type for all RxDB documents - must have id and updatedAt
  */
 interface RxDbDocumentBase {
@@ -69,6 +66,10 @@ interface CollectionProviderConfig<TDoc extends RxDbDocumentBase> {
    * Name of the collection (used for error messages and identifiers)
    */
   name: string
+
+  /** Override when a server-owned collection must restart its pull checkpoint. */
+  replicationIdentifier?: string
+  streamMode?: "documents" | "resync"
 
   /**
    * Pull query builder for fetching data from server
@@ -167,7 +168,15 @@ export interface ReplicationRuntimeConfig {
   userId: string
 }
 
+export type InitialSyncState =
+  | { status: "loading" }
+  | { status: "complete" }
+  | { status: "error"; error: Error }
+
 export interface CollectionContextValue<TDoc extends RxDbDocumentBase> {
+  /** Server bootstrap and adapter commits, independent of local availability. */
+  initialSync: InitialSyncState
+  retryInitialSync: () => void
   db: ProcessFocusDatabase | null
   rxCollection: RxCollection<TDoc> | null
   state: CollectionState<TDoc>
@@ -247,7 +256,51 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
   let persistentState: CollectionState<TDoc> =
     createPendingState("waiting-for-rxdb")
 
-  // Prevents duplicate initialization starts (needed for React 18 Strict Mode double-mount)
+  // Bootstrap observers belong to the current cache/replication generation.
+  let initialSync: InitialSyncState = { status: "loading" }
+  let disposeInitialSync = () => {}
+  let awaitQueryPropagation: () => Promise<void> = async () => {}
+
+  function resetInitialSync(): void {
+    disposeInitialSync()
+    initialSync = { status: "loading" }
+  }
+
+  function observeInitialSync(
+    replication: RxReplicationState<TDoc, PullCheckpoint>,
+  ): void {
+    disposeInitialSync()
+    if (initialSync.status === "complete") return
+    let current = true
+    const subscription = replication.error$.subscribe((error) => {
+      // RC_STREAM is recoverable independently of the required HTTP pull.
+      if (!current || error.code !== "RC_PULL") return
+      initialSync = { status: "error", error: asError(error) }
+      triggerAllUpdates()
+    })
+    disposeInitialSync = () => {
+      current = false
+      subscription.unsubscribe()
+    }
+    const propagate = awaitQueryPropagation
+    void replication
+      .awaitInitialReplication()
+      .then(async () => {
+        if (!current) return
+        await propagate()
+        if (!current) return
+        initialSync = { status: "complete" }
+        disposeInitialSync()
+        triggerAllUpdates()
+      })
+      .catch((error: unknown) => {
+        if (!current) return
+        initialSync = { status: "error", error: asError(error) }
+        triggerAllUpdates()
+      })
+  }
+
+  // Prevents duplicate initialization starts across Strict Mode mounts.
   let initializationInProgress = false
 
   // Generation counter - incremented on cleanup() to invalidate in-progress initializations.
@@ -320,8 +373,8 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
    */
   async function cleanup(): Promise<void> {
     cleanupGeneration++
+    resetInitialSync()
     const previousState = persistentState
-    // Unregister from the replication registry
     unregisterReplication(config.name)
 
     // Invalidate synchronously, before waiting for storage/socket teardown.
@@ -372,6 +425,7 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
 
     initializationInProgress = false
     cleanupGeneration++
+    resetInitialSync()
     moduleRxCollection = null
     replicationAuthority = null
     activeReplicationConfig = null
@@ -433,6 +487,8 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
     }
     const isCurrent = () => !isStaleInitialization(startGeneration)
 
+    resetInitialSync()
+    triggerAllUpdates()
     console.log(`Recreating ${config.name} replication...`)
 
     try {
@@ -483,7 +539,6 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
         console.log(`No local ${config.name} documents to remove`)
       }
 
-      // 4. Build replication config
       const recipientId = await getRealtimeRecipientId(
         authority.session,
         expiresAt,
@@ -494,7 +549,8 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
         collection: rxCollection,
         pullQueryBuilder: config.pullQueryBuilder,
         deletedField: config.deletedField,
-        replicationIdentifier: config.name,
+        replicationIdentifier: config.replicationIdentifier ?? config.name,
+        streamMode: config.streamMode ?? "documents",
         pullResultKey: config.pullResultKey,
         appSyncChannel: config.appSyncChannel,
         graphqlEndpoint: runtimeConfig.graphqlEndpoint,
@@ -519,7 +575,6 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
           : { pushQueryBuilder: undefined, pushResultKey: undefined }),
       }
 
-      // 5. Create new replication
       console.log(`Creating new ${config.name} replication...`)
       const newReplicationState = await createReplication(replicationConfig)
       if (!isCurrent()) {
@@ -537,9 +592,9 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
         promise: persistentState.promise,
       }
 
+      observeInitialSync(newReplicationState)
       console.log(`${config.name} replication recreated successfully`)
 
-      // 7. Trigger re-render if callback provided
       if (forceUpdate) {
         forceUpdate()
       }
@@ -574,6 +629,7 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
       replicationAuthority = { session, expiresAt }
       return
     }
+    disposeInitialSync()
     const generation = ++cleanupGeneration
     const isCurrent = () => !isStaleInitialization(generation)
     // Invalidate old requests before waiting for socket/storage cancellation.
@@ -594,6 +650,7 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
     replicationAuthority = { session, expiresAt }
     activeReplicationConfig = nextConfig
     persistentState = { ...previousState, replicationState }
+    observeInitialSync(replicationState)
     triggerAllUpdates()
   }
 
@@ -658,7 +715,6 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
     useEffect(() => {
       let cancelled = false
 
-      // Early return if RxDB not ready
       if (!db || !rxCollection) {
         return
       }
@@ -711,7 +767,8 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
         cacheScope: sessionCacheScope,
         pullQueryBuilder: config.pullQueryBuilder,
         deletedField: config.deletedField,
-        replicationIdentifier: config.name,
+        replicationIdentifier: config.replicationIdentifier ?? config.name,
+        streamMode: config.streamMode ?? "documents",
         pullResultKey: config.pullResultKey,
         appSyncChannel: config.appSyncChannel,
         graphqlEndpoint,
@@ -768,12 +825,32 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
           // replication stay alive and proceed to update module state to "ready".
           // The second mount will see status != "waiting-for-rxdb" and skip initialization.
 
-          const collection: Collection<TDoc, string> = createCollection(
-            rxdbCollectionOptions({
-              rxCollection,
-              startSync: true,
-            }),
-          )
+          const options = rxdbCollectionOptions({
+            rxCollection,
+            startSync: true,
+          })
+          const pendingCommits = new Set<Promise<unknown>>()
+          const collection: Collection<TDoc, string> = createCollection({
+            ...options,
+            sync: {
+              ...options.sync,
+              sync: (params) =>
+                options.sync.sync({
+                  ...params,
+                  commit: (signal) => {
+                    const receipt = params.commit(signal)
+                    if (receipt !== true) {
+                      pendingCommits.add(receipt)
+                      void receipt.then(
+                        () => pendingCommits.delete(receipt),
+                        () => pendingCommits.delete(receipt),
+                      )
+                    }
+                    return receipt
+                  },
+                }),
+            },
+          })
 
           if (config.createIndexes) {
             config.createIndexes(collection)
@@ -804,7 +881,6 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
             console.error("Unexpected state during initialization completion")
           }
 
-          // Store in singleton
           persistentState = {
             status: "ready",
             collection,
@@ -816,8 +892,15 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
           // Store rxCollection at module level for registry access
           moduleRxCollection = rxCollection
           activeReplicationConfig = resolvedConfig
+          awaitQueryPropagation = async () => {
+            // RxDB first-in-sync includes persistence and its change events.
+            // The adapter can still be buffering its local scan or applying
+            // asynchronous TanStack transactions. Await their actual receipts.
+            await collection.preload()
+            await Promise.all([...pendingCommits])
+          }
+          observeInitialSync(replicationState)
 
-          // Clear the in-progress flag now that we're done
           initializationInProgress = false
 
           // Every mounted Provider shares this singleton state. Notify all of
@@ -850,7 +933,6 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
             promise: persistentState.promise,
           }
 
-          // Clear the in-progress flag on error
           initializationInProgress = false
 
           // Ensure the app-level recovery surface updates even when another
@@ -881,7 +963,6 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
           promise: persistentState.promise,
         }
 
-        // Clear the in-progress flag on error
         initializationInProgress = false
 
         triggerAllUpdates()
@@ -1062,6 +1143,16 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
     const contextValue: CollectionContextValue<TDoc> = {
       db,
       rxCollection,
+      initialSync,
+      retryInitialSync: () => {
+        if (activeScopeKey === scopeKey && persistentState.status === "ready") {
+          if (initialSync.status === "error") {
+            initialSync = { status: "loading" }
+            triggerAllUpdates()
+          }
+          persistentState.replicationState.reSync()
+        }
+      },
       state: persistentState,
       collectionPromise: getCollectionPromise(),
       recreateReplication: recreateReplicationCallback,

@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react"
 import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import {
   createContext,
   useCallback,
@@ -21,6 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react"
 import {
   Button,
@@ -35,8 +36,10 @@ import {
   cn,
 } from "@pf/shadcn-components"
 import { ListCreateButton } from "../components/list-create-form"
+import { useListSearchParams } from "../lib/list-process-dialog"
 import { formatCellValue } from "../utils"
-import { consumeListStale } from "@/app/(protected)/lists/lib/list-refresh"
+import { useListRefresh } from "@/app/(protected)/lists/lib/list-refresh-provider"
+import { AnonymousPageLink } from "@/components/anonymous-page-link"
 import {
   CollectionTableCard,
   type CollectionTableColumn,
@@ -50,7 +53,10 @@ import {
   applyListPageToSearchParams,
   applyListSortToSearchParams,
   assertGraphqlName,
+  buildListQueryVariables,
   exportListCsv,
+  fetchFreshListData,
+  parseListPageNumber,
 } from "@/lib/graphql/list-queries"
 
 interface ListControlsClientProps {
@@ -239,19 +245,21 @@ export function ListControlsClient({
   sort,
 }: ListControlsClientProps) {
   const router = useRouter()
-  const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const searchParams = useListSearchParams()
+  const refreshState = useListRefresh()
+  const startProcess = currentList.startProcess
+  // Both start actions use Next-integrated native history to keep this List mounted.
+  // Their listReturn token lets the shared close handler return with router.back().
+  const startSearchParams = new URLSearchParams({
+    returnTo: `/lists${listPath}${searchParams.size ? `?${searchParams}` : ""}`,
+  })
   const client = useGraphqlClient()
   const [inputValue, setInputValue] = useState(filter)
   const debouncedFilterValue = useDebounce(inputValue, 300)
   const isPushingUrl = useRef(false)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (consumeListStale(listPath)) {
-      router.refresh()
-    }
-  }, [listPath, router])
 
   useEffect(() => {
     if (!isPushingUrl.current) {
@@ -261,6 +269,8 @@ export function ListControlsClient({
   }, [filter])
 
   useEffect(() => {
+    // Defer pending filters while this List is the background of a process dialog.
+    if (decodeURIComponent(pathname) !== `/lists${listPath}`) return
     if (debouncedFilterValue !== filter) {
       isPushingUrl.current = true
       const newSearch = applyListFilterToSearchParams(
@@ -269,7 +279,7 @@ export function ListControlsClient({
       )
       router.push(`/lists${listPath}?${newSearch}`, { scroll: false })
     }
-  }, [debouncedFilterValue, filter, searchParams, router, listPath])
+  }, [debouncedFilterValue, filter, searchParams, router, listPath, pathname])
 
   const refreshList = useCallback(() => {
     router.refresh()
@@ -294,19 +304,58 @@ export function ListControlsClient({
   return (
     <>
       <div className="mb-6">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
             {currentList.name}
           </h1>
-          {currentList.startProcess ? (
+          {startProcess ? (
             <Button asChild size="sm">
               <Link
-                href={`/processes/start/${currentList.startProcess.startStepPath.replace(/^\//, "")}`}
+                href={`/processes/start/${startProcess.startStepPath.replace(/^\//, "")}?${startSearchParams}`}
                 prefetch={false}
+                onNavigate={(event) => {
+                  event.preventDefault()
+                  const params = new URLSearchParams(startSearchParams)
+                  params.set(
+                    "listReturn",
+                    refreshState.rememberReturn(params.get("returnTo") ?? ""),
+                  )
+                  window.history.pushState(
+                    null,
+                    "",
+                    `/processes/start/${startProcess.startStepPath.replace(/^\//, "")}?${params}`,
+                  )
+                }}
               >
-                {currentList.startProcess.name}
+                {startProcess.name}
               </Link>
             </Button>
+          ) : null}
+          {currentList.additionalStartProcesses.map((process) => (
+            <Button asChild size="sm" key={process.startStepPath}>
+              <Link
+                href={`/processes/start/${process.startStepPath.replace(/^\//, "")}?${startSearchParams}`}
+                prefetch={false}
+                onNavigate={(event) => {
+                  event.preventDefault()
+                  const params = new URLSearchParams(startSearchParams)
+                  params.set(
+                    "listReturn",
+                    refreshState.rememberReturn(params.get("returnTo") ?? ""),
+                  )
+                  window.history.pushState(
+                    null,
+                    "",
+                    `/processes/start/${process.startStepPath.replace(/^\//, "")}?${params}`,
+                  )
+                }}
+              >
+                {process.name}
+              </Link>
+            </Button>
+          ))}
+          {currentList.anonymousPage ? (
+            <AnonymousPageLink {...currentList.anonymousPage} />
           ) : null}
           {currentList.canCreate ? (
             <ListCreateButton
@@ -391,7 +440,83 @@ export function ListControlsClient({
   )
 }
 
-export function ListTableClient({
+export function ListTableClient(
+  props: ListTableClientProps & { readonly filter: string },
+) {
+  const state = useListRefresh()
+  const searchParams = useListSearchParams()
+  const page = parseListPageNumber(searchParams.get("page") ?? undefined, 1)
+  const snapshot = useSyncExternalStore(
+    state.subscribe,
+    state.snapshot,
+    state.serverSnapshot,
+  )
+  const client = useGraphqlClient()
+  const variables = useMemo(
+    () =>
+      buildListQueryVariables({
+        page,
+        limit: props.listResult.limit,
+        filter: props.filter,
+        sort: props.sort,
+      }),
+    [page, props.listResult.limit, props.filter, props.sort],
+  )
+  const result = state.read(
+    props.listPath,
+    variables,
+    props.listResult,
+    snapshot,
+  )
+  useEffect(() => {
+    void state.refresh(
+      props.listPath,
+      variables,
+      props.listResult,
+      (query) => fetchFreshListData(client, props.currentList, query),
+      snapshot,
+    )
+  }, [
+    state,
+    snapshot,
+    props.listPath,
+    props.listResult,
+    variables,
+    client,
+    props.currentList,
+  ])
+  useEffect(() => {
+    if (
+      result.kind !== "ready" ||
+      result.data.page === variables.page ||
+      decodeURIComponent(window.location.pathname) !== `/lists${props.listPath}`
+    )
+      return
+    const url = new URL(window.location.href)
+    if (url.searchParams.get("page") === String(result.data.page)) return
+    url.searchParams.set("page", String(result.data.page))
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`)
+  }, [result, variables.page, props.listPath])
+  if (result.kind === "loading") return <p role="status">Refreshing list…</p>
+  if (result.kind === "error")
+    return (
+      <div
+        role="alert"
+        className="rounded-lg bg-red-50 p-4 text-red-700 dark:bg-red-900/20 dark:text-red-400"
+      >
+        <p>Could not refresh the List. Any submitted changes were saved.</p>
+        <Button
+          variant="outline"
+          onClick={() => state.invalidate(props.listPath)}
+        >
+          Retry
+        </Button>
+      </div>
+    )
+  return <ListTableContent {...props} listResult={result.data} />
+}
+
+function ListTableContent({
   currentList,
   listPath,
   listResult,
@@ -425,7 +550,7 @@ function ListReadOnlyTableClient({
   sort,
 }: ListTableClientProps) {
   const router = useRouter()
-  const searchParams = useSearchParams()
+  const searchParams = useListSearchParams()
 
   const goToPage = useCallback(
     (newPage: number) => {
@@ -512,8 +637,9 @@ function ListEditableTableClient({
   sort,
 }: ListTableClientProps) {
   const router = useRouter()
-  const searchParams = useSearchParams()
+  const searchParams = useListSearchParams()
   const client = useGraphqlClient()
+  const refreshState = useListRefresh()
   const [fieldUpdateError, setFieldUpdateError] = useState<string | null>(null)
   const [fieldUpdatingId, setFieldUpdatingId] = useState<string | null>(null)
 
@@ -546,7 +672,7 @@ function ListEditableTableClient({
     },
     onSuccess: () => {
       setFieldUpdateError(null)
-      router.refresh()
+      refreshState.invalidate(listPath)
     },
     onSettled: (_data, _error, variables) => {
       setFieldUpdatingId((current) =>

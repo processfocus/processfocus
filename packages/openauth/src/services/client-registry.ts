@@ -42,9 +42,7 @@ export interface ClientRegistryServiceInterface {
 /**
  * Effect service tag for client registry.
  */
-export class ClientRegistryService extends Context.Tag(
-  "@pf/openauth/ClientRegistryService",
-)<ClientRegistryService, ClientRegistryServiceInterface>() {}
+export class ClientRegistryService extends Context.Service<ClientRegistryService, ClientRegistryServiceInterface>()("@pf/openauth/ClientRegistryService") {}
 
 /**
  * Normalize an origin URL.

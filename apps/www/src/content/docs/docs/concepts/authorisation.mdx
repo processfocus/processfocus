@@ -3,64 +3,40 @@ title: Authorisation
 description: Understanding authorisation in Process Focus.
 ---
 
-Authorisation determines what authenticated users can do within the
-system. Process Focus uses [Cedar](https://www.cedarpolicy.com/) for
-fine-grained access control. You can grant access based on having a
-role, being in an organisation or department, or even based on your
-identity.
+Authorisation determines what authenticated users or systems can do
+within the system. Process Focus uses the [Cedar policy
+language](https://www.cedarpolicy.com/) to define what is allowed.
 
-## Roles and Permissions
+Assigning permissions directly to employees is not recommended, as
+this makes it hard to reassign work or deal with employees
+leaving. Assign permissions to roles, and assign roles to employees.
 
-Define roles with specific permissions:
+## Roles
 
-```typescript
-const reviewerRole = Role.create("reviewer", {
-  permissions: [
-    "process:view",
-    "process:execute",
-    "task:complete",
-  ],
-})
+You can create roles at any level of the organisation. Create roles at the
+organisational level like the "Employee" role to grant access to
+processes available to all employees, such as requesting leave or
+creating a support ticket.
 
-const managerRole = Role.create("manager", {
-  permissions: [
-    "process:view",
-    "process:execute",
-    "process:cancel",
-    "approval:grant",
-    "team:manage",
-  ],
-})
-```
+Create roles specific to an organisational unit in that unit. For example,
+create a "Manager" role in the "HR" department or an "Office staff" role at
+the front desk.
 
-## Cedar Policies
+```mermaid
+flowchart TB
+    accTitle: Organisation chart with roles
+    accDescr: The organisation has an Employee role. Its HR department has a Manager role, and its front-end desk has an Office staff role.
 
-[Cedar policies](https://www.cedarpolicy.com/) allow you to express complex authorisation rules:
+    org["Organisation<br/>Role: Employee"]
+    hr["HR department<br/>Role: Manager"]
+    desk["Front-end desk<br/>Role: Office staff"]
 
-```cedar
-permit (
-  principal in Team::"engineering",
-  action == Action::"execute",
-  resource in ProcessCategory::"internal"
-);
-```
-
-## Step-Level Authorisation
-
-Control who can execute specific steps:
-
-```typescript
-Step.approval("executive-approval", {
-  title: "Executive Approval",
-  assignTo: Role.find("executive"),
-  permissions: ["approval:executive"],
-})
+    org --- hr
+    org --- desk
 ```
 
 ## Best Practices
 
 - Follow the principle of least privilege
-- Regularly audit permissions
 - Use roles instead of assigning permissions directly to users
-- Document your authorisation policies
 - Test authorisation rules thoroughly

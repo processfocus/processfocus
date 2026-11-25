@@ -79,9 +79,10 @@ export interface ConditionEvaluatorService {
 /**
  * Context tag for the ConditionEvaluator service.
  */
-export class ConditionEvaluator extends Context.Tag(
-  "@pf/process/ConditionEvaluator",
-)<ConditionEvaluator, ConditionEvaluatorService>() {}
+export class ConditionEvaluator extends Context.Service<
+  ConditionEvaluator,
+  ConditionEvaluatorService
+>()("@pf/process/ConditionEvaluator") {}
 
 /**
  * Create a ConditionEvaluator service from an Organisation.

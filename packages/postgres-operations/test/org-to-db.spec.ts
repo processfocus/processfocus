@@ -1,9 +1,9 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
 import { expect, it } from "@effect/vitest"
 import { and, eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import * as schema from "@pf/drizzle-postgres"
-import { storeOrganisation } from "@pf/org-to-db"
+import { DbOperations, storeOrganisation } from "@pf/org-to-db"
 import { Form, OrgUnit, Organisation, Process, Role } from "@pf/process"
 import { RequestTime } from "@pf/request-time"
 import { TypedPostgresDrizzle } from "@pf/service-drizzle-postgres"
@@ -12,7 +12,7 @@ import { PostgresTest } from "./postgres-test"
 
 const RequestTimeTest = Layer.succeed(
   RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+  DateTime.makeUnsafe(Date.now()),
 )
 
 const TestLayer = Layer.mergeAll(
@@ -23,6 +23,42 @@ const TestLayer = Layer.mergeAll(
 
 it.layer(TestLayer, { timeout: "60 seconds" })("PgClient", (it) => {
   // Tests are sequential and share this file's cloned database.
+
+  it.effect(
+    "preserves unchanged deployment grants but rotates the generation on removal and restore",
+    () =>
+      Effect.gen(function* () {
+        const operations = yield* DbOperations
+        const db = yield* TypedPostgresDrizzle
+        const clientId = "pg-deployment-grant-cycle"
+        const apply = (projects: string[]) =>
+          Effect.gen(function* () {
+            yield* operations.upsertOAuthClient(clientId, "", "graphql-api", {
+              bindings: [],
+              deploymentProjects: projects,
+            })
+            const [row] = yield* db
+              .select({ trust: schema.oauthClient.workloadTrust })
+              .from(schema.oauthClient)
+              .where(eq(schema.oauthClient.clientId, clientId))
+            const trust = yield* Schema.decodeUnknownEffect(
+              Schema.Struct({
+                deploymentGrantGeneration: Schema.NonEmptyString,
+                deploymentProjects: Schema.Array(Schema.String),
+              }),
+            )(row?.trust)
+            expect(trust.deploymentProjects).toEqual(projects)
+            return trust.deploymentGrantGeneration
+          })
+        const initial = yield* apply(["A", "B"])
+        expect(yield* apply(["A", "B"])).toBe(initial)
+        const reduced = yield* apply(["B"])
+        expect(reduced).not.toBe(initial)
+        const restored = yield* apply(["A", "B"])
+        expect(restored).not.toBe(initial)
+        expect(restored).not.toBe(reduced)
+      }),
+  )
 
   it.effect(
     "should store a simple organisation with one process and one step",
@@ -59,6 +95,17 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PgClient", (it) => {
         expect(processes).toHaveLength(1)
         expect(processes[0]!.name).toBe("Onboarding")
         expect(processes[0]!.purpose).toBe("Onboard new employees")
+        expect(
+          yield* db
+            .select({
+              queue: schema.jobQueue.queue,
+              payload: schema.jobQueue.jobPayload,
+            })
+            .from(schema.jobQueue),
+        ).toContainEqual({
+          queue: "process-import-outbox",
+          payload: { processId: processes[0]!.id },
+        })
 
         const roles = yield* db.select().from(schema.role)
         expect(roles).toHaveLength(1)
@@ -314,7 +361,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PgClient", (it) => {
       const send_welcome_pack = new Form(process, "send_welcome_pack", {
         role,
         form: () => ({
-          start_date: Schema.Date,
+          start_date: Schema.DateFromString,
         }),
       })
 

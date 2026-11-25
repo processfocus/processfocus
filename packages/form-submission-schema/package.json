@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@pf/form-schema": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

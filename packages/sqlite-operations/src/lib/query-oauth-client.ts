@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm"
 import { Effect, Layer, Option } from "effect"
-import { permittedClientEmail, permittedClientRole } from "@pf/drizzle-sqlite"
+import { permittedClientRole } from "@pf/drizzle-sqlite"
 import {
   OAuthClientQueries,
   type OAuthClientRow,
@@ -47,26 +47,6 @@ export const SqliteOAuthClientQueriesLive = Layer.effect(
             target: [
               permittedClientRole.oauthClientId,
               permittedClientRole.roleId,
-            ],
-            targetWhere: sql`_deleted = 0`,
-            set: { updatedAt: sql`julianday('now')` },
-          }),
-
-      /**
-       * Set a permitted provider user email for an OAuth client.
-       * Upserts to the permitted_client_email table.
-       */
-      addPermittedClientEmail: (oauthClientId: string, email: string) =>
-        db
-          .insert(permittedClientEmail)
-          .values({
-            oauthClientId,
-            email,
-          })
-          .onConflictDoUpdate({
-            target: [
-              permittedClientEmail.oauthClientId,
-              permittedClientEmail.email,
             ],
             targetWhere: sql`_deleted = 0`,
             set: { updatedAt: sql`julianday('now')` },

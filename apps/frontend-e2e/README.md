@@ -110,21 +110,37 @@ of any remote queue backlog.
 
 # Genuine Passkey Delegation Journey
 
-`src/features-delegated-access/delegated-access.feature` is an opt-in local
-journey, separate from the default M2M-authenticated suite. Start a freshly
-imported disposable demo organisation under the system temporary directory,
-with `AuthenticationConfig.delegatedAccess: true` showing anonymous secret login
-and the passkey `origin` matching its localhost Dashboard URL. Cedar, not that
-flag, authorizes the Administrator journey. Keep its file-backed `db/pf.db` and
-runtime alive for the test.
+Run the unattended Chromium gate on Linux from the repository root:
 
 ```bash
-BASE_URL=http://localhost:3197 \
-FRONTEND_E2E_DISPOSABLE_ORG=/tmp/path-to-disposable-demo \
-FRONTEND_E2E_FEATURES='./src/features-delegated-access/*.feature' \
-FRONTEND_E2E_BROWSERS=chromium \
-bun scripts/nx-quiet.ts run @pf/frontend-e2e:e2e --retries=0
+bun apps/frontend-e2e/scripts/run-delegated-access.ts
 ```
+
+The runner copies the demo organisation to a fresh system temporary directory,
+removes its database and built artifacts, sets the passkey origin to its chosen
+localhost Dashboard port, and gives the human test owners the finance Manager
+role needed for purchase approval. The normal runtime serve chain imports the
+model and starts authentication, GraphQL, the job worker, and Dashboard;
+Playwright waits for Dashboard readiness and checks the authentication JWKS
+and GraphQL authentication boundary before registering passkeys. Each run
+consumes only its own Invitations. Retries are disabled because registration is
+one-time. Processes (including detached Nx/Next descendants) and temporary
+organisation state are removed on exit; worktree port-discovery files are restored.
+
+`.github/workflows/pr-review.yml` runs this gate unconditionally in
+`frontend-e2e` on every PR. Failure fails that job and the existing aggregate
+`main` gate. CI uploads only secret-safe JUnit results. Runtime output is
+suppressed for this suite; failures retain named BDD steps and assertion details.
+No shared environment, mailbox, physical authenticator, or deployment is needed.
+
+The second scenario registers a separate human owner, issues a token through the
+Dashboard, and logs in in an independent browser context. It submits a Purchase
+Request, completes the worker-created approval Todo, and checks persisted
+completion and delegated initiation/completion attribution. After owner UI
+revocation it checks the original credential's specific live-generation denial
+within 60 seconds, protected Dashboard navigation, and a 401 for fresh secret
+login. The longer standalone realtime lifecycle matrix below remains separate
+from this focused PR gate.
 
 The journey uses the local `pfcli invitation registration-link` command for the
 demo Administrator `settings-e2e@example.com`, registers a resident user-verifying
@@ -135,14 +151,16 @@ disclosure, desktop/mobile layout, and metadata
 after reload. It then registers the ordinary `employee-2@example.com`, verifies
 that **Act on behalf** and creation controls are absent, and checks direct list and
 create API denials. It never injects M2M authentication cookies. Use a new disposable
-organisation for each run; alternatively select another pending Invitation
-with `FRONTEND_E2E_INVITATION_EMAIL`. The bootstrap consumes that Invitation.
+organisation for each run. The bootstrap consumes that Invitation.
 
 The journey configuration disables trace, screenshot, and video recording and
 sets Playwright's `PLAYWRIGHT_NO_COPY_PROMPT=1` to suppress automatic failure
 accessibility snapshots. Guards reject unsafe artifact overrides before
 Invitation bootstrap and before issuance. This does not depend on command-line
-flags or deleting artifacts after a failure.
+flags or deleting artifacts after a failure. While a secret is visible, checks
+poll safe values instead of using locator assertions that can embed DOM
+snapshots. Bearer URL navigation and secret entry use evaluation so Playwright
+does not record those values in step titles.
 
 Clipboard equality is checked entirely inside the browser and returns only a
 boolean. The secret is never pasted into the name field. A `finally` block clears
@@ -366,14 +384,8 @@ secrets, handoff files, and raw browser output must not be attached. The probe
 captures no before image. A script's assertions describe intended coverage;
 only completed checks in the actual run report establish verified coverage.
 
-The [executed administration verification record](../../docs/authentication/delegation-administration-verification.md)
-records the latest 30-check desktop/mobile pass, including eight target-scoped
-DOM/API metadata comparisons and idle invalidation, in
-`2026-09-08-metadata-review-01` (2026-09-07 21:27:41 to 21:37:57 UTC).
-Desktop idle expiry cleared in 1,749 ms; mobile idle revocation cleared in
-16,933 ms. Earlier runs reproduced and verified the proxy Server Action redirect
-fix; historical artifacts in the parent directory are not current acceptance.
-See the record for the minimal proxy fix, exact timings, artifacts, and limits.
+See [Delegated access](../../docs/authentication/delegated-access.md) for
+the identity and lifecycle model.
 Allow at least fifteen minutes for a full probe command and cleanup.
 
 # Structure
@@ -384,6 +396,5 @@ Allow at least fifteen minutes for a full probe command and cleanup.
 
 ## Production instant-navigation regression tests
 
-See [the shared validation runbook](../../docs/frontend/instant-navigation.md)
-for local production builds, `instantUI`, form-plugin verification, and the
-boundary between these tests and destination-specific navigation coverage.
+See [Dashboard navigation](../../docs/frontend/instant-navigation.md#run-production-regression-tests)
+for the disposable production build and test command.

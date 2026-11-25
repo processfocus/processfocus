@@ -1,37 +1,16 @@
-# About
+# Reference organisation
 
-Demo organisation with various processes to test and demonstrate
-Process Focus capabilities.
+This organisation supplies executable workflow and integration fixtures,
+including purchase requests and shared forms.
 
-# Entry Points
+`src/org.ts` composes processes, roles and authentication.
+`src/index.ts` is the build entry point, including bundled database-import logic.
 
-- `src/org.ts` - Org definition with processes, roles, auth config, and invitations.
-- `src/index.ts` - Re-exports from `src/org.ts` as the build entrypoint.
+From the repository root:
 
-`pfcli build` bundles `src/index.ts`, so the built artifact contains the full org
-and bundled `dbImport` logic used by `pfcli import` and deploy-time import.
-
-# Build
-
-Build the org bundle and generate artifacts:
-
-```sh
-npx nx run @pf/demo:build
+```bash
+bun scripts/nx-quiet.ts run @pf/demo:build
 ```
 
-This generates:
-- `dist/org.js` - Bundled organisation (from `src/index.ts`)
-- `dist/graphql/org.graphql` - GraphQL schema
-- `dist/cedar/` - Cedar policy files
-
-# Import
-
-Import the organisation to the database:
-
-```sh
-npx nx run @pf/demo:import
-```
-
-Note: Import requires auth environment variables since the full org
-entrypoint includes AuthenticationConfig, and `pfcli import` executes the
-built `dist/org.js` bundle rather than loading source directly.
+The build produces the organisation bundle, GraphQL schema and Cedar policies.
+Import uses that bundle and requires configuration for the selected runtime.

@@ -2,14 +2,12 @@ import { expect } from "@playwright/test"
 import { Given, Then, When } from "./fixtures"
 
 Given("I am not logged in", async ({ page }) => {
-  // Clear any existing session/cookies to ensure we're not logged in
   await page.context().clearCookies()
 })
 
 Given(
   "I am authenticated as provider user {string}",
   async ({ authenticateAsProviderUser }, email: string) => {
-    // Authenticate as the specified provider user via M2M client_credentials grant
     await authenticateAsProviderUser(email)
   },
 )

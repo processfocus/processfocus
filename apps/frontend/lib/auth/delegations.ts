@@ -8,7 +8,7 @@ export const DelegationMetadata = Schema.Struct({
   createdAt: Schema.String,
   lastUsedAt: Schema.NullOr(Schema.String),
   revokedAt: Schema.NullOr(Schema.String),
-  status: Schema.Literal("active", "expired", "revoked"),
+  status: Schema.Literals(["active", "expired", "revoked"]),
   allowedActions: Schema.Struct({
     rename: Schema.Boolean,
     replace: Schema.Boolean,
@@ -23,7 +23,9 @@ export const DelegationList = Schema.Struct({
   canIssue: Schema.Boolean,
   issuanceDeadline: Schema.NullOr(
     Schema.String.pipe(
-      Schema.filter((value) => Number.isFinite(Date.parse(value))),
+      Schema.check(
+        Schema.makeFilter((value) => Number.isFinite(Date.parse(value))),
+      ),
     ),
   ),
   delegations: Schema.Array(DelegationMetadata),
@@ -35,9 +37,9 @@ export const IssuedDelegation = Schema.Struct({
 })
 
 export const CreateDelegation = Schema.Struct({
-  requestId: Schema.optional(Schema.UUID),
-  name: Schema.Trim.pipe(Schema.minLength(1)),
-  lifetimeDays: Schema.Literal(1, 7, 14),
+  requestId: Schema.optional(Schema.String.check(Schema.isUUID())),
+  name: Schema.Trim.pipe(Schema.check(Schema.isMinLength(1))),
+  lifetimeDays: Schema.Literals([1, 7, 14]),
 })
 
 const staleGuards = {
@@ -46,7 +48,7 @@ const staleGuards = {
   expectedName: Schema.NonEmptyString,
 }
 
-export const UpdateDelegation = Schema.Union(
+export const UpdateDelegation = Schema.Union([
   Schema.Struct({
     operation: Schema.Literal("rename"),
     ...staleGuards,
@@ -59,4 +61,4 @@ export const UpdateDelegation = Schema.Union(
     lifetimeDays: CreateDelegation.fields.lifetimeDays,
   }),
   Schema.Struct({ operation: Schema.Literal("revoke"), ...staleGuards }),
-)
+])

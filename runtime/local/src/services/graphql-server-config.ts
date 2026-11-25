@@ -42,11 +42,13 @@ export const readGraphqlPort = (
  * First checks GRAPHQL_SERVER_URL env var, then falls back to reading
  * from .graphql-port.json file and constructing http://localhost:{port}.
  */
-export const GraphqlServerUrl = Config.string("GRAPHQL_SERVER_URL").pipe(
+export const GraphqlServerUrl = Config.String("GRAPHQL_SERVER_URL").pipe(
   Config.orElse(() =>
-    Config.sync(() => {
-      const port = readGraphqlPort()
-      return `http://localhost:${port}`
-    }),
+    Config.succeed(undefined).pipe(
+      Config.map(() => {
+        const port = readGraphqlPort()
+        return `http://localhost:${port}`
+      }),
+    ),
   ),
 )

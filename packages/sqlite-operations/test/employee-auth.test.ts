@@ -55,7 +55,7 @@ const mockDummyToken = {
 
 type TestRequirements =
   | AuthenticationDatabase
-  | Layer.Layer.Success<typeof DatabaseTest>
+  | Layer.Success<typeof DatabaseTest>
 
 const runTest = <A, E>(
   test: Effect.Effect<A, E, TestRequirements>,
@@ -222,7 +222,7 @@ describe("provider-user-auth", () => {
 
     expect(Exit.isFailure(result)).toBe(true)
     if (Exit.isFailure(result)) {
-      const error = Cause.failureOption(result.cause)
+      const error = Cause.findErrorOption(result.cause)
       expect(Option.isSome(error)).toBe(true)
       if (Option.isSome(error)) {
         expect(error.value).toBeInstanceOf(ProviderUserEmailAlreadyOwnedError)
@@ -250,7 +250,7 @@ describe("provider-user-auth", () => {
 
     expect(Exit.isFailure(result)).toBe(true)
     if (Exit.isFailure(result)) {
-      const error = Cause.failureOption(result.cause)
+      const error = Cause.findErrorOption(result.cause)
       expect(Option.isSome(error)).toBe(true)
       if (Option.isSome(error)) {
         expect(error.value).toBeInstanceOf(VerifiedEmailRequiredError)
@@ -281,9 +281,10 @@ describe("provider-user-auth", () => {
 
     expect(Exit.isFailure(result)).toBe(true)
     if (Exit.isFailure(result)) {
-      expect(result.cause._tag).toBe("Fail")
-      if (result.cause._tag === "Fail") {
-        expect(result.cause.error).toBeInstanceOf(RootOrgUnitNotFoundError)
+      const failure = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(failure)).toBe(true)
+      if (Option.isSome(failure)) {
+        expect(failure.value).toBeInstanceOf(RootOrgUnitNotFoundError)
       }
     }
   })
@@ -339,11 +340,10 @@ describe("provider-user-auth", () => {
 
     expect(Exit.isFailure(result)).toBe(true)
     if (Exit.isFailure(result)) {
-      expect(result.cause._tag).toBe("Fail")
-      if (result.cause._tag === "Fail") {
-        expect(result.cause.error).toBeInstanceOf(
-          DummyProviderUserNotFoundError,
-        )
+      const failure = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(failure)).toBe(true)
+      if (Option.isSome(failure)) {
+        expect(failure.value).toBeInstanceOf(DummyProviderUserNotFoundError)
       }
     }
   })
@@ -371,7 +371,7 @@ describe("provider-user-auth", () => {
 
     expect(Exit.isFailure(result)).toBe(true)
     if (Exit.isFailure(result)) {
-      const error = Cause.failureOption(result.cause)
+      const error = Cause.findErrorOption(result.cause)
       expect(Option.isSome(error)).toBe(true)
       if (Option.isSome(error)) {
         expect(error.value).toBeInstanceOf(InviteRequiredError)
@@ -477,7 +477,7 @@ describe("provider-user-auth", () => {
           .values({
             provider: "github",
             sub: "github-existing",
-            lastLoggedIn: DateTime.unsafeMake(Date.now()),
+            createdAt: DateTime.makeUnsafe(Date.now()),
           })
           .returning()
         const existingUser = existing[0]
@@ -515,7 +515,7 @@ describe("provider-user-auth", () => {
         )
         expect(Exit.isFailure(result)).toBe(true)
         if (Exit.isFailure(result)) {
-          const error = Cause.failureOption(result.cause)
+          const error = Cause.findErrorOption(result.cause)
           expect(Option.isSome(error)).toBe(true)
           if (Option.isSome(error)) {
             expect(error.value).toBeInstanceOf(

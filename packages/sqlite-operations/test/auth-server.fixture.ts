@@ -1,14 +1,24 @@
-import { FetchHttpClient } from "@effect/platform"
 import { Effect, Layer } from "effect"
-import { OpenAuthMemoryStorageServiceLive } from "@pf/auth-api"
+import { FetchHttpClient } from "effect/http"
+import { LocalAuditLive } from "@pf/audit/local"
+import {
+  AuthenticationDelegationIdentityFactsLive,
+  OpenAuthMemoryStorageServiceLive,
+} from "@pf/auth-api"
 import * as schema from "@pf/drizzle-sqlite"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { DatabaseTest } from "@pf/service-drizzle-sqlite/test"
+import { SqliteAuditPersistenceLive } from "../src/lib/audit.js"
 import { SqliteAuthenticationDatabaseLive } from "../src/lib/authentication-database.js"
+import { SqliteSettingsQueriesLive } from "../src/lib/settings-queries.js"
 
 export const TestLayer = Layer.provideMerge(
   Layer.mergeAll(
-    SqliteAuthenticationDatabaseLive,
+    LocalAuditLive.pipe(Layer.provide(SqliteAuditPersistenceLive)),
+    AuthenticationDelegationIdentityFactsLive.pipe(
+      Layer.provideMerge(SqliteAuthenticationDatabaseLive),
+    ),
+    SqliteSettingsQueriesLive,
     OpenAuthMemoryStorageServiceLive,
     FetchHttpClient.layer,
   ),

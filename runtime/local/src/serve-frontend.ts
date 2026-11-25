@@ -86,6 +86,7 @@ export const buildFrontendEnv = (
   env: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv => ({
   ...env,
+  PF_RUNTIME_MODE: "local",
   NX_WORKSPACE_ROOT: workspaceRoot,
   FRONTEND_JWT_TOKEN: token,
 })

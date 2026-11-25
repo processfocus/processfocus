@@ -1,0 +1,48 @@
+---
+title: Constructs
+---
+
+Constructs are the basic building blocks in Process Focus.  A
+construct is a component that defines something in an organisation: an
+organisational unit, a role, a process, a step in a process, a form,
+or a list.
+
+## Three-part structure
+
+A construct always has the same structure:
+1. It has a parent (owner).
+2. It has an immutable name (if the name changes, we assume it's a new thing).
+3. It has properties unique to the component.
+
+An example is a department:
+
+```typescript
+const hr = new OrgUnit(org, "hr", {
+  name: "Human Resources",
+  type: "department",
+})
+```
+
+The parent here is the organisation itself, the name is "hr", and we
+specify two properties: name and type. The name property allows you to
+change the name without changing the ID "hr". Type is used on the org chart page.
+
+All constructs in Process Focus follow the same three-part structure.
+
+The only exception to this rule is the root construct `Organisation`:
+an organisation does not have a parent, nor does it have a name:
+
+```typescript
+export const org = new Organisation({
+  name: "Demo Org",
+  acronym: "Demo",
+  timeZone: "Pacific/Auckland",
+})
+```
+
+## Path hierarchy
+
+TODO: explain paths.
+
+Explain how paths are used to construct urls in the frontend. And how
+they are identifiers in Cedar.

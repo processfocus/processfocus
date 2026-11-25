@@ -8,6 +8,21 @@ const TEST_FILE_CONTENT = "Test file content for permissions testing"
 const TEST_FILE_NAME = "test-document.txt"
 const TEST_FILE_TYPE = "text/plain"
 
+Then(
+  "workload download handoffs and credential administration are denied",
+  async function (this: TestWorld) {
+    for (const query of [
+      'query { requestDownloadUrl(stepPath: "/operations/file-upload-test/Upload document", documentStore: "/test-documents", fileId: "file-00000000000000000000000000") { downloadUrl } }',
+      'mutation { deleteInvitation(invitationId: "missing") { success } }',
+    ]) {
+      await assert.rejects(
+        () => this.executeGraphQL(query),
+        /Workload (capability handoff is unavailable|access cannot administer credentials)/,
+      )
+    }
+  },
+)
+
 /**
  * Helper to request a download URL for a file.
  * Can optionally suppress errors for testing authorization failures.

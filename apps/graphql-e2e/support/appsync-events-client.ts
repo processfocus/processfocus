@@ -1,4 +1,5 @@
 import WebSocket from "ws"
+import { SubscriptionPresenceLease } from "@pf/realtime-client"
 
 /**
  * AppSync Events WebSocket client for Node.js (e2e tests)
@@ -70,6 +71,7 @@ const encodeAuthHeader = (auth: Record<string, string>): string => {
  * AppSync Events WebSocket client for Node.js
  */
 export class AppSyncEventsClient {
+  private presence: SubscriptionPresenceLease | null = null
   private socket: WebSocket | null = null
   private subscriptionId: string | null = null
 
@@ -94,6 +96,21 @@ export class AppSyncEventsClient {
       ])
 
       let connectionResolved = false
+      this.presence = new SubscriptionPresenceLease({
+        token: this.config.accessToken,
+        httpHost: this.config.httpHost,
+        channel: this.config.channel,
+        onReady: () => {
+          if (connectionResolved) return
+          connectionResolved = true
+          this.config.onConnect?.()
+          resolve()
+        },
+        onLost: () => {
+          reject(new Error("Presence lost"))
+          this.socket?.close()
+        },
+      })
 
       this.socket.on("open", () => {
         this.send({ type: "connection_init" })
@@ -124,11 +141,7 @@ export class AppSyncEventsClient {
           }
 
           case "subscribe_success":
-            if (!connectionResolved) {
-              connectionResolved = true
-              this.config.onConnect?.()
-              resolve()
-            }
+            if (!connectionResolved) void this.presence?.start()
             break
 
           case "subscribe_error": {
@@ -147,7 +160,6 @@ export class AppSyncEventsClient {
           }
 
           case "data":
-            // Parse the event JSON string
             try {
               const eventData = JSON.parse(message.event)
               this.config.onEvent(eventData)
@@ -183,6 +195,7 @@ export class AppSyncEventsClient {
       })
 
       this.socket.on("close", (code) => {
+        void this.presence?.stop()
         if (!connectionResolved) {
           connectionResolved = true
           reject(new Error(`WebSocket closed unexpectedly: code=${code}`))
@@ -195,7 +208,7 @@ export class AppSyncEventsClient {
   private subscribe(): void {
     const authorization = {
       host: this.config.httpHost,
-      authorization: this.config.accessToken,
+      authorization: this.presence?.authorization || this.config.accessToken,
     }
 
     this.subscriptionId = crypto.randomUUID()
@@ -213,8 +226,10 @@ export class AppSyncEventsClient {
     }
   }
 
-  disconnect(): void {
+  async disconnect(): Promise<void> {
     this.socket?.close()
     this.socket = null
+    await this.presence?.stop()
+    this.presence = null
   }
 }

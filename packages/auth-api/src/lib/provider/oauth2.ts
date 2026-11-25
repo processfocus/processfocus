@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import type { Oauth2Token } from "@pf/openauth/provider/oauth2"
 import type {
   ProviderSubjectIdentity,
@@ -11,6 +11,7 @@ import {
   findExistingProviderUserBySubject,
   findOrCreateProviderUserFromVerifiedIdentity,
 } from "../provider-user-auth.js"
+import { SSO_REVALIDATION_INTERVAL_MS } from "../sso-policy.js"
 import { type SuccessResult, optionalProviderUserPicture } from "./types.js"
 
 /**
@@ -96,6 +97,7 @@ export const handleOauth2Success = (
       }),
     )
 
+    const verifiedAt = yield* Clock.currentTimeMillis
     return {
       type: "providerUser" as const,
       properties: {
@@ -105,6 +107,18 @@ export const handleOauth2Success = (
         orgUnitId: providerUser.orgUnitId,
         orgUnitPath: providerUser.orgUnitPath,
         roles: providerUser.roles,
+        ...(isVerifiedHumanIdentity(value) || isProviderSubjectIdentity(value)
+          ? {
+              sso: {
+                provider: value.provider,
+                subject: value.subject,
+                verifiedAt,
+                expiresAt: verifiedAt + SSO_REVALIDATION_INTERVAL_MS,
+              },
+            }
+          : value.provider === "dummy"
+            ? { authenticationMethod: "dummy" as const }
+            : {}),
         ...(isVerifiedHumanIdentity(value) ||
         isProviderSubjectIdentity(value) ||
         value.provider === "dummy"

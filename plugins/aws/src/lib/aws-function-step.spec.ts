@@ -23,21 +23,6 @@ describe("AwsFunctionStep", () => {
     expect(step.isSystemStep).toBe(true)
   })
 
-  it("should have isSystemStep === true", () => {
-    const process = new Process(unit, "TestProcess2", {
-      name: "Test Process 2",
-      purpose: "Testing",
-    })
-
-    const step = new AwsFunctionStep(process, "TestStep", {
-      functionName: "test-function",
-      input: () => Effect.succeed({}),
-      output: {},
-    })
-
-    expect(step.isSystemStep).toBe(true)
-  })
-
   it("should support function ARN as functionName", () => {
     const process = new Process(unit, "TestProcess3", {
       name: "Test Process 3",
@@ -66,7 +51,6 @@ describe("AwsFunctionStep", () => {
       output: {},
     })
 
-    // Verify it has the SystemStep interface
     expect(typeof step.executeWithInput).toBe("function")
     expect(typeof step.execute).toBe("function")
     expect(typeof step.input).toBe("function")

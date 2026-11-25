@@ -10,9 +10,12 @@ import {
   notInArray,
   sql,
 } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
-import { returnedRow } from "@pf/graphql-db-operations"
+import {
+  PROCESS_IMPORT_OUTBOX_QUEUE,
+  returnedRow,
+} from "@pf/graphql-db-operations"
 import {
   DbOperations,
   FlowCrossProcessError,
@@ -30,6 +33,42 @@ import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
  * Operations can fail with SqlError from database errors.
  */
 export const SqliteDbOperationsLive = Layer.succeed(DbOperations, {
+  nextProcessReplicationRevision: Effect.gen(function* () {
+    const db = yield* TypedSqliteDrizzle
+    const now = yield* getRequestTime()
+    const rows = yield* db
+      .select({
+        latest: sql<number>`CAST(ROUND((MAX(${schema.process.updatedAt}) - 2440587.5) * 86400000) AS INTEGER)`,
+      })
+      .from(schema.process)
+    return (
+      Math.max(DateTime.toEpochMillis(now), Number(rows[0]?.latest ?? 0)) + 1
+    )
+  }),
+  setProcessReplicationRevision: (revision) =>
+    Effect.gen(function* () {
+      const db = yield* TypedSqliteDrizzle
+      const rows = yield* db
+        .update(schema.process)
+        .set({ updatedAt: DateTime.makeUnsafe(revision) })
+        .returning({ id: schema.process.id })
+      return rows.map((row) => row.id)
+    }),
+  enqueueProcessChanges: (ids) =>
+    Effect.gen(function* () {
+      if (ids.length === 0) return
+      const db = yield* TypedSqliteDrizzle
+      const requestTime = yield* getRequestTime()
+      // Durable outbox: workers see these only after the importing transaction
+      // commits. The existing process-event consumer publishes current state.
+      yield* db.insert(schema.jobQueue).values(
+        ids.map((processId) => ({
+          queue: PROCESS_IMPORT_OUTBOX_QUEUE,
+          jobPayload: { processId },
+          availableAt: requestTime,
+        })),
+      )
+    }),
   upsertOrgUnit: (orgUnit, parentOrgUnitId) =>
     Effect.gen(function* () {
       const db = yield* TypedSqliteDrizzle
@@ -401,6 +440,8 @@ export const SqliteDbOperationsLive = Layer.succeed(DbOperations, {
             schedule: flow.schedule ?? null,
             fallbackBranch: flow.isElse,
             errorBranch: flow.isOnError ?? false,
+            deadlineName: flow.deadlineName ?? null,
+            interrupting: flow.interrupting ?? false,
             errorTags: normalizedTaggedErrors,
             _deleted: false,
             updatedAt: requestTime,
@@ -418,6 +459,8 @@ export const SqliteDbOperationsLive = Layer.succeed(DbOperations, {
         schedule: flow.schedule ?? null,
         fallbackBranch: flow.isElse,
         errorBranch: flow.isOnError ?? false,
+        deadlineName: flow.deadlineName ?? null,
+        interrupting: flow.interrupting ?? false,
         errorTags: normalizedTaggedErrors,
         createdAt: requestTime,
         updatedAt: requestTime,
@@ -950,16 +993,29 @@ export const SqliteDbOperationsLive = Layer.succeed(DbOperations, {
       }
     }),
 
-  upsertOAuthClient: (clientId: string, secretHash: string, audience: string) =>
+  upsertOAuthClient: (
+    clientId: string,
+    secretHash: string,
+    audience: string,
+    workloadTrust?: Record<string, unknown>,
+    awsRoleBindings?: Record<string, unknown>[],
+  ) =>
     Effect.gen(function* () {
       const db = yield* TypedSqliteDrizzle
       const requestTime = yield* getRequestTime()
+      const versionedTrust =
+        workloadTrust?.["deploymentProjects"] ||
+        workloadTrust?.["databaseTransferProjects"]
+          ? { ...workloadTrust, deploymentGrantGeneration: crypto.randomUUID() }
+          : workloadTrust
 
       yield* db
         .insert(schema.oauthClient)
         .values({
           clientId,
           clientSecretHash: secretHash,
+          workloadTrust: versionedTrust ?? null,
+          awsRoleBindings: awsRoleBindings ?? null,
           audience,
           createdAt: requestTime,
           updatedAt: requestTime,
@@ -969,6 +1025,13 @@ export const SqliteDbOperationsLive = Layer.succeed(DbOperations, {
           targetWhere: sql`_deleted = 0`,
           set: {
             clientSecretHash: secretHash,
+            workloadTrust:
+              versionedTrust !== workloadTrust
+                ? sql`CASE WHEN json_remove(${schema.oauthClient.workloadTrust}, '$.deploymentGrantGeneration') = ${JSON.stringify(workloadTrust)}
+                    AND json_extract(${schema.oauthClient.workloadTrust}, '$.deploymentGrantGeneration') IS NOT NULL
+                    THEN ${schema.oauthClient.workloadTrust} ELSE excluded.workload_trust END`
+                : (workloadTrust ?? null),
+            awsRoleBindings: awsRoleBindings ?? null,
             audience,
             _deleted: false,
             updatedAt: requestTime,
@@ -986,12 +1049,20 @@ export const SqliteDbOperationsLive = Layer.succeed(DbOperations, {
         yield* db
           .update(schema.oauthClient)
           .set({ _deleted: true, updatedAt: requestTime })
+          .where(
+            sql`json_extract(${schema.oauthClient.workloadTrust}, '$.owner') IS NOT 'project'`,
+          )
       } else {
-        // Soft delete OAuth clients not in current list
+        // Soft delete model-owned OAuth clients not in current list.
         yield* db
           .update(schema.oauthClient)
           .set({ _deleted: true, updatedAt: requestTime })
-          .where(notInArray(schema.oauthClient.clientId, currentClientIds))
+          .where(
+            and(
+              notInArray(schema.oauthClient.clientId, currentClientIds),
+              sql`json_extract(${schema.oauthClient.workloadTrust}, '$.owner') IS NOT 'project'`,
+            ),
+          )
       }
     }),
 

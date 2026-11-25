@@ -2,6 +2,8 @@ import { Data, Effect, Layer } from "effect"
 import { NextRequest } from "next/server"
 import { afterEach, describe, expect, mock, test } from "bun:test"
 
+mock.module("server-only", () => ({}))
+
 let verifiedUserId = "signed-in-user"
 let priorInvalid = false
 let sessionFailure:

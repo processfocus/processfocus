@@ -1,4 +1,4 @@
-import { Schema, SchemaAST } from "effect"
+import { Array as Arr, Schema, SchemaAST } from "effect"
 import {
   type DeferredValue,
   DeferredValueTypeId,
@@ -21,7 +21,7 @@ import {
   mapFormFields,
 } from "./form-decoration"
 
-type StructuralContent = Schema.Schema.Any & StructuralOnlyMarker
+type StructuralContent = Schema.Top & StructuralOnlyMarker
 type Resolver<
   State,
   Steps extends Record<string, StepMeta | FormStepMeta>,
@@ -54,9 +54,11 @@ const fail = (path: string, message: string): never => {
 const structuralAst = (content: unknown, path: string): SchemaAST.AST => {
   if (
     !Schema.isSchema(content) ||
-    content.ast._tag !== "UndefinedKeyword" ||
-    content.ast.annotations[STRUCTURAL_ONLY_SYMBOL] !== true ||
-    content.ast.annotations[FormDeferredContent] !== undefined
+    content.ast._tag !== "Undefined" ||
+    Reflect.get(content.ast.annotations ?? {}, STRUCTURAL_ONLY_SYMBOL) !==
+      true ||
+    Reflect.get(content.ast.annotations ?? {}, FormDeferredContent) !==
+      undefined
   )
     return fail(
       path,
@@ -93,75 +95,82 @@ const mapChildren = (
   map: (ast: SchemaAST.AST, path: string) => SchemaAST.AST,
   path: string,
   mapAnnotations: (
-    annotations: SchemaAST.Annotations,
+    annotations: Record<PropertyKey, unknown>,
     ast: SchemaAST.AST,
     path: string,
-  ) => SchemaAST.Annotations,
+  ) => Record<PropertyKey, unknown>,
 ): SchemaAST.AST => {
+  const encoding = ast.encoding
+    ? Arr.map(
+        ast.encoding,
+        (link) => new SchemaAST.Link(map(link.to, path), link.transformation),
+      )
+    : undefined
+  const context = ast.context
+    ? new SchemaAST.Context(
+        ast.context.isOptional,
+        ast.context.isMutable,
+        ast.context.constructorDefault,
+        mapAnnotations({ ...ast.context.annotations }, ast, path),
+      )
+    : undefined
   switch (ast._tag) {
-    case "TypeLiteral":
-      return new SchemaAST.TypeLiteral(
+    case "Objects":
+      return new SchemaAST.Objects(
         ast.propertySignatures.map(
           (property) =>
             new SchemaAST.PropertySignature(
               property.name,
               map(property.type, `${path}.${String(property.name)}`),
-              property.isOptional,
-              property.isReadonly,
-              mapAnnotations(
-                property.annotations,
-                property.type,
-                `${path}.${String(property.name)}`,
-              ),
             ),
         ),
         ast.indexSignatures,
         ast.annotations,
+        ast.checks,
+        encoding,
+        context,
+        ast.encodingChecks,
       )
-    case "TupleType":
-      return new SchemaAST.TupleType(
-        ast.elements.map(
-          (element, index) =>
-            new SchemaAST.OptionalType(
-              map(element.type, `${path}[${index}]`),
-              element.isOptional,
-              element.annotations,
-            ),
-        ),
-        ast.rest.map(
-          (element) =>
-            new SchemaAST.Type(
-              map(element.type, `${path}[]`),
-              element.annotations,
-            ),
-        ),
-        ast.isReadonly,
+    case "Arrays":
+      return new SchemaAST.Arrays(
+        ast.isMutable,
+        ast.elements.map((element, index) => map(element, `${path}[${index}]`)),
+        ast.rest.map((element) => map(element, `${path}[]`)),
         ast.annotations,
+        ast.checks,
+        encoding,
+        context,
+        ast.encodingChecks,
       )
     case "Union":
-      return SchemaAST.Union.make(
+      return new SchemaAST.Union(
         ast.types.map((type) => map(type, path)),
+        ast.options,
         ast.annotations,
-      )
-    case "Refinement":
-      return new SchemaAST.Refinement(
-        map(ast.from, path),
-        ast.filter,
-        ast.annotations,
-      )
-    case "Transformation":
-      return new SchemaAST.Transformation(
-        map(ast.from, path),
-        map(ast.to, path),
-        ast.transformation,
-        ast.annotations,
+        ast.checks,
+        encoding,
+        context,
+        ast.encodingChecks,
       )
     case "Suspend":
       return fail(path, "suspended form schemas are not supported")
     default:
-      return ast
+      return Object.assign(Object.create(Object.getPrototypeOf(ast)), ast, {
+        encoding,
+        context,
+      })
   }
 }
+
+const annotateAst = (
+  ast: SchemaAST.AST,
+  annotations: Record<PropertyKey, unknown>,
+): SchemaAST.AST =>
+  Schema.make<Schema.Top>(
+    Object.assign(Object.create(Object.getPrototypeOf(ast)), ast, {
+      annotations: { ...ast.annotations, ...annotations },
+    }),
+  ).annotate(annotations).ast
 
 /** Each declaration owns its callbacks; each resolution owns its evaluated values. */
 interface FormDeclarationCompiler<
@@ -199,7 +208,7 @@ export const createFormAuthoring = <
     content: (resolve, fallback = TextBlock("")) => {
       structuralAst(fallback, "content.fallback")
       // The fallback was validated as a structural leaf; annotations preserves it.
-      return fallback.annotations({
+      return fallback.annotate({
         [FormDeferredContent]: value(resolve, fallback),
       }) as StructuralContent
     },
@@ -223,8 +232,44 @@ export const createFormAuthoring = <
       const resolved = evaluated.get(descriptor)
       return resolved === undefined ? descriptor.fallback : resolved
     }
-    const visit = (original: SchemaAST.AST, path: string): SchemaAST.AST => {
-      const content = original.annotations[FormDeferredContent]
+    const inputOwners = new Map<string, SchemaAST.AST>()
+    const visit = (source: SchemaAST.AST, path: string): SchemaAST.AST => {
+      // Effect stores annotations added after a check on that check. Bring form
+      // metadata onto the field so deferred values are resolved exactly once.
+      const annotations: Record<PropertyKey, unknown> = {
+        ...source.annotations,
+      }
+      const checks = source.checks
+        ? Arr.map(source.checks, (check) => {
+            const remaining = { ...check.annotations }
+            for (const key of [
+              ...operations.keys(),
+              FormLookupInput,
+              FormCalendarSlotInput,
+              FormDeferredContent,
+            ]) {
+              const annotation = Reflect.get(remaining, key)
+              if (annotation === undefined) continue
+              annotations[key] = annotation
+              Reflect.deleteProperty(remaining, key)
+            }
+            return Object.assign(
+              Object.create(Object.getPrototypeOf(check)),
+              check,
+              { annotations: remaining },
+            )
+          })
+        : undefined
+      const original: SchemaAST.AST = Object.assign(
+        Object.create(Object.getPrototypeOf(source)),
+        source,
+        { annotations, checks },
+      )
+      if (!inputOwners.has(path)) inputOwners.set(path, original)
+      const content = Reflect.get(
+        original.annotations ?? {},
+        FormDeferredContent,
+      )
       if (content !== undefined) {
         if (!isDeferredValue(content))
           return fail(path, "invalid deferred content")
@@ -235,8 +280,10 @@ export const createFormAuthoring = <
         )
       }
       let ast = mapChildren(original, visit, path, visitAnnotations)
-      for (const key of Object.getOwnPropertySymbols(original.annotations)) {
-        const annotation = original.annotations[key]
+      for (const key of Object.getOwnPropertySymbols(
+        original.annotations ?? {},
+      )) {
+        const annotation = Reflect.get(original.annotations ?? {}, key)
         if (isDeferredValue(annotation)) {
           const operation = operations.get(key)
           if (!operation)
@@ -244,11 +291,12 @@ export const createFormAuthoring = <
               path,
               "deferred value is not allowed in this schema annotation",
             )
-          ast = SchemaAST.annotations(ast, { [key]: undefined })
+          ast = annotateAst(ast, { [key]: undefined })
           ast = decorateAst(
             ast,
             { [operation]: resolve(annotation, path) },
             path,
+            inputOwners.get(path),
           )
         } else if (key === FormLookupInput || key === FormCalendarSlotInput) {
           if (
@@ -261,7 +309,7 @@ export const createFormAuthoring = <
           const query = annotation.query
           // Bind against this request, but evaluate the factory only when queried.
           // Static projection omits it entirely; no placeholder query is executed.
-          ast = SchemaAST.annotations(ast, {
+          ast = annotateAst(ast, {
             [key]: { ...annotation, query: undefined },
           })
           if (args) {
@@ -288,22 +336,22 @@ export const createFormAuthoring = <
       return ast
     }
     const visitAnnotations = (
-      annotations: SchemaAST.Annotations,
+      annotations: Record<PropertyKey, unknown>,
       ast: SchemaAST.AST,
       path: string,
-    ): SchemaAST.Annotations => {
+    ): Record<PropertyKey, unknown> => {
       if (
         !Object.getOwnPropertySymbols(annotations).some((key) =>
           isDeferredValue(annotations[key]),
         )
       )
         return annotations
-      const resolved = visit(
-        SchemaAST.annotations(ast, annotations),
-        path,
-      ).annotations
+      const resolved = visit(annotateAst(ast, annotations), path).annotations
       return Object.fromEntries(
-        Reflect.ownKeys(annotations).map((key) => [key, resolved[key]]),
+        Reflect.ownKeys(annotations).map((key) => [
+          key,
+          Reflect.get(resolved ?? {}, key),
+        ]),
       )
     }
     const resolved = mapFormFields(

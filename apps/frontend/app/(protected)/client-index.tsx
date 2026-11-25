@@ -49,21 +49,17 @@ function DashboardInner({
 }) {
   "use memo"
 
-  // Suspend until collections are ready
   const processesCollection = use(processCollectionPromise)
   const executionsCollection = use(executionCollectionPromise)
   const todosCollection = use(todoCollectionPromise)
 
-  // Get org settings for week start day
   const { startDayOfWeek } = useOrgSettings()
 
-  // Calculate weekly completion stats for KPI card
   const weeklyStats = useWeeklyExecutionStats(
     executionsCollection,
     startDayOfWeek,
   )
 
-  // Fetch processes using TanStack DB live query
   const processesQuery = useLiveQuery((q) =>
     q.from({ process: processesCollection }).select(({ process }) => ({
       id: process.id,
@@ -81,7 +77,6 @@ function DashboardInner({
     })),
   )
 
-  // Fetch recent completed executions for live dashboard section
   const liveExecutionsQuery = useLiveQuery((q) =>
     q
       .from({ execution: executionsCollection })
@@ -115,7 +110,6 @@ function DashboardInner({
     })),
   )
 
-  // Fetch todos for task metrics
   const todosQuery = useLiveQuery((q) =>
     q.from({ todo: todosCollection }).select(({ todo }) => ({
       id: todo.id,
@@ -160,12 +154,9 @@ function DashboardInner({
     )
     const now = Date.now()
 
-    // Count executions by status from live data
     const runningExecutions = allExecutions.filter(
       (exec) => exec.status === "Running",
     )
-    // Note: The execution schema only has "Running" | "Completed" status,
-    // so we don't have paused/failed statuses in live data
     const completedExecutions = allExecutions.filter(
       (exec) => exec.status === "Completed",
     )
@@ -251,7 +242,6 @@ function DashboardInner({
 
     const avgCycleTimeHours = 0
 
-    // Calculate role load from live todos
     const roleTotals = todos.reduce<Record<string, number>>((acc, todo) => {
       acc[todo.role] = (acc[todo.role] ?? 0) + 1
       return acc
@@ -265,13 +255,12 @@ function DashboardInner({
         activeExecutions: runningExecutions.length,
         pausedExecutions: 0, // Not available in live schema
         completedExecutions: completedExecutions.length,
-        failedExecutions: 0, // Not available in live schema
+        failedExecutions: 0,
         totalExecutions,
         slaCompliance,
         slaBreaches: breached,
         slaTrackedExecutions: totalWithSla,
         avgCycleTimeHours,
-        // Live task metrics from todos collection
         activeTasks: todoStatuses.filter((status) => status === "Active")
           .length,
         correctionTasks: todoStatuses.filter(

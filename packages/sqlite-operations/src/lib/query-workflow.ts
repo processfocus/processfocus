@@ -92,6 +92,7 @@ export const SqliteWorkflowQueriesLive = Layer.effect(
                     condition: schema.flow.condition,
                     fallbackBranch: schema.flow.fallbackBranch,
                     errorBranch: schema.flow.errorBranch,
+                    deadlineName: schema.flow.deadlineName,
                     errorTags: schema.flow.errorTags,
                     schedule: schema.flow.schedule,
                   })
@@ -157,6 +158,7 @@ export const SqliteWorkflowQueriesLive = Layer.effect(
               condition: f.condition,
               isElse: f.fallbackBranch,
               isOnError: f.errorBranch,
+              deadlineName: f.deadlineName,
               taggedErrors: normalizeTaggedErrors(f.errorTags),
               schedule: f.schedule,
             })),

@@ -23,6 +23,11 @@ describe("Xero Demo Company shared conformance scenarios", () => {
       ),
     ).toBe(1)
     expect(results.zeroTax.invoice.date).toBe(run.date)
+    expect(
+      await Effect.runPromise(
+        harness.invoiceCountByReference(results.multiLine.invoice.reference),
+      ),
+    ).toBe(1)
     expect(results.gst.invoice.date).toBe(run.date)
     expect(results.zeroTax.invoice.reference).not.toBe(
       results.gst.invoice.reference,

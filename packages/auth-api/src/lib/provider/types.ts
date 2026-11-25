@@ -21,7 +21,7 @@ interface ServiceAccountSubjectData {
 
 /**
  * Result type returned by success handlers.
- * Either subject data to be passed to ctx.subject(), or a Response (for errors).
+ * Result subject data to be passed to ctx.subject(), or a Response (for errors).
  */
 export type SuccessResult =
   | ProviderUserSubjectData

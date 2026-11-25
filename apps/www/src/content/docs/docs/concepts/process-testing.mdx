@@ -1,0 +1,37 @@
+---
+title: Process Testing
+description: Test process paths, permissions, schedules, and integrations before relying on a process.
+---
+
+Process testing checks that a process produces the expected work and results
+for the people who use it. Run representative examples through the process,
+then check the tasks, data, and automated actions they produce.
+
+## What to test
+
+- **Forms and data:** Submit valid and invalid inputs. Check that required data
+  is collected and that the resulting process data is correct.
+- **Paths through the process:** Exercise different conditions and outcomes,
+  including cases where work should not be created.
+- **Tasks and permissions:** Check that the right participants can see and
+  complete their work, and that other roles cannot. See
+  [Testing permissions](/docs/reference/authorisation/testing-permissions/).
+- **Automated actions:** Check their results and how the process behaves when an
+  action fails. A test using a simulated external service does not establish
+  that the real service is configured or available.
+- **Schedules:** Check ordinary scheduled execution as well as any time-sensitive
+  conditions or deadlines.
+
+## Choosing a test environment
+
+You can run your organisation model in the [local runtime](/docs/concepts/runtime/)
+for development and testing. Use test data and suitable test services or
+credentials when a process sends messages or calls external systems. A test
+that uses real integrations can have real effects.
+
+## Testing without schedule waits
+
+Use [Submit without waiting](/docs/reference/testing/#submit-without-waiting)
+to exercise a process without waiting for eligible scheduled dates. This is
+not a dry run: emails and integrations still run. Test ordinary submission
+as well when timing matters.

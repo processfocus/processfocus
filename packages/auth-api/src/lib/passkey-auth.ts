@@ -9,12 +9,12 @@ import {
   type CreateProviderUserInput,
 } from "./authentication-database.js"
 import { resolveInviteOnlyForProvider } from "./invite-only.js"
-import { withNonCriticalRetry } from "./non-critical-retry.js"
 import {
   consumePasskeyRecovery,
   hashPasskeyRecoveryBearer,
   resolvePasskeyRecoverySession,
 } from "./passkey-recovery.js"
+import { passkeyRegistrationName } from "./passkey-registration-name.js"
 import { getPasskeyUserHandle } from "./passkey-user-handle.js"
 
 class RootOrgUnitNotFoundError extends Data.TaggedError(
@@ -175,6 +175,7 @@ export const registerProviderUserByPasskey = (
 ) =>
   Effect.gen(function* () {
     if (value.registrationKind === "recovery") {
+      const name = passkeyRegistrationName(value.credential)
       const db = yield* AuthenticationDatabase
       const session = yield* resolvePasskeyRecoverySession(value.sessionBearer)
       if (
@@ -201,6 +202,7 @@ export const registerProviderUserByPasskey = (
           credentialId: value.credential.id,
           publicKey: value.credential.publicKey,
           counter: value.credential.counter,
+          ...(name && { name }),
           ...(value.credential.transports && {
             transports: value.credential.transports,
           }),
@@ -220,7 +222,7 @@ export const registerProviderUserByPasskey = (
       return yield* registerProviderUserByInvitationPasskey(value)
     }
 
-    // registrationKind is narrowed to "open"
+    const name = passkeyRegistrationName(value.credential)
     yield* authorizePasskeyOpenRegistration(value.email)
 
     const db = yield* AuthenticationDatabase
@@ -270,6 +272,7 @@ export const registerProviderUserByPasskey = (
         credentialId: value.credential.id,
         publicKey: value.credential.publicKey,
         counter: value.credential.counter,
+        ...(name && { name }),
         ...(value.credential.transports && {
           transports: value.credential.transports,
         }),
@@ -310,6 +313,7 @@ const registerProviderUserByInvitationPasskey = (
   >,
 ) =>
   Effect.gen(function* () {
+    const name = passkeyRegistrationName(value.credential)
     const db = yield* AuthenticationDatabase
 
     // Revalidate session and invitation predicates before any write.
@@ -393,6 +397,7 @@ const registerProviderUserByInvitationPasskey = (
         credentialId: value.credential.id,
         publicKey: value.credential.publicKey,
         counter: value.credential.counter,
+        ...(name && { name }),
         ...(value.credential.transports && {
           transports: value.credential.transports,
         }),
@@ -545,9 +550,5 @@ export const authenticateProviderUserByPasskey = (
       })
     }
 
-    yield* withNonCriticalRetry(
-      db.updateLastLoggedIn(providerUser.value.id, now),
-      "updateLastLoggedIn",
-    )
     return yield* withRoles(providerUser.value.id)
   })

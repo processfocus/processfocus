@@ -2,7 +2,7 @@
 
 import { expect, it } from "@effect/vitest"
 import { and, eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-postgres"
 import {
   InvitationLifecycleStatus,
@@ -18,10 +18,7 @@ import { PostgresTest } from "./postgres-test"
 const TestLayer = Layer.mergeAll(
   PostgresTest,
   PostgresDbOperationsLive,
-  Layer.succeed(
-    RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
-  ),
+  Layer.succeed(RequestTime, DateTime.makeUnsafe(Date.now())),
 )
 
 const makeOrgWithInvitations = (
@@ -261,7 +258,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
             .set({
               invitationStatus: InvitationLifecycleStatus.Accepted,
               invitationPendingEmail: null,
-              invitationAcceptedAt: DateTime.unsafeMake(Date.now()),
+              invitationAcceptedAt: DateTime.makeUnsafe(Date.now()),
               invitationAcceptedByProvider: "google",
               invitationAcceptedBySubject: "sub-1",
             })
@@ -322,7 +319,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
             .set({
               invitationStatus: InvitationLifecycleStatus.LegacyClosed,
               invitationPendingEmail: null,
-              invitationLegacyClosedAt: DateTime.unsafeMake(Date.now()),
+              invitationLegacyClosedAt: DateTime.makeUnsafe(Date.now()),
               invitationLegacyClosureReason: "preexisting_provider_user",
             })
             .where(eq(schema.invitation.invitationId, "legacy-closed-invite"))
@@ -361,7 +358,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
             .set({
               invitationStatus: InvitationLifecycleStatus.Accepted,
               invitationPendingEmail: null,
-              invitationAcceptedAt: DateTime.unsafeMake(Date.now()),
+              invitationAcceptedAt: DateTime.makeUnsafe(Date.now()),
               invitationAcceptedByProvider: "google",
               invitationAcceptedBySubject: "sub-repeat",
             })

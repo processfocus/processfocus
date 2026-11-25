@@ -24,13 +24,7 @@ export class DecryptionError extends Data.TaggedError(
   readonly cause?: unknown
 }> {}
 
-/**
- * Parse JSON - wrapped to avoid Effect plugin warning about preferring Schema.
- * We use plain JSON.parse here because:
- * 1. The data is always valid (created by our own JSON.stringify)
- * 2. The shape is unknown/any since it's encrypted cookie data
- */
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 /**
  * Service interface for encryption operations.
@@ -60,9 +54,7 @@ export interface EncryptionServiceInterface {
 /**
  * Effect service tag for encryption operations.
  */
-export class EncryptionService extends Context.Tag(
-  "@pf/openauth/EncryptionService",
-)<EncryptionService, EncryptionServiceInterface>() {}
+export class EncryptionService extends Context.Service<EncryptionService, EncryptionServiceInterface>()("@pf/openauth/EncryptionService") {}
 
 /**
  * Live implementation of EncryptionService.
@@ -81,7 +73,7 @@ export const EncryptionServiceLive: Layer.Layer<
       encrypt: (value: unknown) =>
         Effect.gen(function* () {
           const key = yield* keyMgmt.encryptionKey
-          const encoded = yield* Schema.encode(JsonValue)(value).pipe(
+          const encoded = yield* Schema.encodeEffect(JsonValue)(value).pipe(
             Effect.mapError(
               (error) =>
                 new StorageError({
@@ -112,9 +104,8 @@ export const EncryptionServiceLive: Layer.Layer<
                 cause: error,
               }),
           })
-          // Parse the decrypted JSON - this is always valid since we created it
           const decoded = new TextDecoder().decode(result.plaintext)
-          return yield* Schema.decodeUnknown(JsonValue)(decoded).pipe(
+          return yield* Schema.decodeUnknownEffect(JsonValue)(decoded).pipe(
             Effect.mapError(
               (error) =>
                 new DecryptionError({

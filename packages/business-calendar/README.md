@@ -1,143 +1,137 @@
 # @pf/business-calendar
 
-Effect-based business calendar service for calculating business days and hours, with support for holidays, calendar periods (school terms, fiscal quarters, etc.), and date exceptions.
+Calculates working time for process schedules and duration measurements.
+Calendars combine weekly opening hours, holidays, named periods, and one-off
+date exceptions.
 
-## Features
+Exceptions take precedence over period schedules and the normal weekly
+schedule. This allows deadlines to follow actual working hours rather than
+elapsed clock time.
 
-- **Business day/hour calculations**: `isBusinessDay`, `isBusinessHours`, `addBusinessDays`, `addBusinessHours`
-- **Holiday support**: Fixed dates, nth weekday (e.g., 4th Thursday), last weekday of month, Easter-relative
-- **Calendar periods**: School terms, fiscal quarters, seasons with optional schedule overrides
-- **Date exceptions**: One-off overrides for specific dates (early closing, special hours)
-- **Configurable weekly schedule**: Multiple time ranges per day, overnight ranges supported
+Operations exchange UTC timestamps, while schedule times are interpreted in the
+calendar's configured timezone.
 
-## Usage
+## Deadlines that follow working hours
+
+Start with a Monday–Friday, 09:00–17:00 calendar and add recurring holidays.
+Holiday helpers cover fixed dates, particular weekdays, and dates relative to
+Easter:
 
 ```typescript
+import { DateTime, Duration, Effect } from "effect"
 import {
-  BusinessCalendarService,
-  makeBusinessCalendarServiceLayer,
+  type BusinessCalendarConfig,
+  Thursday,
+  Monday,
+  Weekdays,
   createDefaultConfig,
-  type Holiday,
-  type DayOfWeek,
+  easterRelativeHoliday,
+  fixedHoliday,
+  lastWeekdayHoliday,
+  makeBusinessCalendarService,
+  nthWeekdayHoliday,
 } from "@pf/business-calendar"
-import { DateTime, Effect } from "effect"
 
-// Define holidays
-const holidays: Holiday[] = [
-  { _tag: "FixedHoliday", month: 1, day: 1, name: "New Year's Day" },
-  { _tag: "FixedHoliday", month: 12, day: 25, name: "Christmas Day" },
-  { _tag: "NthWeekdayHoliday", month: 11, weekday: 4, n: 4, name: "Thanksgiving" },
-  { _tag: "EasterRelativeHoliday", offset: -2, name: "Good Friday" },
-]
-
-// Create config (timezone is on Organisation, not here)
-const config = createDefaultConfig(holidays)
-
-// Or build custom config
-const customConfig = {
-  weeklySchedule: [
-    { day: 1 as DayOfWeek, ranges: [{ open: { hour: 8, minute: 30 }, close: { hour: 17, minute: 0 } }] },
-    { day: 2 as DayOfWeek, ranges: [{ open: { hour: 8, minute: 30 }, close: { hour: 17, minute: 0 } }] },
-    // ... etc
-  ],
-  holidays,
-  exceptions: [],
-  nonWorkingDays: [0 as DayOfWeek, 6 as DayOfWeek], // Sunday, Saturday
-  periods: [],
+const config: BusinessCalendarConfig = {
+  ...createDefaultConfig([
+    fixedHoliday("Christmas Day", 12, 25),
+    nthWeekdayHoliday("Thanksgiving", 11, Thursday, 4),
+    lastWeekdayHoliday("Memorial Day", 5, Monday),
+    easterRelativeHoliday("Good Friday", -2),
+  ]),
+  timezone: "UTC",
 }
 
-// Use the service
-const program = Effect.gen(function* () {
-  const calendar = yield* BusinessCalendarService
+const result = await Effect.runPromise(
+  Effect.gen(function* () {
+    const calendar = yield* makeBusinessCalendarService(config)
+    const received = DateTime.makeUnsafe("2026-12-24T16:00:00Z")
+    const deadline = yield* calendar.addBusinessHours(received, 4)
+    const workingTime = yield* calendar.businessHoursBetween(received, deadline)
 
-  const date = DateTime.unsafeMake({ year: 2025, month: 1, day: 6 })
-
-  const isWorkday = yield* calendar.isBusinessDay(date)
-  const nextWorkday = yield* calendar.nextBusinessDay(date)
-  const fiveDaysLater = yield* calendar.addBusinessDays(date, 5)
-
-  // With time
-  const datetime = DateTime.unsafeMake({ year: 2025, month: 1, day: 6, hour: 14, minute: 30 })
-  const isOpen = yield* calendar.isBusinessHours(datetime)
-  const twoHoursLater = yield* calendar.addBusinessHours(datetime, 2)
-})
-
-// Provide the service layer
-Effect.runPromise(
-  program.pipe(
-    Effect.provide(makeBusinessCalendarServiceLayer(config))
-  )
+    return {
+      deadline: DateTime.formatIso(deadline),
+      workingHours: Duration.toHours(workingTime),
+    }
+  }),
 )
+// { deadline: "2026-12-28T12:00:00.000Z", workingHours: 4 }
 ```
 
-## Calendar Periods
+One hour is counted on Thursday; Friday's holiday and the weekend are skipped,
+then the remaining three hours fall on Monday. The same service can add business
+days, find the next working day, or measure working time between two events.
 
-Calendar periods allow you to define date ranges like school terms or fiscal quarters:
+## Split shifts and one-off changes
 
-```typescript
-import { DateTime } from "effect"
-
-const config = {
-  // ... other config
-  periods: [
-    {
-      type: "school_term",
-      name: "Fall 2025",
-      startDate: DateTime.unsafeMake({ year: 2025, month: 9, day: 1 }),
-      endDate: DateTime.unsafeMake({ year: 2025, month: 12, day: 20 }),
-      isActive: true,
-    },
-  ],
-  // Only count days within active school terms as business days
-  requireActivePeriod: "school_term",
-}
-```
-
-## Date Exceptions
-
-Override schedule for specific dates:
+Continuing with the configuration above, give weekdays a lunch break and
+override two particular dates:
 
 ```typescript
-const config = {
-  // ... other config
+const adjustedConfig: BusinessCalendarConfig = {
+  ...config,
+  weeklySchedule: Weekdays.map((day) => ({
+    day,
+    ranges: [
+      { open: { hour: 9, minute: 0 }, close: { hour: 12, minute: 0 } },
+      { open: { hour: 13, minute: 0 }, close: { hour: 17, minute: 0 } },
+    ],
+  })),
   exceptions: [
     {
-      date: DateTime.unsafeMake({ year: 2025, month: 12, day: 24 }),
-      slots: [{ open: { hour: 9, minute: 0 }, close: { hour: 12, minute: 0 } }],
-      note: "Christmas Eve - early closing",
+      date: DateTime.makeUnsafe("2026-12-24T00:00:00Z"),
+      slots: [
+        { open: { hour: 9, minute: 0 }, close: { hour: 12, minute: 0 } },
+      ],
+      note: "Christmas Eve — early closing",
     },
     {
-      date: DateTime.unsafeMake({ year: 2025, month: 12, day: 31 }),
+      date: DateTime.makeUnsafe("2026-12-31T00:00:00Z"),
       slots: "closed",
-      note: "New Year's Eve - closed",
+      note: "Year-end closure",
     },
   ],
 }
 ```
 
-## API
+Working-hour calculations skip the lunch break and respect the early closing.
+Weekly schedules can also describe overnight shifts, such as 22:00–06:00.
 
-### BusinessCalendarService
+## Seasonal schedules and active periods
 
-| Method | Description |
-|--------|-------------|
-| `isBusinessDay(date)` | Check if date is a business day |
-| `isBusinessHours(datetime)` | Check if datetime is within business hours |
-| `addBusinessDays(date, days)` | Add/subtract business days |
-| `addBusinessHours(datetime, hours)` | Add business hours |
-| `nextBusinessDay(date)` | Get next business day |
-| `businessDayStart(date)` | Get start time of business day |
-| `businessDayEnd(date)` | Get end time of business day |
-| `businessHoursRemaining(datetime)` | Get remaining business hours today |
-| `businessDaysBetween(start, end)` | Count business days in range |
-| `businessHoursBetween(start, end)` | Calculate business hours in range |
-| `isHoliday(date)` | Check if date is a holiday |
-| `getHolidaysForYear(year)` | Get all holidays for a year |
-| `getActivePeriods(date)` | Get active calendar periods for date |
-| `getActivePeriodsByType(date, type)` | Get active periods of specific type |
-| `isWithinPeriodType(date, type)` | Check if date is within any period of type |
-| `getEffectiveSchedule(date)` | Get the schedule in effect for date |
+Named periods can replace the normal weekly schedule for a date range:
 
-## Note on Timezone
+```typescript
+const seasonalConfig: BusinessCalendarConfig = {
+  ...adjustedConfig,
+  periods: [
+    {
+      id: "summer-hours-2026",
+      type: "summer-hours",
+      name: "Summer opening hours",
+      startDate: DateTime.makeUnsafe("2026-07-01T00:00:00Z"),
+      endDate: DateTime.makeUnsafe("2026-08-31T00:00:00Z"),
+      isActive: true,
+      weeklySchedule: Weekdays.map((day) => ({
+        day,
+        ranges: [
+          { open: { hour: 8, minute: 0 }, close: { hour: 14, minute: 0 } },
+        ],
+      })),
+    },
+  ],
+}
+```
 
-Timezone is stored at the Organisation level, not in the calendar config. The calendar service operates on `DateTime.Utc` values. Timezone conversion should happen at the application boundary.
+Outside the period, the usual schedule applies. To count working days only
+within active periods of a particular type, set `requireActivePeriod` to that
+type. This suits seasonal operations or bounded service windows.
+
+## Timezones and further reading
+
+The examples use UTC to make the results easy to follow. Set `timezone` to an
+IANA name such as `Pacific/Auckland` for local opening hours; the service handles
+the conversion while continuing to accept and return UTC timestamps.
+
+See the [calendar configuration](./src/lib/calendar-config.ts) and
+[service interface](./src/lib/calendar-service.ts) for supported calculations.

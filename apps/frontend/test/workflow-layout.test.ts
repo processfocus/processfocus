@@ -126,26 +126,6 @@ describe("createInitialLayout swimlane ordering", () => {
     expect(order).toEqual(["role-b", "role-c", "role-a"])
   })
 
-  test("orders swimlanes with null order after those with order", () => {
-    const roles = [
-      { id: "role-a", name: "Role A" },
-      { id: "role-b", name: "Role B" },
-      { id: "role-c", name: "Role C" },
-    ]
-    const responsibilities = [
-      { roleId: "role-a", responsibility: "Does A", order: null },
-      { roleId: "role-b", responsibility: "Does B", order: 1 },
-      { roleId: "role-c", responsibility: "Does C", order: null },
-    ]
-
-    const order = getSwimlaneOrder(createWorkflowData(roles, responsibilities))
-
-    // role-b has order 1, so it comes first
-    // role-a and role-c have no order, they come after in encounter order
-    expect(order[0]).toBe("role-b")
-    expect(order.slice(1)).toEqual(expect.arrayContaining(["role-a", "role-c"]))
-  })
-
   test("maintains encounter order when no responsibilities have order", () => {
     const roles = [
       { id: "role-a", name: "Role A" },

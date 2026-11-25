@@ -16,21 +16,20 @@
   "dependencies": {
     "@pf/auth-policy": "workspace:*",
     "@pf/drizzle-sqlite": "workspace:*",
-    "@pf/graphql-api": "workspace:*",
     "@pf/graphql-db-operations": "workspace:*",
     "@pf/job-handler": "workspace:*",
     "@pf/org-to-db": "workspace:*",
     "@pf/process": "workspace:*",
-    "@pf/queue-service": "workspace:*",
+    "@pf/process-execution": "workspace:*",
     "@pf/request-time": "workspace:*",
     "@pf/service-drizzle-sqlite": "workspace:*",
     "@pf/sqlite-operations": "workspace:*",
     "@pf/sqlite-queue-service": "workspace:*",
     "@processfocus/runtime": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.2"
+    "@types/bun": "^1.4.5"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

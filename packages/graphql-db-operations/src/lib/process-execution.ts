@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, Data, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import type { UserDetails } from "./user-details"
 
@@ -28,9 +28,7 @@ export interface ProcessExecutionStartInfo {
 /**
  * Service providing process execution operations.
  */
-export class ProcessExecutionOperations extends Context.Tag(
-  "@pf/graphql-db-operations/ProcessExecutionOperations",
-)<
+export class ProcessExecutionOperations extends Context.Service<
   ProcessExecutionOperations,
   {
     /**
@@ -67,4 +65,4 @@ export class ProcessExecutionOperations extends Context.Tag(
       executionId: string,
     ) => Effect.Effect<ProcessExecutionStartInfo | null, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/ProcessExecutionOperations") {}

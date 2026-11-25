@@ -15,7 +15,7 @@
  * starts using a new shared component file, add that file here or Tailwind may
  * purge its classes from the production public CSS.
  */
-@source "../../../packages/form/src/lib/client-components-to-form.tsx";
+@source "../../../packages/form/src/lib/effect-schema-form.tsx";
 @source "../../../packages/form/src/lib/walker.tsx";
 @source "../../../packages/shadcn-components/src/lib/boolean-field.tsx";
 @source "../../../packages/shadcn-components/src/lib/field-set.tsx";

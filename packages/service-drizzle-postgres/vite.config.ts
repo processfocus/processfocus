@@ -1,14 +1,12 @@
 /// <reference types='vitest' />
+
+import { nxReadySignal } from "@nx/vite/plugins/nx-ready-signal.plugin"
 import { defineConfig } from "vite"
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
   cacheDir: "../../node_modules/.vite/packages/service-drizzle-postgres",
-  plugins: [],
-  // Uncomment this if you are using workers.
-  // worker: {
-  //  plugins: [ nxViteTsPaths() ],
-  // },
+  plugins: [nxReadySignal()],
   test: {
     name: "@pf/service-drizzle-postgres",
     watch: false,

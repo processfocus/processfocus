@@ -154,15 +154,12 @@ function WorkflowFlowInner({
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setLayout((currentLayout) => {
-      // Apply React Flow's changes first
       const updatedNodes = applyNodeChanges(changes, currentLayout.nodes)
 
-      // If layout already applied, just return the updated nodes
       if (currentLayout.measuredHeight !== null) {
         return { ...currentLayout, nodes: updatedNodes }
       }
 
-      // Check if we have dimension changes
       const hasDimensionChanges = changes.some(
         (change) => change.type === "dimensions",
       )
@@ -170,7 +167,6 @@ function WorkflowFlowInner({
         return { ...currentLayout, nodes: updatedNodes }
       }
 
-      // Check if all step nodes now have measurements
       const stepNodes = updatedNodes.filter((n) => n.type === "workflowStep")
       const allMeasured =
         stepNodes.length > 0 &&
@@ -276,7 +272,6 @@ function WorkflowFlowWithAutoRefresh({
     initialWorkflowData,
   )
 
-  // Recompute layout when workflow data changes
   const { nodes: currentNodes, edges: currentEdges } = useMemo(
     () => createInitialLayout(workflowData),
     [workflowData],

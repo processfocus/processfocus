@@ -1,13 +1,21 @@
 "use client"
 
-import { useEffect, useEffectEvent, useState } from "react"
+import { type ReactNode, useEffect, useEffectEvent, useState } from "react"
 import type {
-  MetricBreakdown,
   MetricBreakdownBucket,
   MetricBreakdownColor,
   MetricBreakdownControl,
   MetricBreakdownField,
-} from "@pf/form-client-representation/types"
+  MetricBreakdownOptions,
+} from "@pf/form-schema"
+import {
+  DateTimeDisplay,
+  DateTimeDisplayProvider,
+} from "@pf/shadcn-components/date-time-display"
+
+export type MetricBreakdown = MetricBreakdownOptions & {
+  readonly field: string
+}
 
 export type UsageCostsSubject = "environment" | "project"
 
@@ -22,7 +30,6 @@ interface UsageCostRow {
   readonly id: string
   readonly usageDate: string
   readonly costCategory: string
-  readonly costSource: string
   readonly durationMs: number | null
   readonly amount: number
 }
@@ -30,12 +37,16 @@ interface UsageCostRow {
 type UsageCostsView = "summary" | "table"
 
 const metricBreakdownBarClassNames = {
-  amber: "bg-amber-500",
-  emerald: "bg-emerald-500",
-  rose: "bg-rose-500",
-  sky: "bg-sky-500",
-  slate: "bg-slate-500",
-  violet: "bg-violet-500",
+  amber:
+    "bg-[var(--usage-chart-amber,var(--color-amber-500))] dark:bg-amber-500",
+  emerald:
+    "bg-[var(--usage-chart-emerald,var(--color-emerald-500))] dark:bg-emerald-500",
+  rose: "bg-[var(--usage-chart-rose,var(--color-rose-500))] dark:bg-rose-500",
+  sky: "bg-[var(--usage-chart-sky,var(--color-sky-500))] dark:bg-sky-500",
+  slate:
+    "bg-[var(--usage-chart-slate,var(--color-slate-500))] dark:bg-slate-500",
+  violet:
+    "bg-[var(--usage-chart-violet,var(--color-violet-500))] dark:bg-violet-500",
 } satisfies Record<MetricBreakdownColor, string>
 
 const usageCostsPeriodControlName = "usageCostsPeriod"
@@ -50,7 +61,6 @@ const environmentUsageCostRowsQuery = `
         id
         usageDate
         costCategory
-        costSource
         durationMs
         amount
       }
@@ -68,7 +78,6 @@ const projectUsageCostRowsQuery = `
         id
         usageDate
         costCategory
-        costSource
         durationMs
         amount
       }
@@ -106,7 +115,6 @@ const readUsageCostRows = (value: unknown): readonly UsageCostRow[] => {
     const id = readString(row, "id")
     const usageDate = readString(row, "usageDate")
     const costCategory = readString(row, "costCategory")
-    const costSource = readString(row, "costSource")
     const amount = readNumber(row, "amount")
     const durationMs = readNullableNumber(row, "durationMs")
 
@@ -114,14 +122,13 @@ const readUsageCostRows = (value: unknown): readonly UsageCostRow[] => {
       id === undefined ||
       usageDate === undefined ||
       costCategory === undefined ||
-      costSource === undefined ||
       amount === undefined ||
       durationMs === undefined
     ) {
       return []
     }
 
-    return [{ id, usageDate, costCategory, costSource, durationMs, amount }]
+    return [{ id, usageDate, costCategory, durationMs, amount }]
   })
 }
 
@@ -314,9 +321,11 @@ export const resolveMetricFields = (
 function MetricBreakdownControlFields({
   component,
   onControlChange,
+  usageCostsPeriod,
 }: {
   readonly component: Pick<MetricBreakdown, "controls" | "field">
   readonly onControlChange?: (controlName: string, value: string) => void
+  readonly usageCostsPeriod: string | undefined
 }) {
   if (!component.controls || component.controls.length === 0) return null
 
@@ -324,21 +333,29 @@ function MetricBreakdownControlFields({
     <>
       {component.controls.map((control) => {
         const inputId = metricFieldInputId(component.field, control.name)
-        const selectedValue = resolveMetricControlValue(control)
+        const controlledValue =
+          control.name === usageCostsPeriodControlName
+            ? usageCostsPeriod
+            : undefined
+        const selectedValue =
+          controlledValue ?? resolveMetricControlValue(control)
 
         return (
           <div
-            className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200"
+            className="space-y-2 text-sm font-medium text-[color:var(--usage-text,var(--color-slate-700))] dark:text-slate-200"
             key={control.name}
           >
             <label htmlFor={inputId}>{control.label}</label>
             <select
-              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              className="h-10 w-full rounded-lg border border-[color:var(--usage-control-border,var(--color-slate-200))] bg-[var(--usage-surface,var(--color-white))] px-3 text-sm text-[color:var(--usage-text,var(--color-slate-900))] shadow-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
               data-url-parameter={control.urlParameter}
-              defaultValue={selectedValue}
+              defaultValue={
+                controlledValue === undefined ? selectedValue : undefined
+              }
               id={inputId}
-              key={selectedValue}
+              key={controlledValue === undefined ? selectedValue : control.name}
               name={control.name}
+              value={controlledValue}
               onChange={(event) => {
                 const value = event.currentTarget.value
                 updateMetricControlUrlValue(control, value)
@@ -363,6 +380,9 @@ export interface UsageCostsCardProps {
   readonly graphqlClient: GraphqlRequester
   readonly values: Record<string, unknown>
   readonly usageCostsSubject: UsageCostsSubject
+  readonly usageCostsPeriod?: string
+  /** Replaces the summary amounts when they are not available for the selected period. */
+  readonly summaryStatus?: ReactNode
 }
 
 interface UsageCostRowsResult {
@@ -393,11 +413,24 @@ const usageCostRowsRequestKey = (
   return `${usageCostsSubject}:${itemId}:${usageCostsPeriod ?? ""}`
 }
 
+// The table mounts only after the user selects it, so its date environment is
+// client-only. Keep the provider here for both Console and organisation plugins.
+function UsageCostTable({ children }: { children: ReactNode }) {
+  const [initialNow] = useState(Date.now)
+  return (
+    <DateTimeDisplayProvider initialNow={initialNow}>
+      <div className="max-h-[32rem] overflow-y-auto">{children}</div>
+    </DateTimeDisplayProvider>
+  )
+}
+
 export function UsageCostsCard({
   component,
   graphqlClient,
   values,
   usageCostsSubject,
+  usageCostsPeriod: controlledPeriod,
+  summaryStatus,
 }: UsageCostsCardProps) {
   const [view, setView] = useState<UsageCostsView>("summary")
   const requestUsageCostRows = useEffectEvent(
@@ -407,18 +440,18 @@ export function UsageCostsCard({
         variables,
       ),
   )
-  const resolvedUsageCostsPeriod = resolveUsageCostsPeriod(component.controls)
-  const [usageCostsPeriod, setUsageCostsPeriod] = useState(
-    resolvedUsageCostsPeriod,
-  )
+  const resolvedUsageCostsPeriod =
+    controlledPeriod ?? resolveUsageCostsPeriod(component.controls)
+  const [localPeriod, setLocalPeriod] = useState(resolvedUsageCostsPeriod)
   const [
     previousResolvedUsageCostsPeriod,
     setPreviousResolvedUsageCostsPeriod,
   ] = useState(resolvedUsageCostsPeriod)
   if (resolvedUsageCostsPeriod !== previousResolvedUsageCostsPeriod) {
     setPreviousResolvedUsageCostsPeriod(resolvedUsageCostsPeriod)
-    setUsageCostsPeriod(resolvedUsageCostsPeriod)
+    setLocalPeriod(resolvedUsageCostsPeriod)
   }
+  const usageCostsPeriod = controlledPeriod ?? localPeriod
 
   const [usageCostRowsResult, setUsageCostRowsResult] =
     useState<UsageCostRowsResult | null>(null)
@@ -510,38 +543,41 @@ export function UsageCostsCard({
   return (
     <section
       aria-label={component.title}
-      className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/80 shadow-sm dark:border-slate-800 dark:bg-slate-950/40"
+      className="overflow-hidden rounded-2xl border border-[color:var(--usage-border,var(--color-slate-200))] bg-[var(--usage-surface-soft,color-mix(in_srgb,var(--color-slate-50)_80%,transparent))] shadow-sm dark:border-slate-800 dark:bg-slate-950/40"
     >
-      <div className="border-b border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900/70">
+      <div className="border-b border-[color:var(--usage-border,var(--color-slate-200))] bg-[var(--usage-surface,var(--color-white))] p-5 dark:border-slate-800 dark:bg-slate-900/70">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-wider text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400">
               {component.title}
             </p>
-            <p className="mt-1 text-2xl font-semibold text-slate-950 dark:text-slate-50">
-              {formatter.format(total)}
-            </p>
+            {summaryStatus ?? (
+              <p className="mt-1 text-2xl font-semibold text-[color:var(--usage-text,var(--color-slate-950))] dark:text-slate-50">
+                {formatter.format(total)}
+              </p>
+            )}
             {context ? (
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              <p className="mt-1 text-sm text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400">
                 {context}
               </p>
             ) : null}
           </div>
           {badge ? (
-            <div className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-300">
+            <div className="rounded-full border border-[color:var(--usage-warning-border,var(--color-amber-200))] bg-[var(--usage-warning-bg,var(--color-amber-50))] px-3 py-1 text-xs font-medium text-[color:var(--usage-warning-text,var(--color-amber-700))] dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-300">
               {badge}
             </div>
           ) : null}
-          <fieldset className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 text-xs font-medium dark:border-slate-700 dark:bg-slate-950">
+          <fieldset className="inline-flex rounded-lg border border-[color:var(--usage-border,var(--color-slate-200))] bg-[var(--usage-surface-soft,var(--color-slate-100))] p-1 text-xs font-medium dark:border-slate-700 dark:bg-slate-950">
             <legend className="sr-only">Usage costs view</legend>
             {(["summary", "table"] as const).map((option) => (
               <button
                 className={`rounded-md px-3 py-1.5 capitalize transition-colors ${
                   view === option
-                    ? "bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-slate-50"
-                    : "text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+                    ? "bg-[var(--usage-selection,var(--color-white))] text-[color:var(--usage-text,var(--color-slate-950))] shadow-xs dark:bg-slate-800 dark:text-slate-50"
+                    : "text-[color:var(--usage-muted,var(--color-slate-500))] hover:text-[color:var(--usage-text,var(--color-slate-900))] dark:text-slate-400 dark:hover:text-slate-100"
                 }`}
                 key={option}
+                aria-pressed={view === option}
                 onClick={() => setView(option)}
                 type="button"
               >
@@ -557,9 +593,13 @@ export function UsageCostsCard({
           <div className="grid gap-3 sm:grid-cols-2">
             <MetricBreakdownControlFields
               component={component}
+              usageCostsPeriod={controlledPeriod}
               onControlChange={(controlName, value) => {
-                if (controlName === usageCostsPeriodControlName) {
-                  setUsageCostsPeriod(value)
+                if (
+                  controlledPeriod === undefined &&
+                  controlName === usageCostsPeriodControlName
+                ) {
+                  setLocalPeriod(value)
                 }
               }}
             />
@@ -568,12 +608,12 @@ export function UsageCostsCard({
 
               return (
                 <div
-                  className="space-y-2 text-sm font-medium text-slate-700 dark:text-slate-200"
+                  className="space-y-2 text-sm font-medium text-[color:var(--usage-text,var(--color-slate-700))] dark:text-slate-200"
                   key={field.label}
                 >
                   <label htmlFor={inputId}>{field.label}</label>
                   <input
-                    className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    className="h-10 w-full rounded-lg border border-[color:var(--usage-control-border,var(--color-slate-200))] bg-[var(--usage-surface,var(--color-white))] px-3 text-sm text-[color:var(--usage-text,var(--color-slate-900))] shadow-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                     id={inputId}
                     readOnly={true}
                     value={field.value ?? ""}
@@ -584,31 +624,31 @@ export function UsageCostsCard({
           </div>
         ) : null}
 
-        {view === "summary" ? (
+        {view === "summary" && summaryStatus == null ? (
           <div className="grid gap-3">
             {buckets.map((bucket) => {
               const percent = metricBucketPercent(total, bucket)
               return (
                 <div
-                  className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900/60"
+                  className="rounded-xl border border-[color:var(--usage-border,var(--color-slate-200))] bg-[var(--usage-surface,var(--color-white))] p-4 dark:border-slate-800 dark:bg-slate-900/60"
                   key={bucket.label}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <p className="font-medium text-slate-950 dark:text-slate-50">
+                      <p className="font-medium text-[color:var(--usage-text,var(--color-slate-950))] dark:text-slate-50">
                         {bucket.label}
                       </p>
                       {bucket.description ? (
-                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        <p className="mt-1 text-sm text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400">
                           {bucket.description}
                         </p>
                       ) : null}
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold text-slate-950 dark:text-slate-50">
+                      <p className="font-semibold text-[color:var(--usage-text,var(--color-slate-950))] dark:text-slate-50">
                         {formatter.format(bucket.amount ?? 0)}
                       </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                      <p className="text-xs text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400">
                         {percent}%
                       </p>
                     </div>
@@ -618,7 +658,7 @@ export function UsageCostsCard({
                     aria-valuemax={100}
                     aria-valuemin={0}
                     aria-valuenow={percent}
-                    className="mt-4 h-2 rounded-full bg-slate-100 dark:bg-slate-800"
+                    className="mt-4 h-2 rounded-full bg-[var(--usage-track,var(--color-slate-100))] dark:bg-slate-800"
                     role="progressbar"
                   >
                     <div
@@ -630,9 +670,9 @@ export function UsageCostsCard({
               )
             })}
           </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900/60">
-            <div className="max-h-[32rem] overflow-y-auto">
+        ) : view === "table" ? (
+          <div className="overflow-hidden rounded-xl border border-[color:var(--usage-border,var(--color-slate-200))] bg-[var(--usage-surface,var(--color-white))] dark:border-slate-800 dark:bg-slate-900/60">
+            <UsageCostTable>
               <table className="w-full table-fixed text-left text-sm">
                 <colgroup>
                   <col className="w-[6.25rem]" />
@@ -640,7 +680,7 @@ export function UsageCostsCard({
                   <col className="w-[4rem]" />
                   <col className="w-[5.25rem]" />
                 </colgroup>
-                <thead className="sticky top-0 border-b border-slate-200 bg-slate-100 text-[0.7rem] font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+                <thead className="sticky top-0 border-b border-[color:var(--usage-border,var(--color-slate-200))] bg-[var(--usage-surface-soft,var(--color-slate-100))] text-[0.7rem] font-semibold uppercase tracking-wide text-[color:var(--usage-muted,var(--color-slate-500))] dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
                   <tr>
                     <th className="px-2.5 py-3">Day</th>
                     <th className="px-2.5 py-3">Category</th>
@@ -648,11 +688,11 @@ export function UsageCostsCard({
                     <th className="px-2.5 py-3 text-right">Amount</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                <tbody className="divide-y divide-[var(--usage-border,var(--color-slate-200))] dark:divide-slate-800">
                   {usageCostRowsLoading ? (
                     <tr>
                       <td
-                        className="px-4 py-8 text-center text-slate-500 dark:text-slate-400"
+                        className="px-4 py-8 text-center text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400"
                         colSpan={4}
                       >
                         Loading usage cost rows...
@@ -661,7 +701,7 @@ export function UsageCostsCard({
                   ) : usageCostRowsError ? (
                     <tr>
                       <td
-                        className="px-4 py-8 text-center text-rose-600 dark:text-rose-400"
+                        className="px-4 py-8 text-center text-[color:var(--usage-error-text,var(--color-rose-600))] dark:text-rose-400"
                         colSpan={4}
                       >
                         {usageCostRowsError}
@@ -670,16 +710,19 @@ export function UsageCostsCard({
                   ) : usageCostRows.length > 0 ? (
                     usageCostRows.map((row) => (
                       <tr key={row.id}>
-                        <td className="px-2.5 py-3 text-slate-700 dark:text-slate-200">
-                          {row.usageDate}
+                        <td className="px-2.5 py-3 text-[color:var(--usage-text,var(--color-slate-700))] dark:text-slate-200">
+                          <DateTimeDisplay
+                            kind="calendar-date"
+                            value={row.usageDate}
+                          />
                         </td>
-                        <td className="break-words px-2.5 py-3 text-slate-700 dark:text-slate-200">
+                        <td className="break-words px-2.5 py-3 text-[color:var(--usage-text,var(--color-slate-700))] dark:text-slate-200">
                           {row.costCategory}
                         </td>
-                        <td className="px-2.5 py-3 text-right text-slate-500 dark:text-slate-400">
+                        <td className="px-2.5 py-3 text-right text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400">
                           {usageCostDurationLabel(row.durationMs)}
                         </td>
-                        <td className="px-2.5 py-3 text-right font-medium text-slate-950 dark:text-slate-50">
+                        <td className="px-2.5 py-3 text-right font-medium text-[color:var(--usage-text,var(--color-slate-950))] dark:text-slate-50">
                           {formatUsageCostAmount(row.amount, currency)}
                         </td>
                       </tr>
@@ -687,7 +730,7 @@ export function UsageCostsCard({
                   ) : (
                     <tr>
                       <td
-                        className="px-4 py-8 text-center text-slate-500 dark:text-slate-400"
+                        className="px-4 py-8 text-center text-[color:var(--usage-muted,var(--color-slate-500))] dark:text-slate-400"
                         colSpan={4}
                       >
                         No usage cost rows for this period.
@@ -696,9 +739,9 @@ export function UsageCostsCard({
                   )}
                 </tbody>
               </table>
-            </div>
+            </UsageCostTable>
           </div>
-        )}
+        ) : null}
       </div>
     </section>
   )

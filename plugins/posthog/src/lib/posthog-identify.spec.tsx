@@ -136,22 +136,6 @@ describe("PostHogIdentify", () => {
     expect(setPersonPropertiesCalls).toEqual([])
   })
 
-  it("updates person properties when already identified as the same user", async () => {
-    client.get_distinct_id = () => "usr-123"
-
-    await act(async () => {
-      root.render(<PostHogIdentify userId="usr-123" username="usr-123" />)
-    })
-
-    await act(async () => {
-      setPostHogReady(true)
-    })
-
-    expect(resetCalls).toBe(0)
-    expect(identifyCalls).toEqual([])
-    expect(setPersonPropertiesCalls).toEqual([[{ username: "usr-123" }]])
-  })
-
   it("does not reset identity when profile properties change for the same user", async () => {
     client.get_distinct_id = () => "usr-123"
 

@@ -1,6 +1,6 @@
-import { HttpClient } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
 import { Array as Arr, Config, Effect, Layer } from "effect"
+import { HttpClient } from "effect/http"
+import { SqlClient } from "effect/sql"
 import {
   type ExecutionChangeEvent,
   ExecutionCollectionOps,
@@ -16,7 +16,6 @@ import { postInternalEvent } from "./post-internal-event"
 /**
  * ExecutionFromJobPublisher implementation for local runtime.
  * Publishes execution change events via HTTP POST to the GraphQL server's internal endpoint.
- * Uses fire-and-forget pattern since the local runtime keeps running.
  */
 export const HttpExecutionFromJobPublisherLive = Layer.effect(
   ExecutionFromJobPublisher,
@@ -26,7 +25,7 @@ export const HttpExecutionFromJobPublisherLive = Layer.effect(
     const userDetails = yield* UserDetails
     const sqlClient = yield* SqlClient.SqlClient
     const callbackSecret = yield* Config.option(
-      Config.string("INTERNAL_API_SECRET"),
+      Config.String("INTERNAL_API_SECRET"),
     )
     const baseUrl = yield* GraphqlServerUrl
 
@@ -64,7 +63,7 @@ export const HttpExecutionFromJobPublisherLive = Layer.effect(
             )
 
           // Empty getByIds (or empty map result): expected race on rollback.
-          if (!Arr.isNonEmptyReadonlyArray(graphqlExecutions)) {
+          if (!Arr.isReadonlyArrayNonEmpty(graphqlExecutions)) {
             return "skipped-not-found" as const
           }
 

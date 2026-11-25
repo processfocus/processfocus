@@ -2,6 +2,8 @@ import { Context, type Effect } from "effect"
 import type { RequestTime } from "@pf/request-time"
 import type { AuthorizationError } from "./errors"
 import type {
+  CompletionContext,
+  CronStartContext,
   DelegationIssuanceContext,
   DelegationPrincipalType,
   ExecutionResource,
@@ -17,7 +19,6 @@ import type {
   ServiceAccountPrincipal,
   ServiceAccountPrincipalType,
   StepResource,
-  TodoResource,
   UserPrincipal,
 } from "./types"
 
@@ -26,11 +27,11 @@ import type {
  * Provides policy-based access control using Cedar policies.
  * All methods require RequestTime context for audit and time-based policies.
  */
-export class AuthorizationService extends Context.Tag(
-  "@pf/auth-policy/AuthorizationService",
-)<
+export class AuthorizationService extends Context.Service<
   AuthorizationService,
   {
+    /** Stable across processes; changes with the active schema/policies. Required for prepared authority. */
+    readonly policyVersion: Effect.Effect<string>
     readonly canManageDelegation: (
       principal: UserPrincipal | ServiceAccountPrincipalType,
       delegation: DelegationPrincipalType,
@@ -55,21 +56,22 @@ export class AuthorizationService extends Context.Tag(
 
     /**
      * Check if the principal can complete a step.
-     * Uses Cedar policy: principal.roles.containsAny(resource.allowedRoles)
-     * For start steps (startsProcess=true), custom policies can use resource.startsProcess
+     * Both process starts and existing work target their Step. Existing work
+     * supplies trusted instance context for assignment and public-link scoping.
      */
     readonly canCompleteStep: (
-      principal: UserPrincipal | ServiceAccountPrincipal,
+      principal:
+        | UserPrincipal
+        | ServiceAccountPrincipal
+        | PublicLinkPrincipalType,
       resource: StepResource,
+      context?: CompletionContext | CronStartContext,
     ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
 
-    /**
-     * Check if the principal can complete an existing todo. Todo resources carry
-     * step role and direct-assignee context so Cedar owns active-work visibility.
-     */
-    readonly canCompleteTodo: (
+    /** Read public start-form data without granting access to Todo state. */
+    readonly canViewEmbeddedForm: (
       principal: UserPrincipal | ServiceAccountPrincipal,
-      resource: TodoResource,
+      resource: StepResource,
     ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
 
     /**
@@ -78,17 +80,8 @@ export class AuthorizationService extends Context.Tag(
      */
     readonly canCorrectPublicCompletionTodo: (
       principal: UserPrincipal,
-      resource: TodoResource,
-    ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
-
-    /**
-     * Public todo capability tokens bind one public-link principal to the same
-     * todo resource. The default Cedar check is intentionally a policy-owned
-     * hook for future revocation/scoping rather than an extra token gate.
-     */
-    readonly canCompletePublicTodo: (
-      principal: PublicLinkPrincipalType,
-      resource: TodoResource,
+      resource: StepResource,
+      context: CompletionContext,
     ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
 
     /**
@@ -99,16 +92,6 @@ export class AuthorizationService extends Context.Tag(
     readonly canRequestRole: (
       principal: UserPrincipal | ServiceAccountPrincipalType,
       resource: RoleResource,
-    ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
-
-    /**
-     * Check if the principal can request permission to impersonate a provider user.
-     * Uses Cedar policy: principal == ServiceAccount::"..." and resource is PF::ProviderUser
-     * There is no default permit; organisations may explicitly grant access.
-     */
-    readonly canRequestProviderUserPermissions: (
-      principal: ServiceAccountPrincipalType | DelegationPrincipalType,
-      resource: ProviderUserPrincipal,
     ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
 
     /**
@@ -124,7 +107,6 @@ export class AuthorizationService extends Context.Tag(
      * Check if the principal can view an execution.
      * Uses Cedar policies:
      * - Provider users can view executions they started (principal == resource.startedBy)
-     * - Provider users can view executions in their org unit (resource in principal.orgUnit)
      */
     readonly canViewExecution: (
       principal: UserPrincipal | ServiceAccountPrincipalType,
@@ -243,7 +225,7 @@ export class AuthorizationService extends Context.Tag(
      * File owners can always delete their own files.
      */
     readonly canDeleteFile: (
-      principal: UserPrincipal,
+      principal: UserPrincipal | ServiceAccountPrincipalType,
       resource: FileResource,
     ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
 
@@ -260,4 +242,4 @@ export class AuthorizationService extends Context.Tag(
       action: { type: string; id: string },
     ) => Effect.Effect<boolean, AuthorizationError, RequestTime>
   }
->() {}
+>()("@pf/auth-policy/AuthorizationService") {}

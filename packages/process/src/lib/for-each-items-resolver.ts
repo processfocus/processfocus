@@ -58,9 +58,10 @@ export interface ForEachItemsResolverService {
 /**
  * Context tag for the ForEachItemsResolver service.
  */
-export class ForEachItemsResolver extends Context.Tag(
-  "@pf/process/ForEachItemsResolver",
-)<ForEachItemsResolver, ForEachItemsResolverService>() {}
+export class ForEachItemsResolver extends Context.Service<
+  ForEachItemsResolver,
+  ForEachItemsResolverService
+>()("@pf/process/ForEachItemsResolver") {}
 
 /**
  * Create a ForEachItemsResolver service from an Organisation.

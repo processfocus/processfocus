@@ -3,6 +3,7 @@ import { readFrontendJwt } from "@pf/auth-api"
 import { getClientId } from "@pf/auth-session"
 import { DATABASE_PATH_NOT_CONFIGURED, resolveDatabasePath } from "@pf/db-info"
 import { makeFrontendJwtStorageLayer } from "../utils/frontend-jwt-storage-layer"
+import type { DatabaseOptions } from "../utils/operator-inputs"
 
 class FrontendJwtNotFoundError extends Data.TaggedError(
   "FrontendJwtNotFoundError",
@@ -15,9 +16,12 @@ class FrontendJwtNotFoundError extends Data.TaggedError(
  *
  * @param orgPath - Path to organisation directory (to resolve database path)
  */
-export const runGetFrontendJwt = (orgPath: string) =>
+export const runGetFrontendJwt = (
+  orgPath: string,
+  options: DatabaseOptions = {},
+) =>
   Effect.gen(function* () {
-    const databasePath = resolveDatabasePath(orgPath)
+    const databasePath = options.databasePath ?? resolveDatabasePath(orgPath)
 
     if (!databasePath) {
       yield* Console.error(DATABASE_PATH_NOT_CONFIGURED)

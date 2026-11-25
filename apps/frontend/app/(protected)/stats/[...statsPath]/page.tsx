@@ -5,6 +5,9 @@ import { StatsTimelineData } from "./stats-data-fetcher"
 import { getSessionWithTokenAndExpiry } from "@/lib/auth/session"
 import { fetchAvailableStatsViewsServer } from "@/lib/graphql/stats-views-server"
 
+// The authenticated shell can omit this page while checking the session.
+export const instant = false
+
 interface PageProps {
   params: Promise<{ statsPath: string[] }>
 }

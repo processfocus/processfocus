@@ -7,7 +7,7 @@ const completionName = "completeFinancePurchaseRequestManagerApproval"
 const inputType = "FinancePurchaseRequestManagerApproval"
 
 class CompletionJourney {
-  readonly item = `E2E approval ${randomUUID()}`
+  constructor(readonly item = `E2E approval ${randomUUID()}`) {}
   readonly cost = "750"
   readonly warnings: string[] = []
   readonly completions: Request[] = []
@@ -16,7 +16,7 @@ class CompletionJourney {
   response: Response | undefined
 }
 
-const journeyFor = (state: Map<string, unknown>) => {
+export const journeyFor = (state: Map<string, unknown>) => {
   const journey = state.get("completionJourney")
   if (!(journey instanceof CompletionJourney)) {
     throw new Error("Completion observation must start before navigation")
@@ -70,20 +70,30 @@ Given(
   },
 )
 
+Given(
+  "I prepare a purchase request for matching order {string}",
+  async ({ scenarioState }, variant: string) => {
+    const previous = scenarioState.get("matchingOrderPrefix")
+    const prefix =
+      typeof previous === "string" ? previous : `MCP ${randomUUID()}`
+    scenarioState.set("matchingOrderPrefix", prefix)
+    scenarioState.set(
+      "completionJourney",
+      new CompletionJourney(`${prefix} ${variant}`),
+    )
+  },
+)
+
 When(
   "I fill the purchase request with a scenario-unique item and cost",
   async ({ page, scenarioState }) => {
     const journey = journeyFor(scenarioState)
     const dialog = appDialog(page)
     await dialog
-      .getByRole("group")
-      .filter({ hasText: "Item" })
-      .locator("input")
+      .getByRole("textbox", { name: "Item", exact: true })
       .fill(journey.item)
     await dialog
-      .getByRole("group")
-      .filter({ hasText: "Value" })
-      .locator("input")
+      .getByRole("textbox", { name: "Value", exact: true })
       .fill(journey.cost)
   },
 )
@@ -96,15 +106,9 @@ When(
     // This journey covers persisted completion, independently of live subscriptions.
     // Refresh the visible queue while the runtime creates the next step's todo.
     await expect(async () => {
-      const [replication] = await Promise.all([
-        page.waitForResponse(
-          (response) =>
-            response.request().postData()?.includes("query PullTodo(") === true,
-        ),
-        page.reload({ waitUntil: "domcontentloaded" }),
-      ])
-      expect(replication.ok()).toBe(true)
-      expect(record(await replication.json())["errors"]).toBeUndefined()
+      // A PullTodo response can belong to the document being replaced, and its
+      // body is no longer readable after reload. Wait for the actual queue UI.
+      await page.reload({ waitUntil: "domcontentloaded" })
       await expect(
         page.getByRole("button", { name: "Comfortable", exact: true }),
       ).toBeVisible()
@@ -143,25 +147,22 @@ Then(
       inputTypeName: inputType,
       completeMutationName: completionName,
     })
-    const components = record(record(metadata["formDefinition"])["components"])
-    expect(components["check"]).toMatchObject({
-      _tag: "boolean",
-      field: "check",
-      required: true,
+    expect(metadata["requestData"]).toMatchObject({
+      presentation: {
+        item: { label: "Item to approve" },
+        cost: { label: "Cost" },
+        check: { label: "I approve" },
+      },
     })
-    expect(metadata["jsonSchema"]).toMatchObject({
-      type: "object",
-      required: expect.arrayContaining(["check"]),
-      properties: { check: { type: "boolean" } },
+    expect(metadata["defaultValues"]).toMatchObject({
+      item: journey.item,
+      cost: journey.cost,
     })
     for (const { label, value } of [
       { label: "Item to approve", value: journey.item },
       { label: "Cost", value: journey.cost },
     ]) {
-      const field = page
-        .getByRole("group")
-        .filter({ hasText: label })
-        .locator("input")
+      const field = page.getByRole("textbox", { name: label, exact: true })
       await expect(field).toHaveValue(value)
       await expect(field).toHaveAttribute("readonly", "")
     }
@@ -216,9 +217,7 @@ When("I submit the approval without checking I approve", async ({ page }) => {
 Then(
   "approval validation prevents a completion mutation",
   async ({ page, scenarioState }) => {
-    await expect(
-      page.getByText("This field is required.", { exact: true }),
-    ).toBeVisible()
+    await expect(page.getByText(/^This field is required\.?$/)).toBeVisible()
     expect(journeyFor(scenarioState).completions).toHaveLength(0)
   },
 )
@@ -272,10 +271,15 @@ Then(
     await expect(approvalCard({ page, journey })).toHaveCount(0, {
       timeout: 30_000,
     })
-    const replicated = page.waitForResponse(
-      (response) =>
-        response.request().postData()?.includes("query PullTodo(") === true,
-    )
+    // An old-document pull can finish while reload is still navigating.
+    const replicated = page
+      .waitForEvent("framenavigated", (frame) => frame === page.mainFrame())
+      .then(() =>
+        page.waitForResponse(
+          (response) =>
+            response.request().postData()?.includes("query PullTodo(") === true,
+        ),
+      )
     await page.reload({ waitUntil: "domcontentloaded" })
     const replication = await replicated
     expect(replication.ok()).toBe(true)

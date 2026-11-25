@@ -1,8 +1,8 @@
 import { createHmac } from "node:crypto"
-import { FetchHttpClient } from "@effect/platform"
 import { makeMockResendPlugin } from "@processfocus/plugin-resend/test-support"
+import { EmailSender, NotificationDeliveryConfig } from "@processfocus/runtime"
 import { Cause, ConfigProvider, Effect, Layer } from "effect"
-import { EmailSender, NotificationDeliveryConfig } from "@pf/job-handler"
+import { FetchHttpClient } from "effect/http"
 import {
   ResendClient,
   ResendClientConfigFromEnv,
@@ -52,15 +52,25 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "true"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "true"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -130,16 +140,26 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "false"],
-              ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "false"],
+                ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -213,16 +233,26 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "true"],
-              ["PF_ENV", "ci"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "true"],
+                ["PF_ENV", "ci"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -274,17 +304,27 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "false"],
-              ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
-              ["PF_ENV", "ci"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "false"],
+                ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
+                ["PF_ENV", "ci"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -339,16 +379,26 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "true"],
-              ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "true"],
+                ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -401,16 +451,26 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "false"],
-              ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "false"],
+                ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -429,7 +489,7 @@ describe("ResendClientLive", () => {
     expect(body.headers).toBeUndefined()
   })
 
-  it("dies when resend is disabled without a reroute email", async () => {
+  it("rejects configuration before sending when rerouting has no recipient", async () => {
     const program = Effect.gen(function* () {
       const resendClient = yield* ResendClient
 
@@ -444,15 +504,25 @@ describe("ResendClientLive", () => {
         Effect.provide(
           Layer.provideMerge(
             Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-            FetchHttpClient.layer,
+            FetchHttpClient.layer.pipe(
+              Layer.provide(
+                Layer.effect(
+                  FetchHttpClient.Fetch,
+                  Effect.sync(() => globalThis.fetch),
+                ),
+              ),
+            ),
           ),
         ),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["RESEND_API_KEY", "re_test"],
-              ["RESEND_ENABLED", "false"],
-            ]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(
+            Object.fromEntries(
+              new Map([
+                ["RESEND_API_KEY", "re_test"],
+                ["RESEND_ENABLED", "false"],
+              ]),
+            ),
           ),
         ),
       ) as Effect.Effect<void>,
@@ -463,11 +533,15 @@ describe("ResendClientLive", () => {
       throw new Error("Expected resend call to fail")
     }
 
-    const defects = Array.from(Cause.defects(exit.cause))
+    const defects = exit.cause.reasons
+      .filter(Cause.isFailReason)
+      .map((reason) => reason.error)
     expect(defects).toHaveLength(1)
     expect(defects[0]).toMatchObject({
-      _tag: "ResendError",
-      message: "RESEND_REROUTE_EMAIL must be set when RESEND_ENABLED is false",
+      _tag: "ConfigurationError",
+      diagnostics: [
+        { key: "RESEND_REROUTE_EMAIL", category: "invalid-configuration" },
+      ],
     })
   })
 })
@@ -733,7 +807,9 @@ describe("makeMockResendPlugin", () => {
       throw new Error("Expected mock resend call to fail")
     }
 
-    const defects = Array.from(Cause.defects(exit.cause))
+    const defects = exit.cause.reasons
+      .filter(Cause.isDieReason)
+      .map((reason) => reason.defect)
     expect(defects).toHaveLength(1)
     expect(defects[0]).toMatchObject({
       _tag: "ResendError",

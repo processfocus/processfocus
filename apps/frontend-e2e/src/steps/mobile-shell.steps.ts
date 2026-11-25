@@ -15,13 +15,6 @@ Given("I use a mobile viewport", async ({ page }) => {
   await page.setViewportSize({ width: 393, height: 851 })
 })
 
-When("I open the mobile navigation drawer", async ({ page }) => {
-  const toggleButton = page.getByRole("button", { name: "Toggle Sidebar" })
-  await expect(toggleButton).toBeVisible()
-  await toggleButton.click()
-  await expect(page.getByTestId("mobile-sidebar")).toBeVisible()
-})
-
 When(
   "I navigate to the {string} page from the mobile navigation drawer",
   async ({ page }, pageName: string) => {

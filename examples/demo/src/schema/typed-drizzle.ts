@@ -1,7 +1,7 @@
-import * as SqliteDrizzle from "@effect/sql-drizzle/Sqlite"
 import type { SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy"
 import { Context, Layer } from "effect"
 import * as systemSchema from "@pf/drizzle-sqlite"
+import { makeSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import * as customSchema from "./schema"
 
 /**
@@ -25,10 +25,10 @@ type CombinedSchema = typeof combinedSchema
  * const purchaseOrders = yield* db.query.purchaseOrder.findMany()
  * ```
  */
-export class TypedDemoDrizzle extends Context.Tag("@pf/demo/TypedDemoDrizzle")<
+export class TypedDemoDrizzle extends Context.Service<
   TypedDemoDrizzle,
   SqliteRemoteDatabase<CombinedSchema>
->() {}
+>()("@pf/demo/TypedDemoDrizzle") {}
 
 /**
  * Layer that provides the TypedDemoDrizzle service.
@@ -38,5 +38,5 @@ export class TypedDemoDrizzle extends Context.Tag("@pf/demo/TypedDemoDrizzle")<
  */
 export const TypedDemoDrizzleLayer = Layer.effect(
   TypedDemoDrizzle,
-  SqliteDrizzle.make<CombinedSchema>({ schema: combinedSchema }),
+  makeSqliteDrizzle<CombinedSchema>({ schema: combinedSchema }),
 )

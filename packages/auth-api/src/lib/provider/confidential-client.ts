@@ -2,7 +2,7 @@ import { DateTime, Duration, Effect, Option } from "effect"
 import { AuthenticationDatabase } from "../authentication-database.js"
 import { InvariantViolationError } from "../invariant-violation-error.js"
 import { withM2MUpsertRetry } from "../non-critical-retry.js"
-import { type SuccessResult, optionalProviderUserPicture } from "./types.js"
+import type { SuccessResult } from "./types.js"
 
 /**
  * Serialize object to JSON for HTTP response body.
@@ -22,14 +22,7 @@ export interface CredentialsValue {
 /**
  * Handle M2M client credentials authentication success
  *
- * Supports two modes:
- * 1. With `email:` scope - generates a provider user token for the specified email
- * 2. Without `email:` scope - generates a user token for the M2M client
- *
- * Scopes are parsed from the scope parameter:
- * - `email:user@example.com` - act as provider user
- * - `role:RolePath` - request specific roles
- * - `org:/Sales` - specify org unit context
+ * An optional `role:RolePath` scope selects a prepared machine role.
  *
  * Note: Transaction handling is done by the caller in create-authentication-server.ts
  */
@@ -37,153 +30,27 @@ export const handleConfidentialClientSuccess = (
   value: CredentialsValue,
 ): Effect.Effect<SuccessResult, unknown, AuthenticationDatabase> =>
   Effect.gen(function* () {
-    // Parse scopes from the scope parameter
     const requestedRoles: string[] = []
-    let requestedEmail: string | undefined
-
-    if (value.scope) {
-      const scopeParts = value.scope.split(/\s+/)
-      for (const part of scopeParts) {
-        if (part.startsWith("role:")) {
-          requestedRoles.push(decodeURIComponent(part.slice(5)))
-        } else if (part.startsWith("email:")) {
-          requestedEmail = decodeURIComponent(part.slice(6))
-        }
+    const scopes = value.scope?.split(/\s+/) ?? []
+    if (scopes.some((part) => part.startsWith("email:"))) {
+      return new Response(
+        toJsonBody({
+          error: "invalid_scope",
+          error_description:
+            "Machine credentials cannot authenticate as a Provider User",
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      )
+    }
+    for (const part of scopes) {
+      if (part.startsWith("role:")) {
+        requestedRoles.push(decodeURIComponent(part.slice(5)))
       }
     }
-
-    // If email scope is present, generate a provider user token
-    if (requestedEmail) {
-      // For provider user tokens, we ignore any requested role scopes.
-      // The provider user gets their default roles initially.
-      // To switch roles, they must first get the provider user token,
-      // then call the requestRole mutation.
-      return yield* handleProviderUserToken(value.clientID, requestedEmail)
-    }
-
-    // No email scope - standard M2M user token flow
     return yield* handleM2MUserToken(value.clientID, requestedRoles)
-  })
-
-/**
- * Handle provider user token generation for M2M clients with email scope.
- */
-const handleProviderUserToken = (
-  clientId: string,
-  requestedEmail: string,
-): Effect.Effect<SuccessResult, unknown, AuthenticationDatabase> =>
-  Effect.gen(function* () {
-    const authDb = yield* AuthenticationDatabase
-
-    // Check permitted_client_email
-    const permittedEmailOpt = yield* authDb.findPermittedClientEmail(
-      clientId,
-      requestedEmail,
-    )
-
-    if (Option.isNone(permittedEmailOpt)) {
-      yield* Effect.logWarning(
-        "M2M client requested provider user token without permission",
-      ).pipe(
-        Effect.annotateLogs({
-          clientId,
-          requestedEmail,
-        }),
-      )
-      return new Response(
-        toJsonBody({
-          error: "invalid_scope",
-          error_description:
-            "Email not permitted. Call requestProviderUserPermissions mutation first.",
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        },
-      )
-    }
-
-    const permittedEmail = permittedEmailOpt.value
-
-    // Check 10-minute expiry window
-    const now = yield* DateTime.now
-    const ageMs = DateTime.distance(permittedEmail.updatedAt, now)
-    const maxAgeMs = Duration.toMillis(Duration.minutes(10))
-    if (ageMs > maxAgeMs) {
-      yield* Effect.logWarning(
-        "M2M client provider user permission expired",
-      ).pipe(
-        Effect.annotateLogs({
-          clientId,
-          requestedEmail,
-          permissionUpdatedAt: permittedEmail.updatedAt,
-        }),
-      )
-      return new Response(
-        toJsonBody({
-          error: "invalid_scope",
-          error_description:
-            "Email permission expired. Call requestProviderUserPermissions mutation again.",
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        },
-      )
-    }
-
-    // Look up the provider user by email
-    const providerUserOpt =
-      yield* authDb.findProviderUserByEmail(requestedEmail)
-
-    if (Option.isNone(providerUserOpt)) {
-      yield* Effect.logWarning(
-        "M2M client requested provider user token for non-existent email",
-      ).pipe(
-        Effect.annotateLogs({
-          clientId,
-          requestedEmail,
-        }),
-      )
-      return new Response(
-        toJsonBody({
-          error: "invalid_scope",
-          error_description: `Provider user not found: ${requestedEmail}. Call requestProviderUserPermissions mutation first.`,
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        },
-      )
-    }
-    const providerUser = providerUserOpt.value
-
-    // Determine roles: use provider user's default roles
-    const roles = yield* authDb.findProviderUserRoles(providerUser.id)
-
-    yield* Effect.log("M2M client authenticated as provider user").pipe(
-      Effect.annotateLogs({
-        provider: "credentials",
-        clientId,
-        providerUserEmail: requestedEmail,
-        providerUserUserId: providerUser.id,
-        orgUnitId: providerUser.orgUnitId,
-        orgUnitPath: providerUser.orgUnitPath,
-        roles,
-      }),
-    )
-
-    return {
-      type: "providerUser" as const,
-      properties: {
-        userId: providerUser.id,
-        email: providerUser.email,
-        picture: optionalProviderUserPicture(providerUser.picture),
-        orgUnitId: providerUser.orgUnitId,
-        orgUnitPath: providerUser.orgUnitPath,
-        roles,
-      },
-    }
   })
 
 /**
@@ -194,7 +61,7 @@ const handleProviderUserToken = (
  * - The role must be pre-authorized via the requestRole GraphQL mutation
  * - The permission must be less than 10 minutes old
  */
-const handleM2MUserToken = (
+export const handleM2MUserToken = (
   clientId: string,
   requestedRoles: string[],
 ): Effect.Effect<SuccessResult, unknown, AuthenticationDatabase> =>
@@ -235,7 +102,6 @@ const handleM2MUserToken = (
         })
       }
 
-      // Look up permitted_client_role
       const permittedRoleOpt = yield* authDb.findPermittedClientRole(
         clientId,
         requestedRole,
@@ -267,7 +133,9 @@ const handleM2MUserToken = (
 
       // Check 10-minute expiry window
       const now = yield* DateTime.now
-      const ageMs = DateTime.distance(permittedRole.updatedAt, now)
+      const ageMs = Duration.toMillis(
+        DateTime.distance(permittedRole.updatedAt, now),
+      )
       const maxAgeMs = Duration.toMillis(Duration.minutes(10))
       if (ageMs > maxAgeMs) {
         yield* Effect.logWarning("M2M client role permission expired").pipe(
@@ -296,13 +164,10 @@ const handleM2MUserToken = (
       orgUnitPath = permittedRole.orgUnitPath
     }
 
-    // Create or update M2M user in the database. GraphQL e2e can skip the
-    // hot-path last_logged_in update after the ci-pipeline user exists.
+    // Find or create the machine identity without recording human login evidence.
     const now = yield* DateTime.now
-    const updateLastLoggedIn =
-      process.env["PF_AUTH_SKIP_M2M_LAST_LOGGED_IN_UPDATE"] !== "true"
     const userId = yield* withM2MUpsertRetry(
-      authDb.upsertM2MUser(clientId, now, { updateLastLoggedIn }),
+      authDb.upsertM2MUser(clientId, now),
     )
 
     yield* Effect.log("M2M client authenticated").pipe(

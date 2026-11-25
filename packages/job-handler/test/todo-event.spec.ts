@@ -1,4 +1,4 @@
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   CompletedJobOperations,
@@ -57,15 +57,12 @@ const createTestLayers = (
   })
   const RequestTimeLive = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
-  const UserDetailsLive = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "TEST_USER",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsLive = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "TEST_USER",
+  } as UserDetailsValue)
 
   const DbOperationsLayer = SqliteDbOperationsLive.pipe(
     Layer.provide(DatabaseTest),

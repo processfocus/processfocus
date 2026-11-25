@@ -1,0 +1,45 @@
+---
+title: SLAs
+description: Configure service-level targets for a process or an individual step.
+---
+
+Set `sla` on a `Process` to give each execution a time target. Set it on a
+later step to give that step its own target. A start step cannot have an SLA;
+use the process-level setting for a target that begins when the process starts.
+
+```typescript
+import { Form, Process, Sla } from "@pf/process"
+
+const purchaseRequest = new Process(org, "purchase-request", {
+  name: "Purchase request",
+  purpose: "Submit and approve a purchase request",
+  sla: Sla.businessDays(2),
+})
+
+const submit = new Form(purchaseRequest, "submit", {
+  role: employee,
+  form: () => ({}),
+})
+
+const approve = new Form(purchaseRequest, "approve", {
+  role: manager,
+  form: () => ({}),
+  sla: Sla.businessHours(4, { warningAt: 0.75 }),
+})
+
+purchaseRequest.start(submit).next(approve).end()
+```
+
+This example assumes `org`, `employee`, and `manager` are already defined.
+The process has a two-business-day target, while the approval step has a
+four-business-hour target with a warning after three business hours.
+
+## Duration and warning
+
+All `Sla` helpers take a positive integer duration. `Sla.minutes()` counts
+elapsed clock time. `Sla.businessHours()`, `Sla.businessDays()`, and
+`Sla.businessWeeks()` use the organisation’s
+[business calendar](/docs/reference/organisation-structure/settings/#business-calendar).
+
+The optional `warningAt` is a fraction between `0` and `1`. The default is
+`0.8`, so the warning threshold is 80% of the target duration.

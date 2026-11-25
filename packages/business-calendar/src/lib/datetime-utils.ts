@@ -3,7 +3,7 @@ import { DateTime } from "effect"
 /**
  * Create a DateTime.Utc for a specific date and time.
  *
- * Note: DateTime.unsafeMake with object params sets time components to 0,
+ * Note: DateTime.makeUnsafe with object params sets time components to 0,
  * so we use mutate to set the desired time.
  *
  * @param year - Year (e.g., 2025)
@@ -20,7 +20,7 @@ export const makeDateTimeWithTime = (
   hour = 0,
   minute = 0,
 ): DateTime.Utc => {
-  const base = DateTime.unsafeMake({ year, month, day })
+  const base = DateTime.makeUnsafe({ year, month, day })
   return DateTime.mutate(base, (d) => {
     d.setUTCHours(hour)
     d.setUTCMinutes(minute)
@@ -37,14 +37,14 @@ export const makeDateTimeWithTime = (
  */
 export const startOfDay = (date: DateTime.Utc): DateTime.Utc => {
   const parts = DateTime.toParts(date)
-  return DateTime.unsafeMake({
+  return DateTime.makeUnsafe({
     year: parts.year,
     month: parts.month,
     day: parts.day,
     hour: 0,
     minute: 0,
     second: 0,
-    millis: 0,
+    millisecond: 0,
   })
 }
 

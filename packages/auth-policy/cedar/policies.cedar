@@ -5,6 +5,7 @@
 // Ordinary work includes humans and their distinct Delegations.
 // Roles are explicit trusted facts, not inherited attributes.
 // Provider users can complete a step if they have the step's role.
+// Direct assignment narrows this default grant to the assignee.
 permit (
     principal,
     action == PF::Action::"complete",
@@ -13,42 +14,29 @@ permit (
 when {
     (principal is PF::ProviderUser || principal is PF::Delegation) &&
     resource has role &&
+    principal has roles &&
     principal.roles.contains(resource.role)
-};
-
-// Provider users can complete active todos for role-authorized work.
-// Directly assigned todos are narrowed to the assigned provider user by default.
-permit (
-    principal,
-    action == PF::Action::"complete",
-    resource is PF::Todo
-)
-when {
-    (principal is PF::ProviderUser || principal is PF::Delegation) &&
-    resource has role &&
-    principal.roles.contains(resource.role) &&
-    (
-        !(resource has assignedTo) ||
-        principal in resource.assignedTo
-    )
+}
+unless {
+    context has assignedTo && !(principal in context.assignedTo)
 };
 
 // Provider users can correct Public Completion delivery failures through a
 // distinct action. Callers choose the responsible or execution-failure role
-// candidate when constructing the Todo resource.
+// candidate when constructing the Step resource.
 permit (
     principal,
     action == PF::Action::"publicCompletionCorrection",
-    resource is PF::Todo
+    resource is PF::Step
 )
 when {
     (principal is PF::ProviderUser || principal is PF::Delegation) &&
     resource has role &&
-    principal.roles.contains(resource.role) &&
-    (
-        !(resource has assignedTo) ||
-        principal in resource.assignedTo
-    )
+    principal has roles &&
+    principal.roles.contains(resource.role)
+}
+unless {
+    context has assignedTo && !(principal in context.assignedTo)
 };
 
 // Service accounts with a requested role can complete unassigned role todos.
@@ -56,12 +44,13 @@ when {
 permit (
     principal is PF::ServiceAccount,
     action == PF::Action::"complete",
-    resource is PF::Todo
+    resource is PF::Step
 )
 when {
+    context has todoId &&
     resource has role &&
     principal.roles.contains(resource.role) &&
-    !(resource has assignedTo)
+    !(context has assignedTo)
 };
 
 // Provider users can modify submitted form fields if they have the field's role.
@@ -77,15 +66,15 @@ when {
 };
 
 // Public todo links can complete only the todo embedded in the encrypted token.
-// This is self-authorizing today, and intentionally keeps public-link scoping
-// in Cedar so future revocation/scoping rules can be policy-owned.
+// The principal comes from the verified token; context identifies the actual work.
 permit (
     principal is PF::PublicLink,
     action == PF::Action::"complete",
-    resource is PF::Todo
+    resource is PF::Step
 )
 when {
-    principal.todo == resource
+    context has todoId &&
+    principal.todoId == context.todoId
 };
 
 // Provider users can login if they have at least one role.
@@ -145,9 +134,7 @@ when {
     principal.roles.contains(resource.role)
 };
 
-// Provider users with roles can access untagged GraphQL fields or fields tagged
-// for provider-user or embedded-form use. The embed tag is also used on shared
-// lookup fields that authenticated forms still call directly.
+// Provider users with roles can access untagged or provider-user GraphQL fields.
 permit (
     principal,
     action in [PF::Action::"query", PF::Action::"mutation", PF::Action::"subscription"],
@@ -158,10 +145,22 @@ when {
     principal.roles.isEmpty() == false &&
     (
         !(resource has tag) ||
-        resource.tag == "providerUser" ||
-        resource.tag == "embed"
+        resource.tag == "providerUser"
     )
 };
+
+// Frontend service account can invoke and read inert deployment probes.
+permit (
+    principal == PF::ServiceAccount::"frontend",
+    action == PF::Action::"query",
+    resource == PF::GraphQLField::"Query.deploymentProbe"
+);
+
+permit (
+    principal == PF::ServiceAccount::"frontend",
+    action == PF::Action::"mutation",
+    resource == PF::GraphQLField::"Mutation.startDeploymentProbe"
+);
 
 // Frontend service account can read bootstrap organization and Cedar policy data.
 permit (
@@ -182,7 +181,48 @@ permit (
     resource is PF::GraphQLField
 )
 when {
-    resource has tag && resource.tag == "embed"
+    resource has step && resource.step.embedded && resource.step.startsProcess
+};
+
+// Fixed public entrypoints still authorize the step, address or token in their resolver.
+permit (
+    principal == PF::ServiceAccount::"frontend",
+    action == PF::Action::"query",
+    resource is PF::GraphQLField
+)
+when {
+    [
+        PF::GraphQLField::"Query.embeddedFormMetadata",
+        PF::GraphQLField::"Query.lookupSuggestions",
+        PF::GraphQLField::"Query.calendarSlots",
+        PF::GraphQLField::"Query.publicTodo",
+        PF::GraphQLField::"Query.publicTodoLookupSuggestions",
+        PF::GraphQLField::"Query.publicTodoCalendarSlots",
+        PF::GraphQLField::"Query.anonymousPage",
+        PF::GraphQLField::"Query.anonymousPageLookup"
+    ].contains(resource)
+};
+
+permit (
+    principal == PF::ServiceAccount::"frontend",
+    action == PF::Action::"mutation",
+    resource is PF::GraphQLField
+)
+when {
+    [
+        PF::GraphQLField::"Mutation.submitAnonymousPage",
+        PF::GraphQLField::"Mutation.completePublicTodo",
+        PF::GraphQLField::"Mutation.requestFreshPublicTodoLink"
+    ].contains(resource)
+};
+
+permit (
+    principal == PF::ServiceAccount::"frontend",
+    action == PF::Action::"viewEmbeddedForm",
+    resource is PF::Step
+)
+when {
+    resource.embedded && resource.startsProcess
 };
 
 permit (
@@ -205,7 +245,8 @@ when {
 };
 
 // Scheduler starts system-owned cron processes through the normal start-step
-// authorization path, so only role-less start steps are allowed by default.
+// authorization path. Only role-less system starts with a cron schedule are
+// allowed by default, even when a different start has no GraphQL field check.
 permit (
     principal == PF::ServiceAccount::"scheduler",
     action == PF::Action::"complete",
@@ -213,7 +254,8 @@ permit (
 )
 when {
     resource.startsProcess &&
-    !(resource has role)
+    !(resource has role) &&
+    context has cronStart && context.cronStart
 };
 
 // Provider users can access a List if they have one of the list's allowed roles.

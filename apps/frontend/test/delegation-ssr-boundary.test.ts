@@ -61,8 +61,15 @@ test("both SSR accepting paths reject verified delegates without live facts", as
 
 test("human session remains independent of delegation availability", async () => {
   delegated = false
-  expect(await getSessionWithTokenAndExpiry()).toMatchObject(human)
-  expect(await Effect.runPromise(getSessionWithToken)).toMatchObject(human)
+  globalThis.fetch = mock(async () =>
+    Response.json({ data: { __typename: "Query" } }),
+  )
+  try {
+    expect(await getSessionWithTokenAndExpiry()).toMatchObject(human)
+    expect(await Effect.runPromise(getSessionWithToken)).toMatchObject(human)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test("both SSR accepting paths return current trusted facts, not stale JWT roles", async () => {
@@ -78,7 +85,9 @@ test("both SSR accepting paths return current trusted facts, not stale JWT roles
       expiresAt: 2_000_000_000_000,
     },
   }
-  globalThis.fetch = mock(async () => Response.json({ session: current }))
+  globalThis.fetch = mock(async () =>
+    Response.json({ data: { delegatedSession: current } }),
+  )
   try {
     expect(await getSessionWithTokenAndExpiry()).toMatchObject(current)
     expect(await Effect.runPromise(getSessionWithToken)).toMatchObject(current)

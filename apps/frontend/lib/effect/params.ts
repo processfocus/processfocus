@@ -1,15 +1,19 @@
+import { NumberFromString } from "@pf/form-schema"
 import "server-only"
-import {
-  decodeParamsUnknown,
-  decodeSearchParamsUnknown,
-} from "@mcrovero/effect-nextjs/Params"
-import { Schema as ES } from "effect"
+import { Schema as ES, Effect } from "effect"
 
-/**
- * Re-export param validation utilities from @mcrovero/effect-nextjs
- * for easier access throughout the application.
- */
-export { decodeParamsUnknown, decodeSearchParamsUnknown }
+type NextParams = Promise<Record<string, string | string[] | undefined>>
+
+export const decodeParamsUnknown =
+  <S extends ES.Constraint>(schema: S) =>
+  (
+    params: NextParams,
+  ): Effect.Effect<S["Type"], ES.SchemaError, S["DecodingServices"]> =>
+    Effect.promise(() => params).pipe(
+      Effect.flatMap(ES.decodeUnknownEffect(schema)),
+    )
+
+export const decodeSearchParamsUnknown = decodeParamsUnknown
 
 /**
  * Common route parameter schemas for reuse across pages.
@@ -43,8 +47,10 @@ export const ExecutionIdParams = ES.Struct({
  * Schema for validating pagination search parameters.
  */
 export const PaginationSearchParams = ES.Struct({
-  page: ES.NumberFromString.pipe(ES.optionalWith({ default: () => 1 })),
-  pageSize: ES.NumberFromString.pipe(ES.optionalWith({ default: () => 10 })),
+  page: NumberFromString.pipe(ES.withDecodingDefaultType(Effect.succeed(1))),
+  pageSize: NumberFromString.pipe(
+    ES.withDecodingDefaultType(Effect.succeed(10)),
+  ),
 })
 
 /**

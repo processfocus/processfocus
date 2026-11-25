@@ -1,18 +1,5 @@
-import { DateTime, Schema as ES, Effect, Layer } from "effect"
-import {
-  type ClientFormDefinition,
-  FormComponentType,
-} from "@pf/form-client-representation"
-import {
-  BooleanField,
-  DynamicTextBlock,
-  ListField,
-  RadioField,
-  TableField,
-  TextBlock,
-  TextField,
-  Wrapper,
-} from "@pf/form-schema"
+import { DateTime, Duration, Schema as ES, Effect } from "effect"
+import { BooleanField, TextBlock, TextField, Wrapper } from "@pf/form-schema"
 import type { FlowContext, StepMeta, SummaryContext } from "./flow-context"
 import { Form } from "./form"
 import { OrgUnit } from "./org-unit"
@@ -25,7 +12,7 @@ import { beforeEach, describe, expect, it } from "bun:test"
 const emptyCtx: FlowContext<Record<string, never>> = {
   process: {
     executionId: "pex-test",
-    startedAt: DateTime.unsafeNow(),
+    startedAt: DateTime.nowUnsafe(),
     startStep: {
       user: { userId: "", sub: "" },
       providerUser: {
@@ -36,7 +23,7 @@ const emptyCtx: FlowContext<Record<string, never>> = {
         email: "",
         picture: "",
       },
-      completedAt: DateTime.unsafeNow(),
+      completedAt: DateTime.nowUnsafe(),
     },
   },
   step: {},
@@ -68,53 +55,74 @@ const submitFlowCtx: FlowContext<{ submit: StepMeta }> = {
   },
 }
 
-// These tests use dynamic text resolvers without service dependencies. The
-// renderable API still exposes an unknown environment for service-backed forms.
-// This empty layer cast is only valid for no-service dynamic text resolvers.
-const noServiceDynamicTextLayer = Layer.empty as Layer.Layer<unknown>
-
-interface RenderableFormForTest {
-  readonly renderableClientFormDefinition: () => Effect.Effect<
-    ClientFormDefinition,
-    unknown,
-    unknown
-  >
-}
-
-interface StatefulRenderableFormForTest<
-  TSteps extends Record<string, StepMeta>,
-> {
-  readonly renderableClientFormDefinitionWithState: (
-    state: Record<string, unknown>,
-    ctx: FlowContext<TSteps>,
-    item?: unknown,
-  ) => Effect.Effect<ClientFormDefinition, unknown, unknown>
-}
-
-const runNoServiceRenderableDefinition = (
-  effect: Effect.Effect<ClientFormDefinition, unknown, unknown>,
-) => Effect.runPromise(effect.pipe(Effect.provide(noServiceDynamicTextLayer)))
-
-const renderFormDefinition = (form: RenderableFormForTest) =>
-  runNoServiceRenderableDefinition(form.renderableClientFormDefinition())
-
-const renderFormComponents = async (form: RenderableFormForTest) =>
-  (await renderFormDefinition(form)).components
-
-const renderFormComponentsWithState = async <
-  TSteps extends Record<string, StepMeta>,
->(
-  form: StatefulRenderableFormForTest<TSteps>,
-  state: Record<string, unknown>,
-  ctx: FlowContext<TSteps>,
-) =>
-  (
-    await runNoServiceRenderableDefinition(
-      form.renderableClientFormDefinitionWithState(state, ctx),
-    )
-  ).components
-
 describe("Form", () => {
+  it("validates named deadlines and propagates human handler state through nested paths", () => {
+    const org = new Organisation({ name: "Deadlines" })
+    const role = new Role(org, "manager", { name: "Manager" })
+    const process = new Process(org, "approval", {
+      name: "Approval",
+      purpose: "Staged approval",
+    })
+    const start = new Form(process, "start", {
+      role,
+      form: ES.Struct({ subject: ES.String }),
+    })
+    const started = process.start(start)
+    const owner = new Form(started, "owner", {
+      role,
+      form: ES.Struct({ approved: ES.Boolean }),
+    })
+    started.next(owner).end()
+    const manager = new Form(started, "manager", {
+      role,
+      form: ES.Struct({ group: Wrapper({ decision: ES.String }) }),
+    })
+    const escalated = owner.onDeadline("escalation", {
+      interrupting: true,
+      after: Duration.seconds(60),
+      handler: manager,
+    })
+    const done = new Form(escalated, "done", {
+      role,
+      form: ES.Struct({}),
+      summary: (state) => {
+        const decision: string = state.decision
+        // @ts-expect-error The owner has not completed on this path.
+        state.approved
+        // @ts-expect-error Form wrapper keys do not enter process state.
+        state.group
+        return Effect.succeed({ Decision: decision })
+      },
+    })
+    escalated.next(done).end()
+    expect(() =>
+      owner.onDeadline("escalation", {
+        after: Duration.seconds(90),
+        handler: done,
+      }),
+    ).toThrow("Duplicate deadline")
+    expect(() =>
+      owner.onDeadline(" ", { after: Duration.seconds(90), handler: done }),
+    ).toThrow("must not be empty")
+    const followUp = new Form(started, "follow-up", {
+      role,
+      form: ES.Struct({}),
+    })
+    manager.onDeadline("escalation", {
+      after: Duration.seconds(30),
+      handler: followUp,
+    })
+    expect(process.validateFlows().dangling).toContain(followUp.node.path)
+    process.addEndEdge(followUp)
+    expect(process.validateFlows()).toEqual({
+      unreachable: [],
+      dangling: [],
+      missingElse: [],
+      multipleElse: [],
+      orphanElse: [],
+    })
+  })
+
   let organisation: Organisation
   let orgUnit: OrgUnit
   let mockRole: Role
@@ -161,7 +169,7 @@ describe("Form", () => {
             form: () => ({}),
             publicCompletion: {
               recipient: () => "external@example.com",
-              expiresAt: () => DateTime.unsafeMake("2026-04-30T10:00:00Z"),
+              expiresAt: () => DateTime.makeUnsafe("2026-04-30T10:00:00Z"),
             },
           }),
       ).toThrow("publicCompletion is only valid on non-start forms")
@@ -183,7 +191,7 @@ describe("Form", () => {
         form: () => ({}),
         publicCompletion: {
           recipient: () => "external@example.com",
-          expiresAt: () => DateTime.unsafeMake("2026-04-30T10:00:00Z"),
+          expiresAt: () => DateTime.makeUnsafe("2026-04-30T10:00:00Z"),
         },
       })
 
@@ -217,92 +225,7 @@ describe("Form", () => {
       expect(approveForm.process).toBe(process)
     })
 
-    it("should append typed rules in call order and serialize them", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          details: TextField({ label: "Details" }),
-          section: Wrapper({
-            notes: TextField({ label: "Notes" }),
-          }),
-        }),
-      })
-
-      const returned = form
-        .rules((value, rule) => [
-          rule.when(value.status.equals("hidden")).effects({
-            details: { hidden: true },
-          }),
-        ])
-        .rules((value, rule) => [
-          rule.when(value.status.notEquals("editable")).effects({
-            section: {
-              [Form.self]: { hidden: false },
-              notes: { disabled: true, required: true },
-            },
-          }),
-          rule.when(value.notes.present()).effects({
-            section: { notes: { hidden: false } },
-          }),
-        ])
-
-      expect(returned).toBe(form)
-      const definition = await Effect.runPromise(form.clientFormDefinition())
-      expect(definition.components).toEqual(
-        expect.objectContaining({
-          status: expect.objectContaining({ _tag: FormComponentType.Text }),
-          details: expect.objectContaining({ _tag: FormComponentType.Text }),
-          section: expect.objectContaining({
-            _tag: FormComponentType.FieldSet,
-          }),
-        }),
-      )
-      expect(
-        Object.values(definition.components).every(
-          (component) => typeof component._tag === "string",
-        ),
-      ).toBe(true)
-      expect(definition.rules).toHaveLength(3)
-      expect((await renderFormDefinition(form)).rules).toEqual([
-        {
-          condition: {
-            _tag: "equals",
-            left: { _tag: "field", path: ["status"] },
-            right: { _tag: "literal", value: "hidden" },
-          },
-          effects: [{ target: ["details"], state: { hidden: true } }],
-        },
-        {
-          condition: {
-            _tag: "notEquals",
-            left: { _tag: "field", path: ["status"] },
-            right: { _tag: "literal", value: "editable" },
-          },
-          effects: [
-            { target: ["section"], state: { hidden: false } },
-            {
-              target: ["section", "notes"],
-              state: { disabled: true, required: true },
-            },
-          ],
-        },
-        {
-          condition: {
-            _tag: "present",
-            value: { _tag: "field", path: ["notes"] },
-          },
-          effects: [{ target: ["section", "notes"], state: { hidden: false } }],
-        },
-      ])
-    })
-
-    it("should build rule-free and state-aware client form definitions", async () => {
+    it("resolves optional content independently for each request", () => {
       const process = new Process(orgUnit, "process", {
         name: "Test",
         purpose: "Test",
@@ -317,665 +240,20 @@ describe("Form", () => {
         }),
       })
 
-      const ordinary = await Effect.runPromise(form.clientFormDefinition())
-      const stateAware = await Effect.runPromise(
-        form.clientFormDefinitionWithState({ detailed: true }, emptyCtx),
-      )
-      const renderable = await Effect.runPromise(
-        form
-          .renderableClientFormDefinitionWithState({ detailed: true }, emptyCtx)
-          .pipe(Effect.provide(noServiceDynamicTextLayer)),
-      )
-
-      expect(ordinary.rules).toEqual([])
-      expect(ordinary.components).toHaveProperty("summary")
-      expect(ordinary.components["details"]).toMatchObject({ content: "" })
-      expect(stateAware.rules).toEqual([])
-      expect(stateAware.components).toHaveProperty("details")
-      expect(renderable).toEqual(stateAware)
-    })
-
-    it("should distinguish target state keys from fields with the same names", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
+      expect(form.resolvePresentation({}, emptyCtx)).toMatchObject({
+        summary: { label: "Summary" },
+        details: { text: "" },
       })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          hidden: TextField({ label: "Hidden named field" }),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.present()).effects({
-          hidden: { hidden: true },
-        }),
-      ])
-
-      expect((await renderFormDefinition(form)).rules).toEqual([
-        {
-          condition: {
-            _tag: "present",
-            value: { _tag: "field", path: ["status"] },
-          },
-          effects: [{ target: ["hidden"], state: { hidden: true } }],
-        },
-      ])
-    })
-
-    it("should serialize label effects in rule targets", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
+      expect(
+        form.resolvePresentation({ detailed: true }, emptyCtx)["details"],
+      ).toEqual({ text: "Details" })
+      expect(form.resolvePresentation({}, emptyCtx)["details"]).toEqual({
+        text: "",
       })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          type: RadioField({
-            label: "Type",
-            options: [
-              { value: "a", label: "A" },
-              { value: "b", label: "B" },
-            ],
-          }),
-          field: TextField({ label: "Field" }),
-        }),
-      }).rules((value, rule) => [
-        rule
-          .when(value.type.equals("a"))
-          .effects(
-            { field: { label: "Label A" } },
-            { field: { label: "Label B" } },
-          ),
-      ])
-
-      expect((await renderFormDefinition(form)).rules).toEqual([
-        {
-          condition: {
-            _tag: "equals",
-            left: { _tag: "field", path: ["type"] },
-            right: { _tag: "literal", value: "a" },
-          },
-          effects: [{ target: ["field"], state: { label: "Label A" } }],
-          otherwise: [{ target: ["field"], state: { label: "Label B" } }],
-        },
-      ])
-    })
-
-    it("should type-check rule value accessors and target trees", () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const typeFixtures = () => {
-        new Form(process, "submit", {
-          role: mockRole,
-          form: () => ({
-            name: ES.String,
-            age: ES.Number,
-            approved: ES.Boolean,
-            section: Wrapper({
-              notes: ES.String,
-            }),
-          }),
-        }).rules((value, rule) => {
-          type EffectTree = Parameters<
-            ReturnType<typeof rule.when>["effects"]
-          >[0]
-
-          // @ts-expect-error misspelled value accessor name
-          value.nmae
-          // @ts-expect-error invalid comparison value for number field
-          value.age.equals("old")
-          // @ts-expect-error boolean fields do not support ordering comparisons
-          value.approved.gt(true)
-          value.notes.present()
-          // @ts-expect-error invalid target name
-          const missingTarget: EffectTree = { missing: { hidden: true } }
-          const invalidContainerEffect: EffectTree = {
-            section: {
-              // @ts-expect-error container self-effects cannot be authored as child names
-              hidden: true,
-            },
-          }
-
-          void missingTarget
-          void invalidContainerEffect
-
-          return [
-            rule
-              .when(value.name.equals("Ada"))
-              .effects({ name: { hidden: true } }),
-          ]
-        })
-      }
-
-      expect(typeof typeFixtures).toBe("function")
-    })
-
-    it("should serialize structural and static display rule targets", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          section: Wrapper({
-            help: TextBlock("Helpful copy"),
-            notes: TextField({ label: "Notes" }),
-          }),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.equals("hide")).effects({
-          section: {
-            [Form.self]: { hidden: true },
-            help: { hidden: true, disabled: true },
-          },
-        }),
-      ])
-
-      expect((await renderFormDefinition(form)).rules).toEqual([
-        {
-          condition: {
-            _tag: "equals",
-            left: { _tag: "field", path: ["status"] },
-            right: { _tag: "literal", value: "hide" },
-          },
-          effects: [
-            { target: ["section"], state: { hidden: true } },
-            {
-              target: ["section", "help"],
-              state: { hidden: true, disabled: true },
-            },
-          ],
-        },
-      ])
-    })
-
-    it("should serialize rule targets through list and table item children", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          items: ListField({
-            child: TextField({ label: "Child" }),
-          }),
-          rows: TableField({
-            summary: TextField({ label: "Summary" }),
-          }),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.equals("hide")).effects({
-          // Runtime validation must traverse itemChildren for JS callers that
-          // author item-child targets outside the typed rule tree.
-          items: { child: { hidden: true } },
-          rows: { summary: { hidden: true } },
-        } as never),
-      ])
-
-      expect((await renderFormDefinition(form)).rules).toEqual([
-        {
-          condition: {
-            _tag: "equals",
-            left: { _tag: "field", path: ["status"] },
-            right: { _tag: "literal", value: "hide" },
-          },
-          effects: [
-            { target: ["items", "child"], state: { hidden: true } },
-            { target: ["rows", "summary"], state: { hidden: true } },
-          ],
-        },
-      ])
-    })
-
-    it("should reject required effects on structural and static display targets", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const structuralForm = new Form(process, "structural", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          section: Wrapper({
-            notes: TextField({ label: "Notes" }),
-          }),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.present()).effects({
-          // Runtime validation protects JS callers that bypass the typed tree.
-          section: { [Form.self]: { required: true } as never },
-        }),
-      ])
-
-      await expect(
-        Effect.runPromise(structuralForm.clientFormDefinition()),
-      ).rejects.toThrow(
-        'Form "structural" rule target "section" cannot set required on structural or static display components',
-      )
-
-      const staticForm = new Form(process, "static", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          help: TextBlock("Helpful copy"),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.present()).effects({
-          // @ts-expect-error static display targets cannot be required
-          help: { required: true },
-        }),
-      ])
-
-      await expect(
-        Effect.runPromise(staticForm.clientFormDefinition()),
-      ).rejects.toThrow(
-        'Form "static" rule target "help" cannot set required on structural or static display components',
-      )
-
-      const tableForm = new Form(process, "table", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          rows: TableField({ label: ES.String }),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.present()).effects({
-          // @ts-expect-error table display targets cannot be required
-          rows: { required: true },
-        }),
-      ])
-
-      await expect(
-        Effect.runPromise(tableForm.clientFormDefinition()),
-      ).rejects.toThrow(
-        'Form "table" rule target "rows" cannot set required on structural or static display components',
-      )
-
-      const otherwiseForm = new Form(process, "otherwise", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          help: TextBlock("Helpful copy"),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.status.present()).effects(
-          { status: { disabled: true } },
-          {
-            // @ts-expect-error static display targets cannot be required
-            help: { required: true },
-          },
-        ),
-      ])
-
-      await expect(
-        Effect.runPromise(otherwiseForm.clientFormDefinition()),
-      ).rejects.toThrow(
-        'Form "otherwise" rule target "help" cannot set required on structural or static display components',
-      )
-    })
-
-    it("should validate nested non-flattened rule condition paths", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          status: TextField({ label: "Status" }),
-          section: ES.Struct({
-            notes: TextField({ label: "Notes" }),
-          }),
-        }),
-      }).rules((value, rule) => [
-        rule.when(value.section.notes.present()).effects({
-          status: { hidden: true },
-        }),
-      ])
-
-      expect((await renderFormDefinition(form)).rules).toEqual([
-        {
-          condition: {
-            _tag: "present",
-            value: { _tag: "field", path: ["section", "notes"] },
-          },
-          effects: [{ target: ["status"], state: { hidden: true } }],
-        },
-      ])
-    })
-
-    it("should preserve a structural rule target when runtime content uses its fallback", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: ({ content }) => ({
-          status: TextField({ label: "Status" }),
-          details: content((state: { readonly includeDetails?: boolean }) =>
-            state.includeDetails !== false ? TextBlock("Details") : undefined,
-          ),
-        }),
-      }).rules((value, rule) => [
-        rule
-          .when(value.status.equals("hidden"))
-          .effects({ details: { hidden: true } }),
-      ])
-      const definition = await Effect.runPromise(
-        form.clientFormDefinitionWithState({ includeDetails: false }, emptyCtx),
-      )
-      expect(definition.components["details"]).toMatchObject({ content: "" })
-      expect(definition.rules).toMatchObject([
-        { effects: [{ target: ["details"], state: { hidden: true } }] },
-      ])
-    })
-
-    it("should resolve dynamic text blocks inside wrappers", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          section: Wrapper({
-            status: DynamicTextBlock({
-              text: "Checking status...",
-              resolve: () => Effect.succeed("Status available."),
-            }),
-          }),
-        }),
-      })
-
-      const representation = await renderFormComponents(form)
-      const section = representation["section"]
-
-      expect(section?._tag).toBe(FormComponentType.FieldSet)
-      if (section?._tag !== FormComponentType.FieldSet) {
-        throw new Error("Expected section to be a fieldset")
-      }
-
-      const status = section.children["status"]
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("Status available.")
-    })
-
-    it("should keep dynamic text fallback when resolution fails", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          status: DynamicTextBlock({
-            text: "Checking status...",
-            resolve: () => Effect.fail("status lookup failed"),
-          }),
-        }),
-      })
-
-      const representation = await renderFormComponents(form)
-      const status = representation["status"]
-
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("Checking status...")
-    })
-
-    it("should resolve dynamic text blocks inside list items", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          items: ES.Array(
-            ES.Struct({
-              status: DynamicTextBlock({
-                text: "Checking item status...",
-                resolve: () => Effect.succeed("Item status available."),
-              }),
-            }),
-          ),
-        }),
-      })
-
-      const representation = await renderFormComponents(form)
-      const items = representation["items"]
-
-      expect(items?._tag).toBe(FormComponentType.List)
-      if (items?._tag !== FormComponentType.List) {
-        throw new Error("Expected items to be a list")
-      }
-
-      const status = items.itemChildren["status"]
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("Item status available.")
-    })
-
-    it("should resolve dynamic text blocks inside wrappers in list items", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          items: ES.Array(
-            ES.Struct({
-              section: Wrapper({
-                status: DynamicTextBlock({
-                  text: "Checking wrapped item status...",
-                  resolve: () =>
-                    Effect.succeed("Wrapped item status available."),
-                }),
-              }),
-            }),
-          ),
-        }),
-      })
-
-      const representation = await renderFormComponents(form)
-      const items = representation["items"]
-
-      expect(items?._tag).toBe(FormComponentType.List)
-      if (items?._tag !== FormComponentType.List) {
-        throw new Error("Expected items to be a list")
-      }
-
-      const section = items.itemChildren["section"]
-      expect(section?._tag).toBe(FormComponentType.FieldSet)
-      if (section?._tag !== FormComponentType.FieldSet) {
-        throw new Error("Expected section to be a fieldset")
-      }
-
-      const status = section.children["status"]
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("Wrapped item status available.")
-    })
-
-    it("should resolve dynamic text blocks inside table items", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          history: TableField({
-            status: DynamicTextBlock({
-              text: "Checking history status...",
-              resolve: () => Effect.succeed("History status available."),
-            }),
-          }),
-        }),
-      })
-
-      const representation = await renderFormComponents(form)
-      const history = representation["history"]
-
-      expect(history?._tag).toBe(FormComponentType.Table)
-      if (history?._tag !== FormComponentType.Table) {
-        throw new Error("Expected history to be a table")
-      }
-
-      const status = history.itemChildren["status"]
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("History status available.")
-    })
-
-    it("should resolve dynamic text blocks inside nested wrappers", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const form = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          outer: Wrapper({
-            inner: Wrapper({
-              status: DynamicTextBlock({
-                text: "Checking nested status...",
-                resolve: () => Effect.succeed("Nested status available."),
-              }),
-            }),
-          }),
-        }),
-      })
-
-      const representation = await renderFormComponents(form)
-      const outer = representation["outer"]
-
-      expect(outer?._tag).toBe(FormComponentType.FieldSet)
-      if (outer?._tag !== FormComponentType.FieldSet) {
-        throw new Error("Expected outer to be a fieldset")
-      }
-
-      const inner = outer.children["inner"]
-      expect(inner?._tag).toBe(FormComponentType.FieldSet)
-      if (inner?._tag !== FormComponentType.FieldSet) {
-        throw new Error("Expected inner to be a fieldset")
-      }
-
-      const status = inner.children["status"]
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("Nested status available.")
-    })
-
-    it("should resolve dynamic text blocks with state", async () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-      const submitForm = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({ name: TextField({ label: "Name" }) }),
-      })
-      const flow = process.start(submitForm)
-
-      const reviewForm = new Form(flow, "review", {
-        role: mockRole,
-        form: ({ content }) => ({
-          status: content(
-            (state) =>
-              DynamicTextBlock({
-                text: "Checking status...",
-                resolve: () =>
-                  Effect.succeed(`Status available for ${state.name}.`),
-              }),
-            TextBlock("Checking status..."),
-          ),
-        }),
-      })
-
-      const representation = await renderFormComponentsWithState(
-        reviewForm,
-        { name: "Ada" },
-        submitFlowCtx,
-      )
-      const status = representation["status"]
-
-      expect(status?._tag).toBe(FormComponentType.Static)
-      if (status?._tag !== FormComponentType.Static) {
-        throw new Error("Expected status to be static text")
-      }
-      expect(status.content).toBe("Status available for Ada.")
     })
   })
 
   describe("form function with state", () => {
-    it("should create a form with form function accessing state", () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      const submitForm = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          dates: ES.String,
-        }),
-      })
-
-      // Define annotation symbols (same as form-schema uses)
-      const FormDefault = Symbol.for("pf/form/annotation/Default")
-      const FormReadOnly = Symbol.for("pf/form/annotation/ReadOnly")
-
-      const flow = process.start(submitForm)
-      const approveForm = new Form(flow, "approve", {
-        role: mockRole,
-        form: ({ value }) => ({
-          requestedDates: ES.String.annotations({
-            [FormReadOnly]: true,
-            [FormDefault]: value((state) => state.dates),
-          }),
-          approved: ES.Boolean,
-        }),
-      })
-
-      expect(approveForm.output).toBeDefined()
-    })
-
     it("should defer state access until getFieldsWithState", () => {
       const process = new Process(orgUnit, "process", {
         name: "Test",
@@ -1000,7 +278,7 @@ describe("Form", () => {
       const approveForm = new Form(flow, "approve", {
         role: mockRole,
         form: ({ value }) => ({
-          requestedDates: ES.String.annotations({
+          requestedDates: ES.String.annotate({
             [FormReadOnly]: true,
             [FormDefault]: value((state) => {
               formFnState = state
@@ -1057,7 +335,7 @@ describe("Form", () => {
       const approveForm = new Form(flow, "approve", {
         role: mockRole,
         form: ({ value }) => ({
-          summary: ES.String.annotations({
+          summary: ES.String.annotate({
             // Type-safe access to all accumulated state
             [FormDefault]: value(
               (state) =>
@@ -1083,31 +361,11 @@ describe("Form", () => {
       expect(fields).toBeDefined()
 
       // The lazy default has been resolved to its encoded value.
-      const summarySchema = fields?.["summary"] as ES.Schema.Any
+      const summarySchema = fields?.["summary"] as ES.Top
       const defaultSymbol = Symbol.for("pf/form/annotation/Default")
-      expect(summarySchema.ast.annotations[defaultSymbol]).toBe(
-        "John Doe <john@example.com>",
-      )
-    })
-
-    it("should work with Process scope (no inherited state)", () => {
-      const process = new Process(orgUnit, "process", {
-        name: "Test",
-        purpose: "Test",
-      })
-
-      // new Form with Process scope has no inherited state
-      const submitForm = new Form(process, "submit", {
-        role: mockRole,
-        form: () => ({
-          item: ES.String,
-          value: ES.Number,
-        }),
-      })
-
-      expect(submitForm.output).toBeDefined()
-      expect(submitForm.output["item"]).toBeDefined()
-      expect(submitForm.output["value"]).toBeDefined()
+      expect(
+        Reflect.get(summarySchema.ast.annotations ?? {}, defaultSymbol),
+      ).toBe("John Doe <john@example.com>")
     })
   })
 
@@ -1322,7 +580,7 @@ describe("Form", () => {
       expect(form.outputSchema).toBeDefined()
       // Schema decodes valid data
       const decoded = ES.decodeUnknownSync(
-        form.outputSchema as ES.Schema<{ name: string; age: number }>,
+        form.outputSchema as ES.Codec<{ name: string; age: number }>,
       )({
         name: "Alice",
         age: 30,
@@ -1349,20 +607,20 @@ describe("Form", () => {
       })
 
       expect(form.outputSchema).toBeDefined()
-      const schema = form.outputSchema as ES.Schema<{
+      const schema = form.outputSchema as ES.Codec<{
         min: number
         max: number
       }>
 
       // Valid data passes
       const valid = await Effect.runPromise(
-        ES.decodeUnknown(schema)({ min: 1, max: 10 }),
+        ES.decodeUnknownEffect(schema)({ min: 1, max: 10 }),
       )
       expect(valid).toEqual({ min: 1, max: 10 })
 
       // Invalid cross-field data fails
       const result = await Effect.runPromiseExit(
-        ES.decodeUnknown(schema)({ min: 10, max: 1 }),
+        ES.decodeUnknownEffect(schema)({ min: 10, max: 1 }),
       )
       expect(result._tag).toBe("Failure")
     })
@@ -1391,7 +649,7 @@ describe("Form", () => {
 
       // Flat input should decode successfully
       const decoded = ES.decodeUnknownSync(
-        schema as ES.Schema<{
+        schema as ES.Codec<{
           firstName: string
           lastName: string
           email: string
@@ -1426,7 +684,7 @@ describe("Form", () => {
       const schema = form.submissionEffectSchema
       // Only editable field should be in the schema
       const decoded = ES.decodeUnknownSync(
-        schema as ES.Schema<{ approved: boolean }>,
+        schema as ES.Codec<{ approved: boolean }>,
       )({ approved: true })
       expect(decoded).toEqual({ approved: true })
     })
@@ -1452,20 +710,20 @@ describe("Form", () => {
           ),
       })
 
-      const schema = form.submissionEffectSchema as ES.Schema<{
+      const schema = form.submissionEffectSchema as ES.Codec<{
         min: number
         max: number
       }>
 
       // Valid flat data passes
       const valid = await Effect.runPromise(
-        ES.decodeUnknown(schema)({ min: 1, max: 10 }),
+        ES.decodeUnknownEffect(schema)({ min: 1, max: 10 }),
       )
       expect(valid).toEqual({ min: 1, max: 10 })
 
       // Invalid cross-field data fails
       const result = await Effect.runPromiseExit(
-        ES.decodeUnknown(schema)({ min: 10, max: 1 }),
+        ES.decodeUnknownEffect(schema)({ min: 10, max: 1 }),
       )
       expect(result._tag).toBe("Failure")
     })

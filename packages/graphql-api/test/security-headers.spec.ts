@@ -21,7 +21,7 @@ const testSchema = createSchema<UserContext>({
 })
 
 const createTestContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake(Date.now()),
+  _requestTime: DateTime.makeUnsafe(Date.now()),
   _userDetails: { by: "test", id: "usr-test" },
   jwt: undefined,
   userId: undefined,

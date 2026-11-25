@@ -46,13 +46,12 @@ const isSqliteBusyError = (error: unknown): boolean => {
  * Retry schedule for non-critical database updates.
  * 2 attempts with 100ms delay between each.
  */
-const nonCriticalRetrySchedule = Schedule.addDelay(
-  Schedule.recurs(1),
-  () => 100,
+const nonCriticalRetrySchedule = Schedule.addDelay(Schedule.recurs(1), () =>
+  Effect.succeed(100),
 )
 
 /**
- * Wraps a non-critical database update (like updateLastLoggedIn) with retry logic.
+ * Wraps a non-critical database update (like a profile picture) with retry logic.
  * If the update fails due to SQLite contention after retries, logs a warning and continues.
  * This prevents transient database lock errors from failing the entire authentication flow.
  */
@@ -66,7 +65,7 @@ export const withNonCriticalRetry = <A, E, R>(
       while: isSqliteBusyError,
     }),
     Effect.asVoid,
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.logWarning(
         `Non-critical update failed: ${description}, continuing anyway`,
       ).pipe(Effect.annotateLogs({ error })),
@@ -85,8 +84,9 @@ export const withM2MUpsertRetry = <A, E, R>(
   effect.pipe(
     Effect.retry({
       while: isSqliteBusyError,
-      schedule: Schedule.exponential("100 millis", 2).pipe(
-        Schedule.intersect(Schedule.recurs(M2M_UPSERT_MAX_RETRIES)),
-      ),
+      schedule: Schedule.max([
+        Schedule.exponential("100 millis", 2),
+        Schedule.recurs(M2M_UPSERT_MAX_RETRIES),
+      ]),
     }),
   )

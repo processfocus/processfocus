@@ -21,7 +21,7 @@ const effectDateTime = customType<{ data: DateTime.Utc; driverData: number }>({
     return DateTime.toEpochMillis(value) / 86400000 + 2440587.5
   },
   fromDriver(value: number): DateTime.Utc {
-    return DateTime.unsafeMake((value - 2440587.5) * 86400000)
+    return DateTime.makeUnsafe((value - 2440587.5) * 86400000)
   },
 })
 

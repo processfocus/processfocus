@@ -1,4 +1,9 @@
-import { DateTime, Schema as ES, Effect } from "effect"
+import {
+  DateTime,
+  Schema as ES,
+  Effect,
+  Effect as MigratedEffect,
+} from "effect"
 import { FormFileInput } from "@pf/form-schema"
 import {
   DocumentStore,
@@ -33,7 +38,7 @@ describe("walkOrganisation - schedule text extraction", () => {
 
     const step1 = new Form(process, "step1", {
       role,
-      form: () => ({ start_date: ES.DateTimeUtc }),
+      form: () => ({ start_date: ES.DateTimeUtcFromString }),
     })
     const step2 = new Form(process, "step2", { role, form: () => ({}) })
 
@@ -62,7 +67,7 @@ describe("walkOrganisation - schedule text extraction", () => {
 
     const step1 = new Form(process, "step1", {
       role,
-      form: () => ({ start_date: ES.DateTimeUtc }),
+      form: () => ({ start_date: ES.DateTimeUtcFromString }),
     })
     const step2 = new Form(process, "step2", { role, form: () => ({}) })
 
@@ -110,7 +115,7 @@ describe("walkOrganisation - schedule text extraction", () => {
 
     const step1 = new Form(process, "step1", {
       role,
-      form: () => ({ start_date: ES.DateTimeUtc }),
+      form: () => ({ start_date: ES.DateTimeUtcFromString }),
     })
     const step2 = new Form(process, "step2", { role, form: () => ({}) })
     const step3 = new Form(process, "step3", { role, form: () => ({}) })
@@ -179,62 +184,46 @@ describe("walkOrganisation - else label extraction", () => {
 })
 
 describe("walkOrganisation - SLA extraction", () => {
-  it("should extract SLA from step", async () => {
-    const { organisation, orgUnit, role } = createTestFixtures()
-    const process = new Process(orgUnit, "process", {
-      name: "Test Process",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", { role, form: () => ({}) })
-    const step2 = new Form(process, "step2", {
-      role,
-      form: () => ({}),
-      sla: Sla.minutes(5),
-    })
-
-    process.start(step1).end(step2)
-
-    const result = await Effect.runPromise(walkOrganisation(organisation))
-
-    const childOrgUnit = result.rootOrgUnit.children[0]
-    const steps = childOrgUnit?.processes[0]?.steps ?? []
-    expect(steps).toHaveLength(2)
-
-    const step2Data = steps.find((s) => s.name === "step2")
-    expect(step2Data?.sla).toEqual({
-      value: 5,
-      unit: "minutes",
-      warningAt: 80,
-    })
-  })
-
-  it("should extract SLA with custom warning threshold", async () => {
-    const { organisation, orgUnit, role } = createTestFixtures()
-    const process = new Process(orgUnit, "process", {
-      name: "Test Process",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", {
-      role,
-      form: () => ({}),
+  it.each([
+    { sla: Sla.minutes(5), value: 5, unit: "minutes", warningAt: 80 },
+    {
       sla: Sla.businessHours(4, { warningAt: 0.5 }),
-    })
-
-    process.start(step1)
-
-    const result = await Effect.runPromise(walkOrganisation(organisation))
-
-    const childOrgUnit = result.rootOrgUnit.children[0]
-    const steps = childOrgUnit?.processes[0]?.steps ?? []
-    const step1Data = steps.find((s) => s.name === "step1")
-    expect(step1Data?.sla).toEqual({
       value: 4,
       unit: "businessHours",
       warningAt: 50,
-    })
-  })
+    },
+  ])(
+    "should extract $unit SLA from a non-start step",
+    async ({ sla, value, unit, warningAt }) => {
+      const { organisation, orgUnit, role } = createTestFixtures()
+      const process = new Process(orgUnit, "process", {
+        name: "Test Process",
+        purpose: "Test",
+      })
+
+      const step1 = new Form(process, "step1", { role, form: () => ({}) })
+      const step2 = new Form(process, "step2", {
+        role,
+        form: () => ({}),
+        sla,
+      })
+
+      process.start(step1).end(step2)
+
+      const result = await Effect.runPromise(walkOrganisation(organisation))
+
+      const childOrgUnit = result.rootOrgUnit.children[0]
+      const steps = childOrgUnit?.processes[0]?.steps ?? []
+      expect(steps).toHaveLength(2)
+
+      const step2Data = steps.find((s) => s.name === "step2")
+      expect(step2Data?.sla).toEqual({
+        value,
+        unit,
+        warningAt,
+      })
+    },
+  )
 
   it("should not set SLA when not provided", async () => {
     const { organisation, orgUnit, role } = createTestFixtures()
@@ -300,7 +289,7 @@ describe("walkOrganisation - document store references", () => {
     const selectStudents = new Form(process, "Select students", {
       role,
       form: () => ({
-        document: ES.String.pipe(ES.filter(() => true)).annotations({
+        document: ES.String.pipe(ES.check(ES.makeFilter(() => true))).annotate({
           [FormFileInput]: { documentStore: "/google-generate-pdfs" },
         }),
       }),
@@ -323,10 +312,10 @@ describe("walkOrganisation - document store references", () => {
     const step = new Form(process, "step", {
       role,
       form: () => ({
-        plain: ES.String.annotations({
+        plain: ES.String.annotate({
           [FormFileInput]: { documentStore: "/plain-files" },
         }),
-        transformed: ES.parseJson(ES.String).annotations({
+        transformed: ES.fromJsonString(ES.String).annotate({
           [FormFileInput]: { documentStore: "/transformed-files" },
         }),
       }),
@@ -352,21 +341,18 @@ describe("walkOrganisation - document store references", () => {
       role,
       form: () => ({
         optional: ES.optional(
-          ES.String.annotations({
+          ES.String.annotate({
             [FormFileInput]: { documentStore: "/optional-files" },
           }),
         ),
-        intrinsic: ES.optionalWith(
-          ES.String.annotations({
-            [FormFileInput]: { documentStore: "/intrinsic-files" },
-          }),
-          { default: () => "" },
-        ),
-        renamed: ES.optionalWith(ES.String, { default: () => "" })
-          .pipe(ES.fromKey("encodedFile"))
-          .annotations({
-            [FormFileInput]: { documentStore: "/signature-files" },
-          }),
+        intrinsic: ES.String.annotate({
+          [FormFileInput]: { documentStore: "/intrinsic-files" },
+        }).pipe(ES.withDecodingDefaultType(MigratedEffect.sync(() => ""))),
+        renamed: ES.String.pipe(
+          ES.withDecodingDefaultType(MigratedEffect.sync(() => "")),
+        ).annotate({
+          [FormFileInput]: { documentStore: "/signature-files" },
+        }),
       }),
     })
     process.start(step)

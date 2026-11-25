@@ -7,6 +7,11 @@ import {
   DEFAULT_ACCESS_TOKEN_MAX_AGE,
   DEFAULT_REFRESH_TOKEN_MAX_AGE,
 } from "./config"
+import {
+  googleRevalidationMaxAge,
+  googleSso,
+  sealGoogleIdentity,
+} from "./google-revalidation"
 import { decodeJwtPayload } from "./jwt"
 import { acceptVerifiedSession } from "./ssr-session"
 
@@ -45,6 +50,7 @@ export function getCookieNamesFromHost(host: string) {
     accessToken: `access_token${suffix}`,
     refreshToken: `refresh_token${suffix}`,
     oauthState: `oauth_state${suffix}`,
+    googleRevalidation: `google_revalidation${suffix}`,
     passkeyAuthCookies: `passkey_auth_cookies${suffix}`,
     /**
      * Registration Session bearer from a Registration Link exchange.
@@ -256,14 +262,23 @@ export const setTokenCookies = async (
  *
  * This is the place where we set cookies for the first time (after oauth login).
  */
-export const setSessionCookies = async (tokens: {
-  access: string
-  refresh?: string
-  expiresIn?: number
-  refreshExpiresIn?: number
-}) => {
+export const setSessionCookies = async (
+  tokens: Parameters<typeof setTokenCookies>[1],
+  session?: Session,
+) => {
   const cookieStore = await cookies()
-  await setTokenCookies(cookieStore, tokens)
+  const names = await getCookieNames()
+  const sso = googleSso(session)
+  if (sso) {
+    cookieStore.set(
+      names.googleRevalidation,
+      sealGoogleIdentity(sso),
+      getRefreshTokenCookieOptions(googleRevalidationMaxAge),
+    )
+  } else {
+    cookieStore.delete(names.googleRevalidation)
+  }
+  await setTokenCookies(cookieStore, tokens, names)
 }
 
 /**
@@ -271,7 +286,9 @@ export const setSessionCookies = async (tokens: {
  */
 export const clearSession = async () => {
   const cookieStore = await cookies()
-  const { accessToken: AT, refreshToken: RT } = await getCookieNames()
-  cookieStore.delete(AT)
-  cookieStore.delete(RT)
+  const names = await getCookieNames()
+  cookieStore.delete(names.accessToken)
+  cookieStore.delete(names.refreshToken)
+  cookieStore.delete(names.googleRevalidation)
+  cookieStore.delete({ name: names.oauthState, path: "/api/auth/callback" })
 }

@@ -1,7 +1,6 @@
 import type * as AST from "effect/SchemaAST"
 
-export const isNotNullLiteral = (ast: AST.AST): boolean =>
-  !(ast._tag === "Literal" && ast.literal === null)
+export const isNotNullLiteral = (ast: AST.AST): boolean => ast._tag !== "Null"
 
 export const mapLiteralToGraphQLType = (
   literal: AST.LiteralValue,
@@ -31,3 +30,6 @@ export const literalUnionGraphQLType = (
     ? first
     : undefined
 }
+
+export const unionMembers = (ast: AST.AST): readonly AST.AST[] =>
+  ast._tag === "Union" ? ast.types.flatMap(unionMembers) : [ast]

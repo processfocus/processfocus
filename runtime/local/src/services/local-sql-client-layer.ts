@@ -5,8 +5,9 @@ import { makeTursoLive } from "@pf/layer-turso-local"
 
 export const makeLocalSqlClientLayer = (options: {
   readonly busy_timeout: number
+  readonly defaultQueryTimeout?: number
 }) =>
-  Layer.unwrapEffect(
+  Layer.unwrap(
     Effect.gen(function* () {
       const databasePath = yield* DatabasePathConfig
       return isLocalFilePath(databasePath)

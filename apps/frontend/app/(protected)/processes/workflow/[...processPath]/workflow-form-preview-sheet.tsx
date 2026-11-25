@@ -1,12 +1,8 @@
 "use client"
 
-import { useCallback, useEffect } from "react"
-import {
-  type FieldError,
-  type FormActionsContext,
-  type JsonSchemaRoot,
-  dynamicForm,
-} from "@pf/form"
+import { Suspense, use, useCallback, useEffect } from "react"
+import type { FieldError, FormActionsContext } from "@pf/form"
+import { EffectSchemaForm } from "@pf/form/effect-schema-form"
 import {
   Sheet,
   SheetContent,
@@ -15,6 +11,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { useFormMetadata } from "@/hooks/use-form-metadata"
+import { loadBrowserFormDefinition } from "@/lib/frontend-form-loaders"
 import type { WorkflowStepData } from "@/lib/workflow/types"
 
 interface WorkflowFormPreviewSheetProps {
@@ -60,7 +57,6 @@ export function WorkflowFormPreviewSheet({
 
   const defaultValues =
     (formMetadata?.defaultValues as Record<string, unknown> | null) ?? null
-  const jsonSchema = (formMetadata?.jsonSchema as JsonSchemaRoot | null) ?? null
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -80,19 +76,30 @@ export function WorkflowFormPreviewSheet({
               Unable to load this form.
             </div>
           ) : null}
-          {!isLoading && formMetadata
-            ? dynamicForm({
-                draftId,
-                formDefinition: formMetadata.formDefinition,
-                defaultValues,
-                handleSubmit,
-                jsonSchema,
-                renderActions,
-                stepPath: step.path,
-              })
-            : null}
+          {!isLoading && formMetadata ? (
+            <Suspense fallback={<FormPreviewSkeleton />}>
+              <ExecutablePreview
+                stepPath={step.path}
+                draftId={draftId}
+                defaultValues={defaultValues ?? {}}
+                requestData={formMetadata.requestData}
+                onSubmit={handleSubmit}
+              >
+                {renderActions}
+              </ExecutablePreview>
+            </Suspense>
+          ) : null}
         </div>
       </SheetContent>
     </Sheet>
   )
+}
+
+function ExecutablePreview(
+  props: Omit<React.ComponentProps<typeof EffectSchemaForm>, "schema"> & {
+    stepPath: string
+  },
+) {
+  const schema = use(loadBrowserFormDefinition(props.stepPath))
+  return <EffectSchemaForm {...props} schema={schema} />
 }

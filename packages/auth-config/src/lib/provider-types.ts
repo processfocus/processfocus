@@ -2,6 +2,17 @@ import { Schema } from "effect"
 
 /**
  * Passkey (WebAuthn) provider configuration.
+ *
+ * During organisation import, `@pf/org-to-db` overrides `rpID` and `origin`
+ * from `PF_LOCAL_FRONTEND_ORIGIN`, or otherwise `OAUTH_ISSUER_URL`, when set.
+ * The URL's hostname becomes `rpID`; the full URL replaces `origin` (including
+ * any configured array). Without either variable, the authored values are used.
+ * Both fields may be omitted when the environment supplies the URL.
+ *
+ * Hosted deployments set `OAUTH_ISSUER_URL` to the deployment's public URL,
+ * including its custom domain. For example, `https://pf.example.com` produces
+ * `rpID: "pf.example.com"` and `origin: "https://pf.example.com"`, even when
+ * the organisation declares localhost values. `rpName` is not overridden.
  */
 export interface PasskeyProviderConfig {
   /**
@@ -10,24 +21,30 @@ export interface PasskeyProviderConfig {
    */
   readonly rpName: string
   /**
-   * The Relying Party ID (domain without protocol).
+   * The fallback Relying Party ID (hostname without protocol or port).
+   * Organisation import replaces this with the environment URL's hostname
+   * when an override described on `PasskeyProviderConfig` is set.
    * @example "localhost" or "example.com"
    */
-  readonly rpID: string
+  readonly rpID?: string
   /**
-   * The allowed origin(s) for WebAuthn requests.
+   * The fallback allowed origin(s) for WebAuthn requests.
+   * Organisation import replaces this with the single environment URL
+   * when an override described on `PasskeyProviderConfig` is set.
    * @example "http://localhost:3000" or ["https://example.com", "https://app.example.com"]
    */
-  readonly origin: string | readonly string[]
+  readonly origin?: string | readonly string[]
 }
 
 /**
- * Effect Schema for PasskeyProviderConfig validation.
+ * Validates hydrated passkey configuration at runtime, where the relying party
+ * ID and origin must be present after organisation import.
  */
 export const PasskeyProviderConfigSchema = Schema.Struct({
+  accountLabel: Schema.optional(Schema.String),
   rpName: Schema.String,
   rpID: Schema.String,
-  origin: Schema.Union(Schema.String, Schema.Array(Schema.String)),
+  origin: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
 })
 
 /**
@@ -117,48 +134,38 @@ export const OAuthProviderConfigSchema = Schema.Struct({
   clientSecret: Schema.String,
   scopes: Schema.Array(Schema.String),
   pkce: Schema.optional(Schema.Boolean),
-  query: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
+  query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 })
 
 export const AppleOAuthProviderConfigSchema = OAuthProviderConfigSchema.pipe(
-  Schema.extend(
-    Schema.Struct({
-      responseMode: Schema.optional(Schema.Literal("query", "form_post")),
-    }),
-  ),
+  Schema.fieldsAssign({
+    responseMode: Schema.optional(Schema.Literals(["query", "form_post"])),
+  }),
 )
 
 export const MicrosoftOAuthProviderConfigSchema =
-  OAuthProviderConfigSchema.pipe(
-    Schema.extend(Schema.Struct({ tenant: Schema.String })),
-  )
+  OAuthProviderConfigSchema.pipe(Schema.fieldsAssign({ tenant: Schema.String }))
 
 export const SlackOAuthProviderConfigSchema = OAuthProviderConfigSchema.pipe(
-  Schema.extend(Schema.Struct({ team: Schema.String })),
+  Schema.fieldsAssign({ team: Schema.String }),
 )
 
 export const KeycloakOAuthProviderConfigSchema = OAuthProviderConfigSchema.pipe(
-  Schema.extend(
-    Schema.Struct({ baseUrl: Schema.String, realm: Schema.String }),
-  ),
+  Schema.fieldsAssign({ baseUrl: Schema.String, realm: Schema.String }),
 )
 
 export const CognitoOAuthProviderConfigSchema = OAuthProviderConfigSchema.pipe(
-  Schema.extend(
-    Schema.Struct({
-      domain: Schema.String,
-      region: Schema.String,
-      userPoolId: Schema.String,
-    }),
-  ),
+  Schema.fieldsAssign({
+    domain: Schema.String,
+    region: Schema.String,
+    userPoolId: Schema.String,
+  }),
 )
 
 /**
  * Effect Schema for OAuthProviderName validation.
  */
-export const OAuthProviderNameSchema = Schema.Literal(...OAUTH_PROVIDER_NAMES)
+export const OAuthProviderNameSchema = Schema.Literals(OAUTH_PROVIDER_NAMES)
 
 /**
  * Google OAuth provider configuration extending the base OAuth config
@@ -194,14 +201,12 @@ export interface GoogleOAuthProviderConfig extends OAuthProviderConfig {
  * Extends the base OAuthProviderConfigSchema with Google-specific fields.
  */
 export const GoogleOAuthProviderConfigSchema = OAuthProviderConfigSchema.pipe(
-  Schema.extend(
-    Schema.Struct({
-      invitedOrgUnits: Schema.optional(Schema.Array(Schema.String)),
-      orgUnitAsRole: Schema.optional(Schema.Boolean),
-      serviceAccountKey: Schema.optional(Schema.String),
-      adminEmail: Schema.optional(Schema.String),
-    }),
-  ),
+  Schema.fieldsAssign({
+    invitedOrgUnits: Schema.optional(Schema.Array(Schema.String)),
+    orgUnitAsRole: Schema.optional(Schema.Boolean),
+    serviceAccountKey: Schema.optional(Schema.String),
+    adminEmail: Schema.optional(Schema.String),
+  }),
 )
 
 /**

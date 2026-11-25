@@ -1,6 +1,7 @@
 import "../global.css"
 import { redirect } from "next/navigation"
 import type { ProviderUserSession } from "@pf/auth-session"
+import { DateTimeDisplayProvider } from "@pf/shadcn-components/date-time-display"
 import { AppShell } from "../app-shell"
 import { AuthProvider } from "@/components/auth-provider"
 import { ConfigProvider } from "@/components/config-provider"
@@ -9,6 +10,7 @@ import { FrontendClientPluginIdentify } from "@/components/frontend-client-plugi
 import { SessionReissue } from "@/components/session-reissue"
 import { ThemeProvider } from "@/components/theme-provider"
 import { toClientSession } from "@/lib/auth/client-session"
+import { googleSso } from "@/lib/auth/google-revalidation"
 import { matchesRealtimeSessionToken } from "@/lib/auth/realtime-session-token"
 import { getSessionWithTokenAndExpiry } from "@/lib/auth/session"
 import { RxDbProvider } from "@/lib/collections/rxdb-provider"
@@ -90,39 +92,45 @@ export default async function ProtectedLayout({
   return (
     <FrontendPlugins manifest={frontendManifest}>
       <ThemeProvider>
-        <AuthProvider session={clientSession} expiresAt={session.expiresAt}>
-          <FrontendClientPluginIdentify
-            {...("email" in clientSession
-              ? { email: clientSession.email }
-              : {})}
-            {...(providerUser?.name ? { name: providerUser.name } : {})}
-            userId={clientSession.userId}
-          />
-          <ConfigProvider value={config}>
-            <GraphqlClientProvider>
-              <DashboardActivity />
-              <FileUploadClientProvider>
-                <LookupClientProvider>
-                  <RxDbProvider>
-                    <AppShell
-                      orgIdentity={orgIdentity}
-                      providerUser={providerUser}
-                      version={
-                        process.env["NEXT_PUBLIC_PROCESS_FOCUS_VERSION"] ??
-                        "unknown"
-                      }
-                      featurePermissions={featurePermissions}
-                      showSettings={showSettings}
-                      showAuthorization={showAuthorization}
-                    >
-                      {children}
-                    </AppShell>
-                  </RxDbProvider>
-                </LookupClientProvider>
-              </FileUploadClientProvider>
-            </GraphqlClientProvider>
-          </ConfigProvider>
-        </AuthProvider>
+        <DateTimeDisplayProvider initialNow={Date.now()}>
+          <AuthProvider
+            session={clientSession}
+            expiresAt={session.expiresAt}
+            googleRevalidationDeadline={googleSso(session)?.expiresAt}
+          >
+            <FrontendClientPluginIdentify
+              {...("email" in clientSession
+                ? { email: clientSession.email }
+                : {})}
+              {...(providerUser?.name ? { name: providerUser.name } : {})}
+              userId={clientSession.userId}
+            />
+            <ConfigProvider value={config}>
+              <GraphqlClientProvider>
+                <DashboardActivity />
+                <FileUploadClientProvider>
+                  <LookupClientProvider>
+                    <RxDbProvider>
+                      <AppShell
+                        orgIdentity={orgIdentity}
+                        providerUser={providerUser}
+                        version={
+                          process.env["NEXT_PUBLIC_PROCESS_FOCUS_VERSION"] ??
+                          "unknown"
+                        }
+                        featurePermissions={featurePermissions}
+                        showSettings={showSettings}
+                        showAuthorization={showAuthorization}
+                      >
+                        {children}
+                      </AppShell>
+                    </RxDbProvider>
+                  </LookupClientProvider>
+                </FileUploadClientProvider>
+              </GraphqlClientProvider>
+            </ConfigProvider>
+          </AuthProvider>
+        </DateTimeDisplayProvider>
       </ThemeProvider>
     </FrontendPlugins>
   )

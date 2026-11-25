@@ -1,5 +1,3 @@
-export * from "../../form-rule/src/index.js"
-
 export const validateOrganisation = (organisation: {
   readonly processes: () => ReadonlyArray<{
     readonly node: { readonly path: string }

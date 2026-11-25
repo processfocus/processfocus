@@ -115,10 +115,9 @@ const getAllowedIssuerUrls = (issuerUrl: string): IssuerUrls => {
   return [issuerUrl]
 }
 
-export class AuthConfig extends Context.Tag("@pf/graphql-api/AuthConfig")<
-  AuthConfig,
-  AuthConfigData
->() {}
+export class AuthConfig extends Context.Service<AuthConfig, AuthConfigData>()(
+  "@pf/graphql-api/AuthConfig",
+) {}
 
 /**
  * Effect that reads authentication configuration from environment variables.

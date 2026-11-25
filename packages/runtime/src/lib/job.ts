@@ -3,7 +3,7 @@ import type { Job, RawJob } from "./queue.js"
 import { PayloadParseError } from "./queue.js"
 
 export interface JobHandler<A, I, E = never, R = never> {
-  readonly schema: Schema.Schema<A, I>
+  readonly schema: Schema.Codec<A, I>
   readonly handle: (job: Job<A>) => Effect.Effect<void, E, R>
 }
 
@@ -38,7 +38,7 @@ export const jobHandler = <A, I, E, R>(
 ): AnyJobHandler<E, R> => ({
   execute: (rawJob) =>
     Effect.gen(function* () {
-      const payload = yield* Schema.decodeUnknown(handler.schema)(
+      const payload = yield* Schema.decodeUnknownEffect(handler.schema)(
         rawJob.payload,
       ).pipe(
         Effect.mapError(
@@ -67,7 +67,7 @@ const isPayloadParseError = (error: unknown): error is PayloadParseError =>
   error._tag === "PayloadParseError"
 
 const annotateJobFailure = (cause: Cause.Cause<unknown>) => {
-  if (Cause.isInterruptedOnly(cause)) {
+  if (Cause.hasInterruptsOnly(cause)) {
     return Effect.void
   }
 
@@ -75,7 +75,7 @@ const annotateJobFailure = (cause: Cause.Cause<unknown>) => {
   return Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan("job.failed", true)
     yield* Effect.annotateCurrentSpan("job.error", message)
-    if (Option.isSome(Cause.dieOption(cause))) {
+    if (Cause.hasDies(cause)) {
       yield* Effect.annotateCurrentSpan("job.defect", true)
     }
   })
@@ -103,7 +103,7 @@ export const makeJobDispatcher = <E, R, T extends JobHandlers<E, R>>(
 
       const handlerExit = yield* Effect.exit(
         handler.execute(rawJob).pipe(
-          Effect.tapErrorCause(annotateJobFailure),
+          Effect.onError(annotateJobFailure),
           Effect.withSpan(`job.process.${rawJob.queue}`, {
             attributes: {
               "job.id": rawJob.jobId,
@@ -116,7 +116,7 @@ export const makeJobDispatcher = <E, R, T extends JobHandlers<E, R>>(
       if (Exit.isSuccess(handlerExit)) {
         return { kind: "acknowledge" } satisfies JobDisposition
       }
-      const failure = Cause.failureOption(handlerExit.cause)
+      const failure = Cause.findErrorOption(handlerExit.cause)
       if (Option.isSome(failure) && isPayloadParseError(failure.value)) {
         return { kind: "terminal", cause: handlerExit.cause }
       }

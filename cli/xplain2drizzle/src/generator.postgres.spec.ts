@@ -66,10 +66,10 @@ describe("generateDrizzleSchema", () => {
       'updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`)',
     )
     expect(schema).toContain(
-      'createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM")',
+      'createdBy: text("created_by").notNull().default("SYSTEM")',
     )
     expect(schema).toContain(
-      'updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM")',
+      'updatedBy: text("updated_by").notNull().default("SYSTEM")',
     )
     expect(schema).toContain(
       '_deleted: boolean("_deleted").notNull().default(false)',
@@ -129,14 +129,11 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should use citext custom type
     expect(schema).toContain('name: citext("name").notNull()')
 
-    // Should include custom type definition
     expect(schema).toContain("const citext = customType")
     expect(schema).toContain('return "citext"')
 
-    // Should include CHECK constraint for length
     expect(schema).toContain(
       'nameLengthCheck: check("name_length_check", sql.raw(`length("person"."name") <= 256`))',
     )
@@ -280,19 +277,6 @@ describe("generateDrizzleSchema", () => {
     )
   })
 
-  it("should generate ID without prefix when type has no idPrefix", async () => {
-    const source = `
-      base name (A64).
-      type customer = name.
-    `
-
-    const schema = await parseAndGenerate(source)
-
-    expect(schema).toContain(
-      'id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => ulid())',
-    )
-  })
-
   it("should fail with unknown base type error when AST has invalid base reference", async () => {
     // Create an AST with an invalid base reference directly
     // (bypassing validation that would normally catch this)
@@ -331,7 +315,6 @@ describe("generateDrizzleSchema", () => {
       asserts: [],
     }
 
-    // Use Effect.flip to move error to success channel for testing
     const error = await Effect.runPromise(
       generateDrizzleSchema(invalidProgram, "test.ddl").pipe(Effect.flip),
     )
@@ -340,7 +323,6 @@ describe("generateDrizzleSchema", () => {
     if (error._tag !== "UnknownBaseType") {
       throw new Error("Expected UnknownBaseType error")
     }
-    // TypeScript now knows error is UnknownBaseType
     expect(error.attribute).toBe("invalid")
     expect(error.baseName).toBe("nonexistent")
   })
@@ -377,7 +359,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import relations
     expect(schema).toContain(
       'import { relations } from "drizzle-orm/_relations"',
     )
@@ -443,9 +424,7 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should not have relations for standalone table
     expect(schema).not.toContain("standaloneRelations")
-    // Should not import relations when there are no relations to generate
     expect(schema).not.toContain("import { relations }")
   })
 
@@ -490,14 +469,11 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const parentItsHasNoChildren = pgView("parent_its_has_no_children", {',
     )
@@ -524,14 +500,11 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const parentItsHasChildren = pgView("parent_its_has_children", {',
     )
@@ -557,14 +530,11 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const parentItsSomescore = pgView("parent_its_somescore", {',
     )
@@ -590,7 +560,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
@@ -621,7 +590,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const grandparentItsSomevalue = pgView("grandparent_its_somevalue", {',
     )
@@ -646,11 +614,9 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
     // Should generate the view (assert is treated like extend)
@@ -777,7 +743,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
@@ -848,14 +813,11 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should import pgView and sql
     expect(schema).toContain('import { sql } from "drizzle-orm"')
     expect(schema).toContain("pgView")
 
-    // Should have comment for views
     expect(schema).toContain("// Views for virtual attributes")
 
-    // Should generate the view
     expect(schema).toContain(
       'export const invoiceItsLinecount = pgView("invoice_its_linecount", {',
     )
@@ -885,7 +847,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const grandparentItsChildcount = pgView("grandparent_its_childcount", {',
     )
@@ -916,7 +877,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const invoiceItsInvoicesum = pgView("invoice_its_invoicesum", {',
     )
@@ -945,7 +905,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const categoryItsLowestPrice = pgView("category_its_lowest_price", {',
     )
@@ -971,7 +930,6 @@ describe("generateDrizzleSchema", () => {
 
     const schema = await parseAndGenerate(source)
 
-    // Should generate the view
     expect(schema).toContain(
       'export const teamItsHighScore = pgView("team_its_high_score", {',
     )

@@ -1,31 +1,20 @@
+import { QueueService } from "@processfocus/runtime"
 import { and, eq, isNull } from "drizzle-orm"
 import {
   Arbitrary,
+  Clock,
   Data,
   DateTime,
   Effect,
-  FiberRef,
   Option,
   Schema,
 } from "effect"
-import * as FastCheck from "effect/FastCheck"
 import * as dbSchema from "@pf/drizzle-sqlite"
 import {
-  type UserContext,
-  completeStep,
-  startProcess,
-  startProcessExecution,
-} from "@pf/graphql-api"
-import {
   CompletedJobOperations,
-  type ProcessState,
   SYSTEM_STEP_EXECUTION_QUEUE,
   getStartedSystemStepCompletedJobId,
 } from "@pf/graphql-db-operations"
-import {
-  flowExecutionHandler,
-  systemStepExecutionHandler,
-} from "@pf/job-handler"
 import { storeOrganisation } from "@pf/org-to-db"
 import {
   type Form,
@@ -34,7 +23,17 @@ import {
   isRole,
   normalizePath,
 } from "@pf/process"
-import { QueueService } from "@pf/queue-service"
+import {
+  type ExecutionIdentity,
+  completeTodo,
+  startProcess,
+} from "@pf/process-execution"
+import {
+  FlowExecutionPayloadSchema,
+  SystemStepExecutionPayloadSchema,
+  advanceScheduledFlow,
+  executeSystemStep,
+} from "@pf/process-execution/worker"
 import { RequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite/test"
 import type {
@@ -67,37 +66,16 @@ const collectRolePaths = (org: OrgUnit): readonly string[] => {
   return roles
 }
 
-const makeTestRunnerUserContext = (
-  org: OrgUnit,
-  requestTime: DateTime.Utc,
-): UserContext => ({
-  _requestTime: requestTime,
-  _userDetails: {
-    by: "process-test-runner@example.com",
-    id: "process-test-runner@example.com",
-  },
-  jwt: {
-    mode: "access",
-    type: "user",
-    properties: {
-      userId: "process-test-runner@example.com",
-      email: "process-test-runner@example.com",
-      // The runner executes whole process models, not a single user's journey.
-      // Grant all modeled roles so field-level permissions do not block
-      // generated form submissions unless a test supplies explicit auth data.
-      roles: collectRolePaths(org),
-      orgUnitPath: org.node.path,
-      orgUnitId: org.node.path,
-    },
-    aud: "graphql-api",
-    iss: "process-test-runner",
-    sub: "process-test-runner@example.com",
-    // This context is passed directly to operation helpers, after the HTTP/JWT
-    // validation layer where token expiry is enforced.
-    exp: 0,
-    iat: 0,
+const makeTestRunnerIdentity = (org: OrgUnit): ExecutionIdentity => ({
+  session: {
+    userId: "process-test-runner@example.com",
+    email: "process-test-runner@example.com",
+    roles: collectRolePaths(org),
+    orgUnitPath: org.node.path,
+    orgUnitId: org.node.path,
   },
   userId: "process-test-runner@example.com",
+  subject: "process-test-runner@example.com",
 })
 
 /**
@@ -136,7 +114,7 @@ const queryActiveTodos = (processExecutionId: string) =>
 const drainQueue = <A, I>(
   queueName: string,
   handler: {
-    schema: Schema.Schema<A, I>
+    schema: Schema.Codec<A, I>
     handle: (
       // biome-ignore lint/suspicious/noExplicitAny: Job type erased at runtime
       job: any,
@@ -144,12 +122,33 @@ const drainQueue = <A, I>(
   },
 ) =>
   Effect.gen(function* () {
-    const requestTimeFiberRef = yield* RequestTime
     let count = 0
 
     // Keep claiming and processing until queue is empty
     while (true) {
-      const jobOption = yield* QueueService.claim(queueName, handler.schema)
+      // Simulations may jump business time inside a handler. Lease elapsed time
+      // must still measure actual execution, not that simulated calendar jump.
+      // Anchor each claim to business time so scheduled jobs remain eligible,
+      // then use the live clock's elapsed time for both claim and acknowledgement.
+      const businessNow = DateTime.toEpochMillis(yield* DateTime.now)
+      const liveClock = Clock.Clock.defaultValue()
+      const liveStart = liveClock.monotonicTimeNanosUnsafe()
+      const currentTimeNanosUnsafe = () =>
+        BigInt(businessNow) * 1_000_000n +
+        liveClock.monotonicTimeNanosUnsafe() -
+        liveStart
+      const currentTimeMillisUnsafe = () =>
+        Number(currentTimeNanosUnsafe() / 1_000_000n)
+      const leaseClock: Clock.Clock = Object.assign(liveClock, {
+        currentTimeMillisUnsafe,
+        currentTimeMillis: Effect.sync(currentTimeMillisUnsafe),
+        currentTimeNanosUnsafe,
+        currentTimeNanos: Effect.sync(currentTimeNanosUnsafe),
+      })
+      const jobOption = yield* QueueService.claim(
+        queueName,
+        handler.schema,
+      ).pipe(Effect.provideService(Clock.Clock, leaseClock))
 
       if (Option.isNone(jobOption)) {
         break
@@ -158,13 +157,13 @@ const drainQueue = <A, I>(
       const job = jobOption.value
       // Set current time for this job's database operations
       const now = yield* DateTime.now
-      yield* FiberRef.set(requestTimeFiberRef, now)
-
-      yield* handler.handle(job)
+      yield* handler.handle(job).pipe(Effect.provideService(RequestTime, now))
 
       // Acknowledge the job after processing
       const queueService = yield* QueueService
-      yield* queueService.acknowledge(job.jobId, job.receipt)
+      yield* queueService
+        .acknowledge(job.jobId, job.receipt)
+        .pipe(Effect.provideService(Clock.Clock, leaseClock))
 
       count++
     }
@@ -192,15 +191,17 @@ const drainEventQueues = Effect.gen(function* () {
 
 /**
  * Auto-generate valid form data from a Form step's output schema.
- * Uses Effect's Arbitrary + FastCheck to produce random valid data.
+ * Uses Effect's schema-derived arbitrary to produce random valid data.
  */
-const generateFormData = (form: Form): Record<string, unknown> => {
-  if (!form.output) return {}
+const generateFormData = (
+  form: Form,
+): Effect.Effect<Record<string, unknown>, Arbitrary.SampleError> => {
+  if (!form.output) return Effect.succeed({})
 
   const inputSchema = Schema.Struct(form.output as Schema.Struct.Fields)
-  const arb = Arbitrary.make(inputSchema)
-  const [generatedData] = FastCheck.sample(arb, 1)
-  return (generatedData ?? {}) as Record<string, unknown>
+  return Arbitrary.sampleEffect(Arbitrary.schema(inputSchema), {
+    count: 1,
+  }).pipe(Effect.map(([generatedData]) => generatedData ?? {}))
 }
 
 /**
@@ -210,19 +211,19 @@ const getFormDataForStep = (
   stepPath: string,
   org: ProcessTestConfig["org"],
   forms: ReadonlyArray<FormEntry> | undefined,
-): Record<string, unknown> => {
+): Effect.Effect<Record<string, unknown>, Arbitrary.SampleError> => {
   // Check for explicit override first (compare normalized paths)
   const normalizedStepPath = normalizePath(stepPath)
   const override = forms?.find(
     (f) => normalizePath(f.stepPath) === normalizedStepPath,
   )
   if (override) {
-    return override.data
+    return Effect.succeed(override.data)
   }
 
   // Auto-generate from schema
   const form = org.formByPath(stepPath)
-  if (!form) return {}
+  if (!form) return Effect.succeed({})
   return generateFormData(form)
 }
 
@@ -238,280 +239,235 @@ export const runProcess = (config: ProcessTestConfig) =>
   Effect.gen(function* () {
     const { org, processPath, initialState, forms, setup } = config
     const db = yield* TypedSqliteDrizzle
-    const requestTimeFiberRef = yield* RequestTime
 
     // Set initial request time
     const now = yield* DateTime.now
-    yield* FiberRef.set(requestTimeFiberRef, now)
-    const testRunnerContext = makeTestRunnerUserContext(org, now)
+    return yield* Effect.gen(function* () {
+      const testRunnerContext = makeTestRunnerIdentity(org)
 
-    // 1. Store organisation in the database
-    yield* storeOrganisation(org)
-    if (setup) {
-      yield* setup
-    }
+      // 1. Store organisation in the database
+      yield* storeOrganisation(org)
+      if (setup) {
+        yield* setup
+      }
 
-    // 2. Look up the process in the database
-    const normalizedProcessPath = normalizePath(processPath)
-    const processes = yield* db
-      .select()
-      .from(dbSchema.process)
-      .where(eq(dbSchema.process.path, normalizedProcessPath))
-    const process = processes[0]
-    if (!process) {
-      return yield* new ProcessNotFoundError({
-        processPath: normalizedProcessPath,
-      })
-    }
-
-    // Find the process model to get start node info
-    const processModel = org
-      .processes()
-      .find((p) => normalizePath(p.node.path) === normalizedProcessPath)
-    if (!processModel) {
-      return yield* new ProcessNotFoundError({
-        processPath: normalizedProcessPath,
-      })
-    }
-
-    const startNodes = processModel.startNodes()
-    const startNode = startNodes[0]
-    if (!startNode || startNodes.length !== 1) {
-      return yield* new ProcessNotFoundError({
-        processPath: normalizedProcessPath,
-      })
-    }
-
-    const startStepPath = normalizePath(startNode.node.path)
-
-    // 3. Start the process
-    let startResult: { executionId: string }
-    const completedSteps: CompletedStepRecord[] = []
-
-    if (startNode.isSystemStep) {
-      // Match production GraphQL no-input system-start path: enqueue the start
-      // system step for the worker. Do not treat system-step output as form
-      // input (submissionEffectSchema is undefined; outputSchema is worker-produced).
-      startResult = yield* startProcessExecution(
-        process.id,
-        normalizedProcessPath,
-        startStepPath,
-        initialState ?? {},
-        { enqueueStartSystemStep: true },
-      )
-      // Start system steps complete when the worker runs them; track after drain.
-    } else {
-      // Form start nodes: submissionEffectSchema is the flat submission schema.
-      const startSchema = startNode.submissionEffectSchema
-      if (startSchema) {
-        const startData =
-          initialState ?? getFormDataForStep(startStepPath, org, forms)
-
-        startResult = yield* startProcess(
-          process.id,
-          normalizedProcessPath,
-          startStepPath,
-          startData,
-          startSchema,
-          // biome-ignore lint/suspicious/noExplicitAny: Form generics erased at runtime
-          startNode as any,
-          testRunnerContext,
-        )
-        completedSteps.push({
-          stepPath: startStepPath,
-          isSystemStep: false,
-        })
-      } else {
-        // Zero-field form or non-system no-input start
-        startResult = yield* startProcessExecution(
-          process.id,
-          normalizedProcessPath,
-          startStepPath,
-          initialState ?? {},
-        )
-        completedSteps.push({
-          stepPath: startStepPath,
-          isSystemStep: false,
+      // 2. Look up the process in the database
+      const normalizedProcessPath = normalizePath(processPath)
+      const processes = yield* db
+        .select()
+        .from(dbSchema.process)
+        .where(eq(dbSchema.process.path, normalizedProcessPath))
+      const process = processes[0]
+      if (!process) {
+        return yield* new ProcessNotFoundError({
+          processPath: normalizedProcessPath,
         })
       }
-    }
 
-    const { executionId } = startResult
+      // Find the process model to get start node info
+      const processModel = org
+        .processes()
+        .find((p) => normalizePath(p.node.path) === normalizedProcessPath)
+      if (!processModel) {
+        return yield* new ProcessNotFoundError({
+          processPath: normalizedProcessPath,
+        })
+      }
 
-    // 4. Main drain loop
-    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      // Update request time for each iteration
-      const iterNow = yield* DateTime.now
-      yield* FiberRef.set(requestTimeFiberRef, iterNow)
+      const startNodes = processModel.startNodes()
+      const startNode = startNodes[0]
+      if (!startNode || startNodes.length !== 1) {
+        return yield* new ProcessNotFoundError({
+          processPath: normalizedProcessPath,
+        })
+      }
 
-      // 4a. Drain flow-execution queue
-      const flowJobsProcessed = yield* drainQueue(
-        "flow-execution",
-        flowExecutionHandler,
-      )
+      const startStepPath = normalizePath(startNode.node.path)
 
-      // 4b. Drain system-step-execution queue
-      const systemJobsProcessed = yield* drainQueue(
-        "system-step-execution",
-        systemStepExecutionHandler,
-      )
+      // 3. Start the process
+      const startData =
+        initialState ??
+        (startNode.isSystemStep || !startNode.submissionEffectSchema
+          ? {}
+          : yield* getFormDataForStep(startStepPath, org, forms))
+      const startResult = yield* startProcess({
+        processPath: normalizedProcessPath,
+        input: startData,
+        identity: testRunnerContext,
+      })
+      const completedSteps: CompletedStepRecord[] = startNode.isSystemStep
+        ? []
+        : [{ stepPath: startStepPath, isSystemStep: false }]
 
-      // Track system steps that were completed
-      if (systemJobsProcessed > 0) {
-        // Start system steps do not create todos; detect completion via completed job.
-        if (
-          startNode.isSystemStep &&
-          !completedSteps.some((step) => step.stepPath === startStepPath)
-        ) {
-          const completedJobOps = yield* CompletedJobOperations
-          const startCompleted = yield* completedJobOps.isJobCompleted(
-            SYSTEM_STEP_EXECUTION_QUEUE,
-            getStartedSystemStepCompletedJobId(executionId),
-          )
-          if (startCompleted) {
-            completedSteps.push({
-              stepPath: startStepPath,
-              isSystemStep: true,
-            })
-          }
-        }
+      const { executionId } = startResult
 
-        // Query completed (deleted) todos to find newly completed system steps
-        const completedTodos = yield* db
-          .select({
-            stepPath: dbSchema.step.path,
-            roleId: dbSchema.step.roleId,
-          })
-          .from(dbSchema.toDo)
-          .innerJoin(dbSchema.flow, eq(dbSchema.toDo.flowId, dbSchema.flow.id))
-          .innerJoin(
-            dbSchema.step,
-            eq(dbSchema.flow.targetStepId, dbSchema.step.id),
-          )
-          .where(
-            and(
-              eq(dbSchema.toDo.processExecutionId, executionId),
-              eq(dbSchema.toDo._deleted, true),
-            ),
-          )
+      // 4. Main drain loop
+      for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+        // Update request time for each iteration
+        const iterNow = yield* DateTime.now
 
-        // Add any system steps we haven't tracked yet
-        for (const todo of completedTodos) {
-          const isSystem = todo.roleId === null
+        // 4a. Drain flow-execution queue
+        const flowJobsProcessed = yield* drainQueue("flow-execution", {
+          schema: FlowExecutionPayloadSchema,
+          handle: advanceScheduledFlow,
+        })
+
+        // 4b. Drain system-step-execution queue
+        const systemJobsProcessed = yield* drainQueue("system-step-execution", {
+          schema: SystemStepExecutionPayloadSchema,
+          handle: executeSystemStep,
+        })
+
+        // Track system steps that were completed
+        if (systemJobsProcessed > 0) {
+          // Start system steps do not create todos; detect completion via completed job.
           if (
-            isSystem &&
-            !completedSteps.some((s) => s.stepPath === todo.stepPath)
+            startNode.isSystemStep &&
+            !completedSteps.some((step) => step.stepPath === startStepPath)
           ) {
-            completedSteps.push({
-              stepPath: todo.stepPath,
-              isSystemStep: true,
-            })
+            const completedJobOps = yield* CompletedJobOperations
+            const startCompleted = yield* completedJobOps.isJobCompleted(
+              SYSTEM_STEP_EXECUTION_QUEUE,
+              getStartedSystemStepCompletedJobId(executionId),
+            )
+            if (startCompleted) {
+              completedSteps.push({
+                stepPath: startStepPath,
+                isSystemStep: true,
+              })
+            }
           }
+
+          // Query completed (deleted) todos to find newly completed system steps
+          const completedTodos = yield* db
+            .select({
+              stepPath: dbSchema.step.path,
+              roleId: dbSchema.step.roleId,
+            })
+            .from(dbSchema.toDo)
+            .innerJoin(
+              dbSchema.flow,
+              eq(dbSchema.toDo.flowId, dbSchema.flow.id),
+            )
+            .innerJoin(
+              dbSchema.step,
+              eq(dbSchema.flow.targetStepId, dbSchema.step.id),
+            )
+            .where(
+              and(
+                eq(dbSchema.toDo.processExecutionId, executionId),
+                eq(dbSchema.toDo._deleted, true),
+              ),
+            )
+
+          // Add any system steps we haven't tracked yet
+          for (const todo of completedTodos) {
+            const isSystem = todo.roleId === null
+            if (
+              isSystem &&
+              !completedSteps.some((s) => s.stepPath === todo.stepPath)
+            ) {
+              completedSteps.push({
+                stepPath: todo.stepPath,
+                isSystemStep: true,
+              })
+            }
+          }
+
+          // Continue draining after system step completion (may create more jobs)
+          continue
         }
 
-        // Continue draining after system step completion (may create more jobs)
-        continue
+        // 4c. Drain event queues (just acknowledge, no processing)
+        yield* drainEventQueues
+
+        // Stop when the execution is already finished (success or failed start).
+        const executionStatus = yield* db
+          .select({
+            finishedAt: dbSchema.processExecution.finishedAt,
+          })
+          .from(dbSchema.processExecution)
+          .where(eq(dbSchema.processExecution.id, executionId))
+        if (executionStatus[0]?.finishedAt !== null) {
+          break
+        }
+
+        // 4d. Check for active form todos
+        const activeTodos = yield* queryActiveTodos(executionId)
+
+        if (activeTodos.length === 0 && flowJobsProcessed === 0) {
+          // No todos, no jobs - process finished
+          break
+        }
+
+        // 4e. Complete form todos
+        for (const todo of activeTodos) {
+          const isSystemStep = todo.roleId === null
+          if (isSystemStep) {
+            // System steps should be handled by drainQueue above
+            // If we get here, something went wrong
+            continue
+          }
+
+          // Look up the Form step
+          const form = org.formByPath(todo.stepPath)
+          if (!form) {
+            // Not a form step - skip
+            continue
+          }
+
+          // Get form data (explicit override or auto-generated)
+          const formData = yield* getFormDataForStep(todo.stepPath, org, forms)
+
+          yield* completeTodo({
+            todoId: todo.id,
+            input: formData,
+            actor: { kind: "authenticated", identity: testRunnerContext },
+          }).pipe(Effect.provideService(RequestTime, iterNow))
+
+          completedSteps.push({
+            stepPath: todo.stepPath,
+            isSystemStep: false,
+          })
+        }
       }
 
-      // 4c. Drain event queues (just acknowledge, no processing)
-      yield* drainEventQueues
-
-      // Stop when the execution is already finished (success or failed start).
-      const executionStatus = yield* db
+      // 5. Collect results
+      // Query final process state
+      const processStates = yield* db
         .select({
-          finishedAt: dbSchema.processExecution.finishedAt,
+          state: dbSchema.processState.state,
         })
         .from(dbSchema.processExecution)
-        .where(eq(dbSchema.processExecution.id, executionId))
-      if (executionStatus[0]?.finishedAt !== null) {
-        break
-      }
-
-      // 4d. Check for active form todos
-      const activeTodos = yield* queryActiveTodos(executionId)
-
-      if (activeTodos.length === 0 && flowJobsProcessed === 0) {
-        // No todos, no jobs - process finished
-        break
-      }
-
-      // 4e. Complete form todos
-      for (const todo of activeTodos) {
-        const isSystemStep = todo.roleId === null
-        if (isSystemStep) {
-          // System steps should be handled by drainQueue above
-          // If we get here, something went wrong
-          continue
-        }
-
-        // Look up the Form step
-        const form = org.formByPath(todo.stepPath)
-        if (!form) {
-          // Not a form step - skip
-          continue
-        }
-
-        // Get form data (explicit override or auto-generated)
-        const formData = getFormDataForStep(todo.stepPath, org, forms)
-
-        // Use flat submission schema (includes struct-level refinements)
-        const inputSchema = form.submissionEffectSchema
-
-        // Complete the step with the form's primary Role so audit metadata
-        // records completed_by_role_id the same way GraphQL resolvers do.
-        const completingRolePath = form.props.role
-          ? normalizePath(form.props.role.node.path)
-          : undefined
-
-        yield* completeStep(
-          todo.id,
-          formData as ProcessState,
-          // biome-ignore lint/suspicious/noExplicitAny: Form generics erased at runtime
-          form as any,
-          inputSchema,
-          testRunnerContext,
-          completingRolePath ? { completingRolePath } : {},
+        .innerJoin(
+          dbSchema.processState,
+          eq(
+            dbSchema.processExecution.processStateId,
+            dbSchema.processState.id,
+          ),
         )
+        .where(eq(dbSchema.processExecution.id, executionId))
 
-        completedSteps.push({
-          stepPath: todo.stepPath,
-          isSystemStep: false,
-        })
-      }
-    }
+      const finalState = (processStates[0]?.state ?? {}) as Record<
+        string,
+        unknown
+      >
 
-    // 5. Collect results
-    // Query final process state
-    const processStates = yield* db
-      .select({
-        state: dbSchema.processState.state,
-      })
-      .from(dbSchema.processExecution)
-      .innerJoin(
-        dbSchema.processState,
-        eq(dbSchema.processExecution.processStateId, dbSchema.processState.id),
-      )
-      .where(eq(dbSchema.processExecution.id, executionId))
+      // Check if process finished
+      const executions = yield* db
+        .select({ finishedAt: dbSchema.processExecution.finishedAt })
+        .from(dbSchema.processExecution)
+        .where(eq(dbSchema.processExecution.id, executionId))
 
-    const finalState = (processStates[0]?.state ?? {}) as Record<
-      string,
-      unknown
-    >
+      const finished = executions[0]?.finishedAt !== null
 
-    // Check if process finished
-    const executions = yield* db
-      .select({ finishedAt: dbSchema.processExecution.finishedAt })
-      .from(dbSchema.processExecution)
-      .where(eq(dbSchema.processExecution.id, executionId))
-
-    const finished = executions[0]?.finishedAt !== null
-
-    return {
-      executionId,
-      finalState,
-      completedSteps,
-      finished,
-    } satisfies ProcessTestResult
+      return {
+        executionId,
+        finalState,
+        completedSteps,
+        finished,
+      } satisfies ProcessTestResult
+    }).pipe(Effect.provideService(RequestTime, now))
   })
 
 /**

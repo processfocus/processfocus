@@ -9,8 +9,14 @@ import { admitsNewSession } from "@/lib/auth/session-admission"
 const Tokens = Schema.Struct({
   access_token: Schema.NonEmptyString,
   refresh_token: Schema.NonEmptyString,
-  expires_in: Schema.Number.pipe(Schema.positive(), Schema.finite()),
-  refresh_expires_in: Schema.Number.pipe(Schema.positive(), Schema.finite()),
+  expires_in: Schema.Number.pipe(
+    Schema.check(Schema.isGreaterThan(0)),
+    Schema.check(Schema.isFinite()),
+  ),
+  refresh_expires_in: Schema.Number.pipe(
+    Schema.check(Schema.isGreaterThan(0)),
+    Schema.check(Schema.isFinite()),
+  ),
 })
 const respond = (success: boolean, status: number) =>
   Response.json(

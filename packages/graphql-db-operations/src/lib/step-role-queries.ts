@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Result from step role queries including startsProcess flag
@@ -13,17 +13,12 @@ export interface StepRoleInfo {
   readonly embedded: boolean
 }
 
-/**
- * Service providing step role query operations for authorization.
- */
 export const collectRolePathsToTry = (stepRoleInfo: StepRoleInfo): string[] =>
   [stepRoleInfo.rolePath, ...(stepRoleInfo.supportingRolePaths ?? [])].filter(
     Boolean,
   ) as string[]
 
-export class StepRoleQueries extends Context.Tag(
-  "@pf/graphql-db-operations/StepRoleQueries",
-)<
+export class StepRoleQueries extends Context.Service<
   StepRoleQueries,
   {
     /**
@@ -60,4 +55,4 @@ export class StepRoleQueries extends Context.Tag(
       rolePath: string,
     ) => Effect.Effect<string | undefined, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/StepRoleQueries") {}

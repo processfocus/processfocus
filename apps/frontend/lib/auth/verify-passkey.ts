@@ -52,15 +52,37 @@ export async function authenticateWithPasskey({
     credentials: "include",
     ...(signal ? { signal } : {}),
   })
-  const data: unknown = await verify.json()
+  const tokenReassurance = inPlace ? " Your token was not changed." : ""
+  if (!verify.ok) {
+    const message =
+      verify.status >= 400 &&
+      verify.status < 500 &&
+      verify.status !== 408 &&
+      verify.status !== 429
+        ? "We couldn’t verify this passkey. It may not be registered for this site. Try another passkey or sign-in method."
+        : "Unable to verify your passkey right now. Please try again."
+    throw new Error(message + tokenReassurance)
+  }
+  let data: unknown
+  try {
+    data = await verify.json()
+  } catch {
+    signal?.throwIfAborted()
+    throw new Error(
+      "Unable to verify your passkey right now. Please try again." +
+        tokenReassurance,
+    )
+  }
   if (
-    !verify.ok ||
     typeof data !== "object" ||
     data === null ||
     !("redirectUrl" in data) ||
     typeof data.redirectUrl !== "string"
   )
-    throw new Error("Passkey verification failed. Your token was not changed.")
+    throw new Error(
+      "Unable to verify your passkey right now. Please try again." +
+        tokenReassurance,
+    )
   const callback = new URL(data.redirectUrl, window.location.origin)
   if (
     callback.origin !== window.location.origin ||

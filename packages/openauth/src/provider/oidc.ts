@@ -1,3 +1,5 @@
+import { makeRouter } from "../router"
+
 /**
  * Use this to connect authentication providers that support OIDC.
  *
@@ -18,19 +20,15 @@
  * @packageDocumentation
  */
 
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import { Effect } from "effect"
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import type { JSONWebKeySet, JWTPayload } from "jose"
 import { createLocalJWKSet, jwtVerify } from "jose"
 import type { WellKnown } from "../client"
 import { OauthError } from "../error"
 import { getRelativeUrl } from "../request"
 import { errorJson } from "../response"
-import { lazy } from "../util"
+import { formValues, lazy } from "../util"
 import type { Provider, ProviderOptions } from "./provider"
 
 type OauthErrorCode =
@@ -195,7 +193,7 @@ export function OidcProvider(
           HttpServerResponse.setHeader("Set-Cookie", cookieValue),
         )
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.gen(function* () {
             yield* Effect.logError("OIDC authorize failed").pipe(
               Effect.annotateLogs({ error: String(error) }),
@@ -217,10 +215,7 @@ export function OidcProvider(
         }
 
         const urlParams = yield* request.urlParamsBody
-        const body = new Map<string, string>()
-        for (const [key, value] of urlParams) {
-          body.set(key, value)
-        }
+        const body = formValues(urlParams)
         const error = body.get("error") ?? null
         if (error) {
           return yield* Effect.fail(
@@ -252,7 +247,7 @@ export function OidcProvider(
           clientID: config.clientID,
         })
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.gen(function* () {
             yield* Effect.logError("OIDC callback failed").pipe(
               Effect.annotateLogs({ error: String(error) }),
@@ -262,10 +257,10 @@ export function OidcProvider(
         ),
       )
 
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", authorizeHandler),
-        HttpRouter.post("/callback", callbackHandler),
-      )
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", authorizeHandler),
+        HttpRouter.route("POST", "/callback", callbackHandler),
+      ])
     },
   }
 }

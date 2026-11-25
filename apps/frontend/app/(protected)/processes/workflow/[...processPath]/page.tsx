@@ -1,13 +1,16 @@
 import "@xyflow/react/dist/style.css"
-import { NotFound } from "@mcrovero/effect-nextjs/Navigation"
 import { Effect } from "effect"
 import Link from "next/link"
 import { ProcessDocumentation } from "./process-documentation"
 import { WorkflowFlow } from "./workflow-flow"
+import { NotFound } from "@/lib/effect/navigation"
 import { BasePage } from "@/lib/effect/runtime"
 import { fetchProcessWorkflowEffect } from "@/lib/graphql/workflow-operations"
 import { getPhaseColors } from "@/lib/workflow/constants"
 import { createInitialLayout } from "@/lib/workflow/layout"
+
+// The authenticated shell can omit this page while checking the session.
+export const instant = false
 
 const WorkflowPage = Effect.fn("WorkflowPage")(function* ({
   params,
@@ -27,9 +30,8 @@ const WorkflowPage = Effect.fn("WorkflowPage")(function* ({
 
   // Fetch workflow data with error handling - return error state on failure
   const data = yield* fetchProcessWorkflowEffect(processPath).pipe(
-    Effect.catchAll((error) => {
+    Effect.catch((error) => {
       console.error("Failed to fetch workflow data:", error.message)
-      // Return empty/error state for graceful degradation
       return Effect.succeed({
         processWorkflow: null,
         error: error.message,
@@ -37,7 +39,6 @@ const WorkflowPage = Effect.fn("WorkflowPage")(function* ({
     }),
   )
 
-  // Handle error state
   if (!data.processWorkflow) {
     return (
       <div className="space-y-6">

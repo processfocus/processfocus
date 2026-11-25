@@ -1,6 +1,11 @@
-import { PostHog } from "@processfocus/plugin-posthog"
-import { Config, Schema as ES, Effect, Layer } from "effect"
-import { AuthenticationConfig, PoliciesConfig } from "@pf/auth-config"
+import { PostHog, makePostHogConfiguration } from "@processfocus/plugin-posthog"
+import type { ConfigurationContract } from "@processfocus/runtime"
+import { Schema as ES, Effect, Layer } from "effect"
+import {
+  AuthenticationConfig,
+  PoliciesConfig,
+  localFixtureSecretClients,
+} from "@pf/auth-config"
 import {
   type BusinessCalendarConfig,
   NZ_HOLIDAYS,
@@ -8,21 +13,29 @@ import {
   Sunday,
   Weekdays,
 } from "@pf/business-calendar"
-import { FormReadOnly } from "@pf/form-schema"
 import {
   DocumentStore,
+  Form,
   Invitation,
   List,
   OrgUnit,
   Organisation,
+  Process,
   Role,
 } from "@pf/process"
 import { BugReportFix } from "./bug-report-fix"
 import { CalculatorDemo } from "./calculator-demo"
+import { demoConfiguration } from "./configuration"
+import { DeadlineDemo } from "./deadline-demo"
+import { DependentLookups } from "./dependent-lookups"
 import { FileUploadTest } from "./file-upload-test"
+import { testDocumentsId } from "./file-upload-test-forms"
 import { HelloSystemStart } from "./hello-system-start"
+import { hostedCiClients, hostedCiPolicyFiles } from "./hosted-ci"
 import { IncidentResponse } from "./incident-response"
 import { OnBoarding } from "./on-boarding"
+import { purchaseOrdersForm } from "./org-forms"
+import { processStartDemoForm } from "./process-start-demo-form"
 import { PurchaseRequest } from "./purchase-request"
 import { ScheduledStart } from "./scheduled-start"
 import {
@@ -32,6 +45,13 @@ import {
 } from "./schema"
 import { TimeOffRequest } from "./time-off-request"
 import { VendorOnboarding } from "./vendor-onboarding"
+
+const demoPostHogConfiguration = makePostHogConfiguration({}, { enabled: true })
+
+export const Configuration = {
+  version: 1,
+  groups: [demoConfiguration, demoPostHogConfiguration],
+} satisfies ConfigurationContract
 
 // Business calendar: Mon-Fri 8:30-17:00 with NZ public holidays
 const weekdaySchedule = Weekdays.map((day) => ({
@@ -55,16 +75,23 @@ export const org = new Organisation({
   businessCalendar,
 })
 
-if (process.env["POSTHOG_PROJECT_API_KEY"]) {
-  new PostHog(org, "posthog", {
-    apiKey: Config.string("POSTHOG_PROJECT_API_KEY"),
-    enabled: true,
-    host: process.env["POSTHOG_HOST"] ?? "",
-  })
-}
+new PostHog(org, "posthog", {
+  configuration: demoPostHogConfiguration,
+})
 
 // Org-level roles
 export const employee = new Role(org, "Employee", { name: "Employee" })
+// Isolated API test users retain persona-specific Cedar permissions without
+// sharing a fixed email, authenticated session or mutable role membership.
+for (const persona of [
+  "CI",
+  "Employee",
+  "Observer",
+  "Finance",
+  "Procurement",
+]) {
+  new Role(org, `GraphQLE2E${persona}`, { name: `GraphQL E2E ${persona}` })
+}
 export const administrator = new Role(org, "Administrator", {
   name: "Administrator",
 })
@@ -113,8 +140,9 @@ export const procurement_manager = new Role(procurement, "Manager", {
 })
 
 // Processes
+new DependentLookups(operations, "dependent-lookups", employee)
 new BugReportFix(engineering, "bug-report-fix", employee, engineering_manager)
-new PurchaseRequest(
+const purchaseRequest = new PurchaseRequest(
   finance,
   "purchase-request",
   employee,
@@ -143,18 +171,47 @@ new VendorOnboarding(
   procurement_manager,
 )
 new CalculatorDemo(operations, "calculator-demo", employee)
+new DeadlineDemo(operations, "deadline-demo", employee, finance_manager)
+new DeadlineDemo(
+  operations,
+  "interrupting-deadline-demo",
+  employee,
+  finance_manager,
+  true,
+)
 
 // Document stores
-const testDocuments = new DocumentStore(org, "test-documents", {})
+new DocumentStore(org, testDocumentsId, {})
 
 new FileUploadTest(operations, "file-upload-test", {
   role: employee,
-  documentStore: testDocuments,
 })
+
+const processStartDemo = new Process(operations, "start-request-demo", {
+  name: "Start Request Demo",
+  purpose: "Demonstrate conditional questions on a Process start form",
+})
+processStartDemo
+  .start(
+    new Form(processStartDemo, "Request", {
+      form: processStartDemoForm,
+      browser: {
+        entrypoint: "src/process-start-demo-form.ts",
+        exportName: "processStartDemoForm",
+      },
+      role: employee,
+    }),
+  )
+  .end()
 
 // Configure custom Cedar policies
 new PoliciesConfig(org, "policies", {
-  policyFiles: ["cedar/custom.cedar", "cedar/ci.cedar"],
+  policyFiles: [
+    "cedar/custom.cedar",
+    "cedar/ci.cedar",
+    ...hostedCiPolicyFiles,
+    "cedar/graphql-e2e.cedar",
+  ],
 })
 
 // Lists
@@ -162,27 +219,25 @@ new List(org, "purchase-orders", {
   name: "Purchase Orders",
   purpose: "View all purchase orders",
   roles: [employee],
+  startProcess: purchaseRequest,
   output: {
-    id: ES.String.annotations({ title: "ID" }),
-    item: ES.String.annotations({ title: "Item" }),
-    price: ES.Number.annotations({ title: "Price" }),
+    id: ES.String.annotate({ title: "ID" }),
+    item: ES.String.annotate({ title: "Item" }),
+    price: ES.Number.annotate({ title: "Price" }),
   },
   query: (ctx) =>
     Effect.gen(function* () {
       const ops = yield* DemoOperations
       return yield* ops.queryPurchaseOrders(ctx)
     }).pipe(Effect.orDie),
-  form: () => ({
-    id: ES.String.annotations({ title: "ID", [FormReadOnly]: true }),
-    item: ES.String.annotations({ title: "Item" }),
-    price: ES.Number.annotations({ title: "Price" }),
-  }),
+  form: () => purchaseOrdersForm.fields,
+  browser: { entrypoint: "src/org-forms.ts", exportName: "purchaseOrdersForm" },
   itemQuery: (id) =>
     Effect.gen(function* () {
       const ops = yield* DemoOperations
       return yield* ops.queryPurchaseOrderById(id)
     }).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.gen(function* () {
           yield* Effect.logError("Item query failed", { error })
           return null
@@ -197,7 +252,7 @@ new List(org, "purchase-orders", {
         price: input.price,
       })
     }).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.gen(function* () {
           yield* Effect.logError("Update failed", { error })
           return null
@@ -211,9 +266,9 @@ new List(org, "process-catalog-browsing", {
   purpose: "Browse imported process metadata without edits",
   roles: [employee],
   output: {
-    id: ES.String.annotations({ title: "ID" }),
-    name: ES.String.annotations({ title: "Name" }),
-    path: ES.String.annotations({ title: "Path" }),
+    id: ES.String.annotate({ title: "ID" }),
+    name: ES.String.annotate({ title: "Name" }),
+    path: ES.String.annotate({ title: "Path" }),
   },
   query: (ctx) =>
     Effect.gen(function* () {
@@ -238,17 +293,14 @@ export const CustomDbLayer = DemoOperationsLive.pipe(
  * Uses Effect Config for parameter resolution.
  */
 export const configureOrg = Effect.gen(function* () {
-  const googleClientId = yield* Config.string("GOOGLE_CLIENT_ID")
-  const googleClientSecret = yield* Config.string("GOOGLE_CLIENT_SECRET")
-  const ciPipelineSecret = yield* Config.option(
-    Config.string("CI_PIPELINE_SECRET"),
-  )
-  const adminEmail = yield* Config.string("MY_EMAIL").pipe(
-    Config.withDefault("test@example.com"),
-  )
-  const passkeyEmail = yield* Config.string("RESEND_REROUTE_EMAIL").pipe(
-    Config.withDefault("passkey@example.com"),
-  )
+  const workloadClients = yield* hostedCiClients
+  const googleClientId = yield* demoConfiguration.fields.googleClientId.config
+  const googleClientSecret =
+    yield* demoConfiguration.fields.googleClientSecret.config
+  const ciPipelineSecret =
+    yield* demoConfiguration.fields.ciPipelineSecret.config
+  const adminEmail = yield* demoConfiguration.fields.adminEmail.config
+  const passkeyEmail = yield* demoConfiguration.fields.passkeyEmail.config
 
   // Configure OAuth authentication
   new AuthenticationConfig(org, "auth", {
@@ -264,27 +316,15 @@ export const configureOrg = Effect.gen(function* () {
     },
     passkey: {
       rpName: "Process Focus Demo",
-      rpID: "localhost",
-      // TODO: fix, hard-coded frontend
-      origin: "http://localhost:3000",
     },
-    secretClients: {
+    secretClients: yield* localFixtureSecretClients({
       // ci-pipeline is used in graphql-api tests
       "ci-pipeline": {
         secret: ciPipelineSecret._tag === "Some" ? ciPipelineSecret.value : "",
         audience: "graphql-api",
       },
-      // e2e-employee is used in frontend tests
-      "e2e-employee": {
-        secret: ciPipelineSecret._tag === "Some" ? ciPipelineSecret.value : "",
-        audience: "graphql-api",
-      },
-      // e2e-employee-finance-manager is used for subscription tests requiring both roles
-      "e2e-employee-finance-manager": {
-        secret: ciPipelineSecret._tag === "Some" ? ciPipelineSecret.value : "",
-        audience: "graphql-api",
-      },
-    },
+    }),
+    workloadClients,
   })
 
   new Invitation(org, "berend", {
@@ -299,7 +339,6 @@ export const configureOrg = Effect.gen(function* () {
   })
 
   // CI/E2E testing invitation: provider user will be created when ci uses the
-  // graphql mutation request requestProviderUserPermissions
   new Invitation(org, "ci-test", {
     email: "ci@example.com",
     roles: [employee],
@@ -312,8 +351,17 @@ export const configureOrg = Effect.gen(function* () {
     roles: [employee, administrator],
   })
 
-  // E2E multi-user subscription test invitations
-  // These allow M2M clients to authenticate as separate provider users with different roles
+  // Separate identities exercise each settings permission independently.
+  new Invitation(org, "e2e-settings-providers", {
+    email: "settings-providers@example.com",
+    roles: [employee],
+  })
+  new Invitation(org, "e2e-settings-users", {
+    email: "settings-users@example.com",
+    roles: [employee],
+  })
+
+  // Named browser personas register Passkeys through these Invitations.
   new Invitation(org, "e2e-employee", {
     email: "employee@example.com",
     roles: [employee],
@@ -321,6 +369,11 @@ export const configureOrg = Effect.gen(function* () {
 
   new Invitation(org, "e2e-employee-2", {
     email: "employee-2@example.com",
+    roles: [employee],
+  })
+
+  new Invitation(org, "e2e-mcp-start-peer", {
+    email: "mcp-start-peer@example.com",
     roles: [employee],
   })
 

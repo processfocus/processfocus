@@ -41,9 +41,10 @@ export const resolveBusinessMetricDimensions = (
 }
 
 /** Runtime-provided dimensions for low-cardinality internal business metrics. */
-export class BusinessMetricDimensions extends Context.Tag(
-  "@pf/business-metrics/BusinessMetricDimensions",
-)<BusinessMetricDimensions, BusinessMetricDimensionsValue>() {}
+export class BusinessMetricDimensions extends Context.Service<
+  BusinessMetricDimensions,
+  BusinessMetricDimensionsValue
+>()("@pf/business-metrics/BusinessMetricDimensions") {}
 
 export const makeBusinessMetricDimensionsLayer = (
   input: BusinessMetricDimensionInput,
@@ -72,7 +73,7 @@ const externalActions = Metric.counter("pf.business.external.actions", {
 const tagCounter =
   (key: string, value: string) =>
   (counter: typeof processStarts): typeof processStarts =>
-    Metric.tagged(counter, key, value)
+    Metric.withAttributes(counter, { [key]: value })
 
 /**
  * Record after the business-outcome transaction commits. Customer-account classification
@@ -91,7 +92,7 @@ const recordSuccessfulOutcome = (
         onSome: (dimensions) => {
           if (dimensions.accountScope !== "customer") return Effect.void
 
-          return Metric.increment(
+          return Metric.update(
             counter.pipe(
               tagCounter("pf_account_id", dimensions.accountId),
               tagCounter("pf_account_name", dimensions.accountName),
@@ -100,6 +101,7 @@ const recordSuccessfulOutcome = (
               tagCounter("pf_environment", dimensions.environment),
               tagCounter(outcomeLabel[0], outcomeLabel[1]),
             ),
+            1,
           )
         },
       }),
@@ -128,7 +130,7 @@ export const recordDeploymentOutcome = ({
   const dimensions = target
   if (dimensions.accountScope !== "customer") return Effect.void
 
-  return Metric.increment(
+  return Metric.update(
     Metric.counter("pf.business.deployment.attempts", {
       description: "Terminal deployment pipeline attempts including cleanup",
       incremental: true,
@@ -140,6 +142,7 @@ export const recordDeploymentOutcome = ({
       tagCounter("pf_environment", dimensions.environment),
       tagCounter("pf_outcome", outcome),
     ),
+    1,
   )
 }
 

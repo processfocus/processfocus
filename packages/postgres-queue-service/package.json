@@ -14,18 +14,17 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
+    "@pf/db-info": "workspace:*",
     "@pf/drizzle-postgres": "workspace:*",
     "@pf/graphql-db-operations": "workspace:*",
-    "@pf/queue-service": "workspace:*",
     "@pf/request-time": "workspace:*",
     "@pf/service-drizzle-postgres": "workspace:*",
     "@processfocus/runtime": "workspace:*",
     "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@effect/vitest": "^0.30.0"
+    "@effect/vitest": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

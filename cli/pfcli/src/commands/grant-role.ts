@@ -4,16 +4,19 @@ import {
   makeDatabaseConfigLayer,
   resolveDatabasePath,
 } from "@pf/db-info"
+import { SettingsQueries } from "@pf/graphql-db-operations"
 import {
-  type GrantRoleGraphqlOutcome,
   type GrantRoleOutcome,
   PROVIDER_USER_NOT_FOUND_ERROR,
-  fromGrantRoleGraphqlOutcome,
   grantRoleToProviderUser,
-} from "@pf/graphql-db-operations"
+} from "@pf/identity-management"
 import { TypedSqliteDrizzleLayer } from "@pf/service-drizzle-sqlite"
 import { SqliteSettingsQueriesLive } from "@pf/sqlite-operations"
 import type { CliError } from "../errors"
+import {
+  type GrantRoleGraphqlOutcome,
+  fromGrantRoleGraphqlOutcome,
+} from "../utils/grant-role-outcome"
 import { graphqlRequestWithCredentials } from "../utils/graphql-client"
 import { makePfcliSqlClientLayer } from "../utils/local-database-layer"
 import { ensureKnownEnvironmentName } from "../utils/remote-name-validation"
@@ -73,11 +76,13 @@ const reportGrantRoleOutcome = (result: GrantRoleOutcome) =>
 
 const grantRoleLocal = (options: {
   readonly orgPath?: string | undefined
+  readonly databasePath?: string | undefined
   readonly rolePath: string
   readonly email: string
 }) =>
   Effect.gen(function* () {
-    const databasePath = resolveDatabasePath(options.orgPath)
+    const databasePath =
+      options.databasePath ?? resolveDatabasePath(options.orgPath)
 
     if (!databasePath) {
       return yield* new GrantRoleDbPathError({
@@ -93,11 +98,13 @@ const grantRoleLocal = (options: {
       Layer.provide(makeDatabaseConfigLayer(databasePath)),
     )
 
-    const result = yield* grantRoleToProviderUser({
-      rolePath: options.rolePath,
-      email: options.email,
-      grantedBy: "SYSTEM",
-    }).pipe(Effect.provide(appLayer))
+    const result = yield* Effect.flatMap(SettingsQueries, (queries) =>
+      grantRoleToProviderUser(queries, {
+        rolePath: options.rolePath,
+        email: options.email,
+        grantedBy: "SYSTEM",
+      }),
+    ).pipe(Effect.provide(appLayer))
 
     yield* reportGrantRoleOutcome(result)
   })
@@ -128,6 +135,7 @@ const grantRoleRemote = (options: {
 
 const grantRole = (options: {
   readonly orgPath?: string | undefined
+  readonly databasePath?: string | undefined
   readonly rolePath: string
   readonly email: string
   readonly projectId?: string | undefined
@@ -141,6 +149,12 @@ const grantRole = (options: {
         message: "Remote mode requires both --project and --env together.",
       })
     } else if (projectId && environmentId) {
+      if (options.databasePath !== undefined) {
+        return yield* new GrantRoleModeError({
+          message:
+            "--database-path applies only to local mode. Remove it when using --project/--env.",
+        })
+      }
       if (options.orgPath) {
         return yield* new GrantRoleModeError({
           message:
@@ -163,6 +177,7 @@ const grantRole = (options: {
 
 export const runGrantRole = (options: {
   readonly orgPath?: string | undefined
+  readonly databasePath?: string | undefined
   readonly rolePath: string
   readonly email: string
   readonly projectId?: string | undefined
@@ -193,7 +208,7 @@ export const runGrantRole = (options: {
         })
       }),
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.gen(function* () {
         yield* Console.error(`\n❌ Grant role failed: ${String(error)}`)
         yield* Effect.sync(() => {

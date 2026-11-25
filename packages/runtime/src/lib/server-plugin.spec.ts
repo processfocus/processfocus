@@ -11,7 +11,7 @@ import {
 } from "./server-plugin.js"
 
 const handler = () => Effect.succeed(new Response("ok"))
-const callbackHost: WebhookCallbackHost["Type"] = {
+const callbackHost: WebhookCallbackHost["Service"] = {
   lookupDeferredTodo: () => Effect.succeed(null),
   completeDeferredTodo: () => Effect.succeed({ _tag: "Ignored" }),
   failDeferredTodo: () => Effect.succeed({ _tag: "Ignored" }),

@@ -1,9 +1,10 @@
-import { SqlClient } from "@effect/sql"
 import type { Job } from "@processfocus/runtime"
 import { Effect, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   CompletedJobOperations,
   PROCESS_EVENT_QUEUE,
+  ProcessCollectionQueries,
 } from "@pf/graphql-db-operations"
 import { ProcessFromJobPublisher } from "../services/process-from-job-publisher"
 
@@ -61,6 +62,13 @@ const handleProcessEvent = Effect.fn("process-event")(
       })
 
       const sqlClient = yield* SqlClient.SqlClient
+
+      // Counts and durations live in execution tables. Advance the Process
+      // checkpoint before notifying clients that recover changes via pull.
+      const processes = yield* ProcessCollectionQueries
+      yield* sqlClient.withTransaction(
+        processes.advanceProcessRevision(processId),
+      )
 
       // External publication cannot be rolled back. Do not hold the DB writer
       // while publishing: the producer may still be acknowledging its outbox.

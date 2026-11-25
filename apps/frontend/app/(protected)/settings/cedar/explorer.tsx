@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useId, useMemo, useState } from "react"
 import { genericPrincipalId } from "./cedar-helpers"
 import type {
   AuthorizationCedar,
@@ -55,8 +55,6 @@ const defaultResourceId = (
       return "other@example.com"
     case "PF::Step":
       return underOrg(orgUnitId, "prototype/Start")
-    case "PF::Todo":
-      return underOrg(orgUnitId, "prototype/todo-1")
     case "PF::Execution":
       return underOrg(orgUnitId, "prototype/exec-1")
     case "PF::List":
@@ -108,6 +106,11 @@ export function AuthorizationExplorer({
   >(() => defaultAttrValues(entity))
   const [result, setResult] = useState<AuthorizationEvalResult | null>(null)
   const [evaluating, setEvaluating] = useState(false)
+  const contextId = useId()
+  const [todoId, setTodoId] = useState("")
+  const [assignedTo, setAssignedTo] = useState("")
+  const hasCompletionContext =
+    actionId === "complete" || actionId === "publicCompletionCorrection"
 
   useEffect(() => {
     let cancelled = false
@@ -224,6 +227,14 @@ export function AuthorizationExplorer({
       processPath: null,
       entity: entity ?? null,
       attrValues,
+      ...(hasCompletionContext && todoId
+        ? {
+            completionContext: {
+              todoId,
+              ...(assignedTo ? { assignedTo } : {}),
+            },
+          }
+        : {}),
     }
   }, [
     actionId,
@@ -235,6 +246,9 @@ export function AuthorizationExplorer({
     resourceType,
     selectedRolePath,
     userRolePaths,
+    hasCompletionContext,
+    todoId,
+    assignedTo,
   ])
 
   useEffect(() => {
@@ -257,7 +271,14 @@ export function AuthorizationExplorer({
               principal: request.principal,
               action: { type: "PF::Action", id: request.action },
               resource: request.resource,
-              context: { nodeEnv: "unknown", requestTime: "" },
+              context: {
+                nodeEnv: "unknown",
+                requestTime: "",
+                weekday: "",
+                runtimeMode: "unknown",
+                stage: "",
+                environment: "",
+              },
               entityCount: 0,
             },
           })
@@ -379,6 +400,47 @@ export function AuthorizationExplorer({
           setAttrValues((current) => ({ ...current, [name]: value }))
         }
       />
+
+      {hasCompletionContext ? (
+        <fieldset className="grid gap-3 rounded-lg border border-slate-300 p-4 dark:border-slate-600">
+          <legend className="px-2 font-semibold">Completion context</legend>
+          <p
+            id={`${contextId}-help`}
+            className="text-sm text-slate-600 dark:text-slate-400"
+          >
+            Leave the Todo ID empty to simulate a process start. The prototype
+            public link is bound to Todo ID “prototype-link”. These values only
+            simulate a request; the runtime supplies them for real work.
+          </p>
+          <label htmlFor={`${contextId}-todo`}>Todo ID</label>
+          <input
+            id={`${contextId}-todo`}
+            name="todoId"
+            value={todoId}
+            onChange={(event) => setTodoId(event.target.value)}
+            aria-describedby={`${contextId}-help`}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-h-12 rounded-md border border-slate-500 bg-transparent px-3 text-base"
+          />
+          <label htmlFor={`${contextId}-assignee`}>
+            Assigned user email (optional)
+          </label>
+          <input
+            id={`${contextId}-assignee`}
+            name="assignedTo"
+            type="email"
+            value={assignedTo}
+            onChange={(event) => setAssignedTo(event.target.value)}
+            disabled={!todoId}
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            className="min-h-12 rounded-md border border-slate-500 bg-transparent px-3 text-base"
+          />
+        </fieldset>
+      ) : null}
 
       <div
         className={cn(

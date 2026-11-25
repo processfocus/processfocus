@@ -1,5 +1,5 @@
-import { FileSystem } from "@effect/platform"
-import { DateTime, Effect, Layer, Option } from "effect"
+import type { Context } from "effect"
+import { DateTime, Effect, FileSystem, Layer, Option } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
 import {
   OAuthClientQueries,
@@ -33,7 +33,7 @@ const providerUser: ProviderUserRow = {
 }
 
 const makeContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "admin@example.com",
     id: "user-1",
@@ -59,15 +59,15 @@ const makeContext = (): UserContext => ({
 
 const makeAuthorizationService = (
   seenRoleSets: string[][],
-): AuthorizationService["Type"] => ({
+): Context.Service.Shape<typeof AuthorizationService> => ({
   canIssueDelegationSecret: () => Effect.succeed(false),
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(false),
+  policyVersion: Effect.succeed("test-policy"),
   canCompleteStep: () => Effect.succeed(false),
-  canCompleteTodo: () => Effect.succeed(false),
+  canViewEmbeddedForm: () => Effect.succeed(false),
   canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-  canCompletePublicTodo: () => Effect.succeed(false),
   canRequestRole: (principal, resource) => {
     seenRoleSets.push(principal.roles.map((role) => role.id))
     return Effect.succeed(
@@ -75,7 +75,6 @@ const makeAuthorizationService = (
         ["/Admin", "/Limited"].includes(resource.uid.id),
     )
   },
-  canRequestProviderUserPermissions: () => Effect.succeed(false),
   canActOnBehalfOf: () => Effect.succeed(false),
   canViewExecution: () => Effect.succeed(false),
   canRestartExecution: () => Effect.succeed(false),
@@ -93,7 +92,7 @@ const makeAuthorizationService = (
   canPerformAction: () => Effect.succeed(false),
 })
 
-const makeProviderUserQueries = (permittedRoleIds: string[]) => ({
+const makeProviderUserQueries = () => ({
   queryProviderUserByUserId: (userId: string) =>
     Effect.succeed(
       userId === "user-1" ? Option.some(providerUser) : Option.none(),
@@ -118,31 +117,33 @@ const makeProviderUserQueries = (permittedRoleIds: string[]) => ({
         ? Option.some({ id: "role-admin", name: "Admin", path: "/Admin" })
         : Option.none(),
     ),
-  addPermittedRole: (providerUserId: string, roleId: string) =>
-    Effect.sync(() => {
-      if (providerUserId === providerUser.id) permittedRoleIds.push(roleId)
-    }),
 })
 
-const makeLayer = (seenRoleSets: string[][], permittedRoleIds: string[] = []) =>
+const makeLayer = (seenRoleSets: string[][]) =>
   Layer.mergeAll(
     Layer.succeed(FileSystem.FileSystem, {
       readFileString: () => Effect.succeed("type Query { _: Boolean }"),
     } as unknown as FileSystem.FileSystem),
-    Layer.succeed(OrgQueries, {} as unknown as OrgQueries["Type"]),
+    Layer.succeed(
+      OrgQueries,
+      {} as unknown as Context.Service.Shape<typeof OrgQueries>,
+    ),
     Layer.succeed(ProcessQueries, {
       queryAllProcesses: Effect.succeed([]),
-    } as unknown as ProcessQueries["Type"]),
+    } as unknown as Context.Service.Shape<typeof ProcessQueries>),
     Layer.succeed(
       ProviderUserQueries,
-      makeProviderUserQueries(
-        permittedRoleIds,
-      ) as unknown as ProviderUserQueries["Type"],
+      makeProviderUserQueries() as unknown as Context.Service.Shape<
+        typeof ProviderUserQueries
+      >,
     ),
-    Layer.succeed(WorkflowQueries, {} as unknown as WorkflowQueries["Type"]),
+    Layer.succeed(
+      WorkflowQueries,
+      {} as unknown as Context.Service.Shape<typeof WorkflowQueries>,
+    ),
     Layer.succeed(
       OAuthClientQueries,
-      {} as unknown as OAuthClientQueries["Type"],
+      {} as unknown as Context.Service.Shape<typeof OAuthClientQueries>,
     ),
     Layer.succeed(AuthorizationService, makeAuthorizationService(seenRoleSets)),
   )
@@ -151,12 +152,6 @@ type RoleSwitchRole = {
   readonly id: string
   readonly name: string
   readonly path: string
-}
-
-type RequestRoleResult = {
-  readonly success: boolean
-  readonly rolePath: string | null
-  readonly error: string | null
 }
 
 describe("system role switching resolvers", () => {
@@ -174,7 +169,7 @@ describe("system role switching resolvers", () => {
             ) => Effect.Effect<readonly RoleSwitchRole[], unknown, never>)
           | undefined
 
-        if (!resolver) return yield* Effect.dieMessage("Missing resolver")
+        if (!resolver) return yield* Effect.die("Missing resolver")
 
         return yield* resolver(providerUser, {}, makeContext())
       }).pipe(Effect.provide(makeLayer(seenRoleSets))),
@@ -182,35 +177,5 @@ describe("system role switching resolvers", () => {
 
     expect(roles.map((role) => role.path)).toEqual(["/Admin", "/Limited"])
     expect(seenRoleSets).toEqual([["/Admin"], ["/Admin"], ["/Admin"]])
-  })
-
-  it("requests a previous account role after the active session is narrowed", async () => {
-    const seenRoleSets: string[][] = []
-    const permittedRoleIds: string[] = []
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const schema = yield* systemSchema
-        const resolver = schema.resolvers?.Mutation?.["requestRole"] as
-          | ((
-              parent: unknown,
-              args: { rolePath: string },
-              context: UserContext,
-            ) => Effect.Effect<RequestRoleResult, unknown, never>)
-          | undefined
-
-        if (!resolver) return yield* Effect.dieMessage("Missing resolver")
-
-        return yield* resolver(undefined, { rolePath: "/Admin" }, makeContext())
-      }).pipe(Effect.provide(makeLayer(seenRoleSets, permittedRoleIds))),
-    )
-
-    expect(result).toEqual({
-      success: true,
-      rolePath: "/Admin",
-      error: null,
-    })
-    expect(seenRoleSets).toEqual([["/Admin"]])
-    expect(permittedRoleIds).toEqual(["role-admin"])
   })
 })

@@ -1,9 +1,9 @@
-import { DateTime, Effect, Either, Exit, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Exit, Layer, Result } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
+import type { UserDetailsValue } from "@pf/graphql-db-operations"
 import {
   DraftProcessExecutionQueries,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { RequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
@@ -14,20 +14,14 @@ import { describe, expect, it } from "bun:test"
 
 describe("draft-process-execution", () => {
   // Provide a fixed timestamp for tests
-  const requestTime = DateTime.unsafeMake(Date.now())
-  const RequestTimeTest = Layer.succeed(
-    RequestTime,
-    FiberRef.unsafeMake(requestTime),
-  )
+  const requestTime = DateTime.makeUnsafe(Date.now())
+  const RequestTimeTest = Layer.succeed(RequestTime, requestTime)
 
   // Provide test user details
-  const UserDetailsTest = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "usr-test",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsTest = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "usr-test",
+  } as UserDetailsValue)
 
   const TestLayer = Layer.provideMerge(
     Layer.mergeAll(
@@ -61,7 +55,7 @@ describe("draft-process-execution", () => {
       if (Exit.isFailure(result)) {
         // Extract the full error information including nested causes
         const errorDetails = Effect.runSync(
-          Effect.catchAll(Effect.fail(result.cause), (error) =>
+          Effect.catch(Effect.fail(result.cause), (error) =>
             Effect.succeed(JSON.stringify(error, null, 2)),
           ),
         )
@@ -87,7 +81,7 @@ describe("draft-process-execution", () => {
               id: "usr-test",
               provider: "test",
               sub: "draft-owner",
-              lastLoggedIn: DateTime.unsafeMake(Date.now()),
+              createdAt: DateTime.makeUnsafe(Date.now()),
             })
             .onConflictDoNothing()
 
@@ -160,7 +154,7 @@ describe("draft-process-execution", () => {
       if (Exit.isFailure(result)) {
         // Extract the error
         const errorDetails = Effect.runSync(
-          Effect.catchAll(Effect.fail(result.cause), (error) =>
+          Effect.catch(Effect.fail(result.cause), (error) =>
             Effect.succeed(JSON.stringify(error, null, 2)),
           ),
         )
@@ -186,7 +180,7 @@ describe("draft-process-execution", () => {
               id: "usr-test",
               provider: "test",
               sub: "draft-owner",
-              lastLoggedIn: DateTime.unsafeMake(Date.now()),
+              createdAt: DateTime.makeUnsafe(Date.now()),
             })
             .onConflictDoNothing()
 
@@ -290,14 +284,14 @@ describe("draft-process-execution", () => {
 
           const concurrentUpdates = yield* Effect.all(
             [
-              Effect.either(
+              Effect.result(
                 queries.updateProcessState(
                   "pst-update-active-test",
                   { data: "concurrent-a" },
                   updatedMasterState,
                 ),
               ),
-              Effect.either(
+              Effect.result(
                 queries.updateProcessState(
                   "pst-update-active-test",
                   { data: "concurrent-b" },
@@ -307,7 +301,7 @@ describe("draft-process-execution", () => {
             ],
             { concurrency: "unbounded" },
           )
-          expect(concurrentUpdates.filter(Either.isRight)).toHaveLength(1)
+          expect(concurrentUpdates.filter(Result.isSuccess)).toHaveLength(1)
 
           const concurrentMasterState = (yield* queries.getProcessStates([
             "pst-update-active-test",

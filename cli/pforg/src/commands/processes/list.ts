@@ -59,7 +59,9 @@ export const runProcessList = (options: ProcessListOptions) =>
       },
       errorMessagePrefix: "",
     })
-    const response = yield* Schema.decodeUnknown(ProcessesData)(data).pipe(
+    const response = yield* Schema.decodeUnknownEffect(ProcessesData)(
+      data,
+    ).pipe(
       Effect.mapError(
         (cause) =>
           new CliError({

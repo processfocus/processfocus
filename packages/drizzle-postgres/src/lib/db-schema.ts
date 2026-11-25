@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm"
 import { relations } from "drizzle-orm/_relations"
 import type { AnyPgColumn } from "drizzle-orm/pg-core"
-import { boolean, check, customType, index, integer, jsonb, pgTable, pgView, uniqueIndex, varchar } from "drizzle-orm/pg-core"
+import { boolean, check, customType, index, integer, jsonb, pgTable, pgView, text, uniqueIndex, varchar } from "drizzle-orm/pg-core"
 import { DateTime } from "effect"
 import { ulid } from "ulidx"
 
@@ -19,9 +19,9 @@ const citext = customType<{ data: string; driverData: string }>({
 // Custom type for Effect DateTime columns
 // Keep in sync with parsePgTimestamp emitted by cli/xplain2drizzle/src/generator.postgres.ts
 const parsePgTimestamp = (value: Date | string): DateTime.Utc => {
-  if (value instanceof Date) return DateTime.unsafeFromDate(value)
+  if (value instanceof Date) return DateTime.fromDateUnsafe(value)
   const timestamp = value.includes("T") ? value : value.replace(" ", "T")
-  return DateTime.unsafeMake(/[zZ]|[+-]\d{2}:?\d{2}$/.test(timestamp) ? timestamp : timestamp + "Z")
+  return DateTime.makeUnsafe(/[zZ]|[+-]\d{2}:?\d{2}$/.test(timestamp) ? timestamp : timestamp + "Z")
 }
 
 const effectDateTime = customType<{ data: DateTime.Utc; driverData: Date | string }>({
@@ -36,6 +36,20 @@ const effectDateTime = customType<{ data: DateTime.Utc; driverData: Date | strin
   },
 })
 
+export const auditEvent = pgTable("pf_audit_event", {
+  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `aud-${ulid()}`),
+  auditKind: varchar("audit_kind", { length: 16 }).notNull(),
+  occurredAt: effectDateTime("occurred_at").notNull(),
+  auditDetails: jsonb("audit_details").$type<Record<string, unknown> | unknown[]>().notNull(),
+  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
+  _deleted: boolean("_deleted").notNull().default(false),
+}, (table) => ({
+  updatedAtIdIdx: index("pf_audit_event_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
 export const orgUnit = pgTable("pf_org_unit", {
   id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `ou-${ulid()}`),
   name: citext("name").notNull(),
@@ -47,8 +61,8 @@ export const orgUnit = pgTable("pf_org_unit", {
   startDayOfWeek: integer("start_day_of_week").default(0),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   pathidxIdx: uniqueIndex("pf_org_unit_pathidx_idx").on(table.path).where(sql`_deleted = false`),
@@ -68,13 +82,27 @@ export const process = pgTable("pf_process", {
   slaWarning: integer("sla_warning"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   pathidxIdx: uniqueIndex("pf_process_pathidx_idx").on(table.path).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_process_updated_at_id_idx").on(table.updatedAt, table.id),
   nameLengthCheck: check("name_length_check", sql.raw(`length("pf_process"."name") <= 1024`)),
+}))
+
+export const processVisibility = pgTable("pf_process_visibility", {
+  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `pvis-${ulid()}`),
+  processId: varchar("process_id", { length: 41 }).notNull().references(() => process.id),
+  replicationScope: varchar("replication_scope", { length: 64 }).notNull(),
+  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
+  _deleted: boolean("_deleted").notNull().default(false),
+}, (table) => ({
+  scopeprocessidxIdx: uniqueIndex("pf_process_visibility_scopeprocessidx_idx").on(table.replicationScope, table.processId).where(sql`_deleted = false`),
+  updatedAtIdIdx: index("pf_process_visibility_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
 export const role = pgTable("pf_role", {
@@ -84,8 +112,8 @@ export const role = pgTable("pf_role", {
   path: varchar("path", { length: 2048 }).notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   pathidxIdx: uniqueIndex("pf_role_pathidx_idx").on(table.path).where(sql`_deleted = false`),
@@ -102,8 +130,8 @@ export const phase = pgTable("pf_phase", {
   phaseOrder: integer("phase_order").notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   pathidxIdx: uniqueIndex("pf_phase_pathidx_idx").on(table.path).where(sql`_deleted = false`),
@@ -119,8 +147,8 @@ export const roleResponsibility = pgTable("pf_role_responsibility", {
   responsibilityOrder: integer("responsibility_order").notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   processroleidxIdx: uniqueIndex("pf_role_responsibility_processroleidx_idx").on(table.processId, table.roleId).where(sql`_deleted = false`),
@@ -144,10 +172,11 @@ export const step = pgTable("pf_step", {
   retryLimit: integer("retry_limit"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
+  processidxIdx: index("pf_step_processidx_idx").on(table.processId).where(sql`_deleted = false`),
   pathidxIdx: uniqueIndex("pf_step_pathidx_idx").on(table.path).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_step_updated_at_id_idx").on(table.updatedAt, table.id),
   nameLengthCheck: check("name_length_check", sql.raw(`length("pf_step"."name") <= 1024`)),
@@ -159,8 +188,8 @@ export const stepSupportingRole = pgTable("pf_step_supporting_role", {
   roleId: varchar("role_id", { length: 41 }).notNull().references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   steproleidxIdx: uniqueIndex("pf_step_supporting_role_steproleidx_idx").on(table.stepId, table.roleId).where(sql`_deleted = false`),
@@ -177,13 +206,16 @@ export const flow = pgTable("pf_flow", {
   fallbackBranch: boolean("fallback_branch").notNull().default(false),
   errorBranch: boolean("error_branch").notNull().default(false),
   errorTags: jsonb("error_tags").$type<Record<string, unknown> | unknown[]>(),
+  deadlineName: varchar("deadline_name", { length: 100 }),
+  interrupting: boolean("interrupting").notNull().default(false),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   sourcetargetidxIdx: index("pf_flow_sourcetargetidx_idx").on(table.sourceStepId, table.targetStepId).where(sql`_deleted = false`),
+  targetidxIdx: index("pf_flow_targetidx_idx").on(table.targetStepId).where(sql`_deleted = false`),
   flowkeyidxIdx: uniqueIndex("pf_flow_flowkeyidx_idx").on(table.flowKey).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_flow_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
@@ -193,8 +225,8 @@ export const externalParticipant = pgTable("pf_external_participant", {
   email: varchar("email", { length: 320 }).notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   emailidxIdx: uniqueIndex("pf_external_participant_emailidx_idx").on(table.email).where(sql`_deleted = false`),
@@ -211,10 +243,11 @@ export const processState = pgTable("pf_process_state", {
   startedByRoleId: varchar("started_by_role", { length: 41 }).references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
+  processidxIdx: index("pf_process_state_processidx_idx").on(table.processId).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_process_state_updated_at_id_idx").on(table.updatedAt, table.id),
   singleStarterCheck: check("single_starter_check", sql`${table.startedByUserId} is null or ${table.startedByExternalParticipantId} is null`),
 }))
@@ -228,12 +261,14 @@ export const processExecution = pgTable("pf_process_execution", {
   abandonedAt: effectDateTime("abandoned_at"),
   abandonedReason: citext("abandoned_reason"),
   notStartedReason: citext("not_started_reason"),
+  restartAttemptId: varchar("restart_attempt_id", { length: 36 }),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
+  processstateidxIdx: index("pf_process_execution_processstateidx_idx").on(table.processStateId).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_process_execution_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
@@ -255,12 +290,17 @@ export const toDo = pgTable("pf_to_do", {
   barrierScheduledFlowId: varchar("barrier_scheduled_flow_id", { length: 41 }),
   completedByRoleId: varchar("completed_by_role", { length: 41 }).references(() => role.id),
   notStartedReason: citext("not_started_reason"),
+  externalWriteAttemptId: varchar("external_write_attempt_id", { length: 36 }),
+  restartAttemptId: varchar("restart_attempt_id", { length: 36 }),
+  interruptedAt: effectDateTime("interrupted_at"),
+  completionFingerprint: varchar("completion_fingerprint", { length: 64 }),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
+  executionidxIdx: index("pf_to_do_executionidx_idx").on(table.processExecutionId).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_to_do_updated_at_id_idx").on(table.updatedAt, table.id),
   singleCompleterCheck: check("single_completer_check", sql`${table.completedByUserId} is null or ${table.completedByExternalParticipantId} is null`),
 }))
@@ -277,8 +317,8 @@ export const publicCompletionInvitationAttempt = pgTable("pf_public_completion_i
   deliveryFailureReason: citext("delivery_failure_reason"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   todoidxIdx: index("pf_public_completion_invitation_attempt_todoidx_idx").on(table.toDoId).where(sql`_deleted = false`),
@@ -295,22 +335,40 @@ export const scheduledFlow = pgTable("pf_scheduled_flow", {
   completedByRoleId: varchar("completed_by_role", { length: 41 }).references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   updatedAtIdIdx: index("pf_scheduled_flow_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
+export const taskDeadline = pgTable("pf_task_deadline", {
+  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `tdl-${ulid()}`),
+  ownerToDoId: varchar("owner_to_do", { length: 41 }).notNull().references(() => toDo.id),
+  flowId: varchar("flow_id", { length: 41 }).notNull().references(() => flow.id),
+  deadlineName: varchar("deadline_name", { length: 100 }).notNull(),
+  scheduledAt: effectDateTime("scheduled_at").notNull(),
+  triggeredAt: effectDateTime("triggered_at"),
+  disarmedAt: effectDateTime("disarmed_at"),
+  interrupting: boolean("interrupting").notNull().default(false),
+  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
+  _deleted: boolean("_deleted").notNull().default(false),
+}, (table) => ({
+  activationnameIdx: uniqueIndex("pf_task_deadline_activationname_idx").on(table.ownerToDoId, table.deadlineName).where(sql`_deleted = false`),
+  updatedAtIdIdx: index("pf_task_deadline_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
 export const user = pgTable("pf_user", {
   id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `usr-${ulid()}`),
   provider: varchar("provider", { length: 128 }).notNull(),
   sub: varchar("sub", { length: 256 }).notNull(),
-  lastLoggedIn: effectDateTime("last_logged_in").notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   uniquesubIdx: uniqueIndex("pf_user_uniquesub_idx").on(table.provider, table.sub).where(sql`_deleted = false`),
@@ -328,8 +386,8 @@ export const passkeyCredential = pgTable("pf_passkey_credential", {
   passkeyLastUsedAt: effectDateTime("passkey_last_used_at"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   credentialidxIdx: uniqueIndex("pf_passkey_credential_credentialidx_idx").on(table.passkeyCredentialId).where(sql`_deleted = false`),
@@ -348,8 +406,8 @@ export const providerUser = pgTable("pf_provider_user", {
   orgUnitId: varchar("org_unit_id", { length: 41 }).notNull().references(() => orgUnit.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   emailidxIdx: uniqueIndex("pf_provider_user_emailidx_idx").on(table.email).where(sql`_deleted = false`),
@@ -368,8 +426,8 @@ export const delegation = pgTable("pf_delegation", {
   secretRevokedAt: effectDateTime("secret_revoked_at"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   ownernameidxIdx: uniqueIndex("pf_delegation_ownernameidx_idx").on(table.ownerProviderUserId, table.activeDelegationName).where(sql`_deleted = false`),
@@ -387,8 +445,8 @@ export const secretGeneration = pgTable("pf_secret_generation", {
   parentSecretGenerationId: varchar("parent_secret_generation", { length: 41 }).references((): AnyPgColumn => secretGeneration.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   delegationidxIdx: index("pf_secret_generation_delegationidx_idx").on(table.delegationId).where(sql`_deleted = false`),
@@ -409,8 +467,8 @@ export const delegationHistory = pgTable("pf_delegation_history", {
   actorSecretGenerationId: varchar("actor_secret_generation", { length: 41 }).references(() => secretGeneration.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   updatedAtIdIdx: index("pf_delegation_history_updated_at_id_idx").on(table.updatedAt, table.id),
@@ -422,8 +480,8 @@ export const providerUserRole = pgTable("pf_provider_user_role", {
   roleId: varchar("role_id", { length: 41 }).notNull().references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   provideruserroleidxIdx: uniqueIndex("pf_provider_user_role_provideruserroleidx_idx").on(table.providerUserId, table.roleId).where(sql`_deleted = false`),
@@ -436,8 +494,8 @@ export const userSettings = pgTable("pf_user_settings", {
   notificationPreference: jsonb("notification_preference").$type<Record<string, unknown> | unknown[]>().notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   userUniqueIdx: uniqueIndex("pf_user_settings_user_unique_idx").on(table.userId).where(sql`_deleted = false`),
@@ -450,8 +508,8 @@ export const permittedRole = pgTable("pf_permitted_role", {
   roleId: varchar("role_id", { length: 41 }).notNull().references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   provideruserroleidxIdx: uniqueIndex("pf_permitted_role_provideruserroleidx_idx").on(table.providerUserId, table.roleId).where(sql`_deleted = false`),
@@ -464,26 +522,12 @@ export const permittedClientRole = pgTable("pf_permitted_client_role", {
   roleId: varchar("role_id", { length: 41 }).notNull().references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   oauthclientroleidxIdx: uniqueIndex("pf_permitted_client_role_oauthclientroleidx_idx").on(table.oauthClientId, table.roleId).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_permitted_client_role_updated_at_id_idx").on(table.updatedAt, table.id),
-}))
-
-export const permittedClientEmail = pgTable("pf_permitted_client_email", {
-  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `pce-${ulid()}`),
-  oauthClientId: varchar("oauth_client_id", { length: 41 }).notNull().references(() => oauthClient.id),
-  email: varchar("email", { length: 320 }).notNull(),
-  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
-  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
-  _deleted: boolean("_deleted").notNull().default(false),
-}, (table) => ({
-  oauthclientemailidxIdx: uniqueIndex("pf_permitted_client_email_oauthclientemailidx_idx").on(table.oauthClientId, table.email).where(sql`_deleted = false`),
-  updatedAtIdIdx: index("pf_permitted_client_email_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
 export const invitation = pgTable("pf_invitation", {
@@ -514,8 +558,8 @@ export const invitation = pgTable("pf_invitation", {
   registrationLinkGeneration: integer("registration_link_generation"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   emailidxIdx: index("pf_invitation_emailidx_idx").on(table.email).where(sql`_deleted = false`),
@@ -534,8 +578,8 @@ export const registrationSession = pgTable("pf_registration_session", {
   registrationSessionExpiresAt: effectDateTime("registration_session_expires_at").notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   invitationidxIdx: index("pf_registration_session_invitationidx_idx").on(table.invitationId).where(sql`_deleted = false`),
@@ -549,8 +593,8 @@ export const invitationRole = pgTable("pf_invitation_role", {
   roleId: varchar("role_id", { length: 41 }).notNull().references(() => role.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   invitationroleidxIdx: uniqueIndex("pf_invitation_role_invitationroleidx_idx").on(table.invitationId, table.roleId).where(sql`_deleted = false`),
@@ -565,8 +609,8 @@ export const oauthStorage = pgTable("pf_oauth_storage", {
   keyExpiry: effectDateTime("key_expiry"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   keyidxIdx: uniqueIndex("pf_oauth_storage_keyidx_idx").on(table.oauthKey),
@@ -579,8 +623,8 @@ export const oauthProvider = pgTable("pf_oauth_provider", {
   providerConfig: jsonb("provider_config").$type<Record<string, unknown> | unknown[]>().notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   nameidxIdx: uniqueIndex("pf_oauth_provider_nameidx_idx").on(table.providerName).where(sql`_deleted = false`),
@@ -592,10 +636,12 @@ export const oauthClient = pgTable("pf_oauth_client", {
   clientId: varchar("client_id", { length: 128 }).notNull(),
   clientSecretHash: varchar("client_secret_hash", { length: 256 }).notNull(),
   audience: varchar("audience", { length: 128 }).notNull(),
+  workloadTrust: jsonb("workload_trust").$type<Record<string, unknown> | unknown[]>(),
+  awsRoleBindings: jsonb("aws_role_bindings").$type<Record<string, unknown> | unknown[]>(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   clientididxIdx: uniqueIndex("pf_oauth_client_clientididx_idx").on(table.clientId).where(sql`_deleted = false`),
@@ -611,10 +657,14 @@ export const jobQueue = pgTable("pf_job_queue", {
   availableAt: effectDateTime("available_at").notNull().default(sql`NOW()`),
   lockedUntil: effectDateTime("locked_until"),
   claimReceipt: varchar("claim_receipt", { length: 64 }),
+  terminalAt: effectDateTime("terminal_at"),
+  terminalReason: citext("terminal_reason"),
+  terminalOutcome: varchar("terminal_outcome", { length: 32 }),
+  redrivenFrom: varchar("redriven_from", { length: 64 }),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   readyIdxIdx: index("pf_job_queue_ready_idx_idx").on(table.queue, table.lockedUntil, table.jobAttempts, table.availableAt).where(sql`_deleted = false`),
@@ -627,8 +677,8 @@ export const completedJob = pgTable("pf_completed_job", {
   jobId: varchar("job_id", { length: 1024 }).notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   jobIdIxIdx: uniqueIndex("pf_completed_job_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = false`),
@@ -642,12 +692,29 @@ export const notStartedJob = pgTable("pf_not_started_job", {
   notStartedReason: citext("not_started_reason").notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   jobIdIxIdx: uniqueIndex("pf_not_started_job_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = false`),
   updatedAtIdIdx: index("pf_not_started_job_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
+export const queueJobLifecycle = pgTable("pf_queue_job_lifecycle", {
+  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `qjl-${ulid()}`),
+  queue: varchar("queue", { length: 512 }).notNull(),
+  jobId: varchar("job_id", { length: 1024 }).notNull(),
+  jobLifecycle: jsonb("job_lifecycle").$type<Record<string, unknown> | unknown[]>().notNull(),
+  terminalAt: effectDateTime("terminal_at"),
+  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
+  _deleted: boolean("_deleted").notNull().default(false),
+}, (table) => ({
+  terminalIdxIdx: index("pf_queue_job_lifecycle_terminal_idx_idx").on(table.terminalAt).where(sql`_deleted = false`),
+  jobIdIxIdx: uniqueIndex("pf_queue_job_lifecycle_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = false`),
+  updatedAtIdIdx: index("pf_queue_job_lifecycle_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
 export const weeklySchedule = pgTable("pf_weekly_schedule", {
@@ -657,8 +724,8 @@ export const weeklySchedule = pgTable("pf_weekly_schedule", {
   timeRanges: jsonb("time_ranges").$type<Record<string, unknown> | unknown[]>().notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   orgunitdayidxIdx: uniqueIndex("pf_weekly_schedule_orgunitdayidx_idx").on(table.orgUnitId, table.dayOfWeek).where(sql`_deleted = false`),
@@ -676,8 +743,8 @@ export const calendarPeriod = pgTable("pf_calendar_period", {
   periodSchedule: jsonb("period_schedule").$type<Record<string, unknown> | unknown[]>(),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   kinddateidxIdx: index("pf_calendar_period_kinddateidx_idx").on(table.periodKind, table.periodStart, table.periodEnd).where(sql`_deleted = false`),
@@ -694,8 +761,8 @@ export const dateException = pgTable("pf_date_exception", {
   exceptionNote: citext("exception_note"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   orgunitdateidxIdx: uniqueIndex("pf_date_exception_orgunitdateidx_idx").on(table.orgUnitId, table.exceptionDate).where(sql`_deleted = false`),
@@ -710,8 +777,8 @@ export const holidayInstance = pgTable("pf_holiday_instance", {
   holidayDate: effectDateTime("holiday_date"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   orgunittitleidxIdx: uniqueIndex("pf_holiday_instance_orgunittitleidx_idx").on(table.orgUnitId, table.holidayTitle).where(sql`_deleted = false`),
@@ -728,8 +795,8 @@ export const documentStore = pgTable("pf_document_store", {
   sizeLimit: integer("size_limit"),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   pathidxIdx: uniqueIndex("pf_document_store_pathidx_idx").on(table.path).where(sql`_deleted = false`),
@@ -745,8 +812,8 @@ export const file = pgTable("pf_file", {
   uploadPending: boolean("upload_pending").notNull().default(true),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   updatedAtIdIdx: index("pf_file_updated_at_id_idx").on(table.updatedAt, table.id),
@@ -758,8 +825,8 @@ export const stepDocumentStore = pgTable("pf_step_document_store", {
   documentStoreId: varchar("document_store_id", { length: 41 }).notNull().references(() => documentStore.id),
   createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
-  createdBy: varchar("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: varchar("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
   _deleted: boolean("_deleted").notNull().default(false),
 }, (table) => ({
   stepdocstoreidxIdx: uniqueIndex("pf_step_document_store_stepdocstoreidx_idx").on(table.stepId, table.documentStoreId).where(sql`_deleted = false`),
@@ -830,10 +897,14 @@ export const processStateItsIsDraft = pgView("pf_process_state_its_is_draft", {
 `)
 
 // Type exports
+export type AuditEvent = typeof auditEvent.$inferSelect
+export type NewAuditEvent = typeof auditEvent.$inferInsert
 export type OrgUnit = typeof orgUnit.$inferSelect
 export type NewOrgUnit = typeof orgUnit.$inferInsert
 export type Process = typeof process.$inferSelect
 export type NewProcess = typeof process.$inferInsert
+export type ProcessVisibility = typeof processVisibility.$inferSelect
+export type NewProcessVisibility = typeof processVisibility.$inferInsert
 export type Role = typeof role.$inferSelect
 export type NewRole = typeof role.$inferInsert
 export type Phase = typeof phase.$inferSelect
@@ -858,6 +929,8 @@ export type PublicCompletionInvitationAttempt = typeof publicCompletionInvitatio
 export type NewPublicCompletionInvitationAttempt = typeof publicCompletionInvitationAttempt.$inferInsert
 export type ScheduledFlow = typeof scheduledFlow.$inferSelect
 export type NewScheduledFlow = typeof scheduledFlow.$inferInsert
+export type TaskDeadline = typeof taskDeadline.$inferSelect
+export type NewTaskDeadline = typeof taskDeadline.$inferInsert
 export type User = typeof user.$inferSelect
 export type NewUser = typeof user.$inferInsert
 export type PasskeyCredential = typeof passkeyCredential.$inferSelect
@@ -878,8 +951,6 @@ export type PermittedRole = typeof permittedRole.$inferSelect
 export type NewPermittedRole = typeof permittedRole.$inferInsert
 export type PermittedClientRole = typeof permittedClientRole.$inferSelect
 export type NewPermittedClientRole = typeof permittedClientRole.$inferInsert
-export type PermittedClientEmail = typeof permittedClientEmail.$inferSelect
-export type NewPermittedClientEmail = typeof permittedClientEmail.$inferInsert
 export type Invitation = typeof invitation.$inferSelect
 export type NewInvitation = typeof invitation.$inferInsert
 export type RegistrationSession = typeof registrationSession.$inferSelect
@@ -898,6 +969,8 @@ export type CompletedJob = typeof completedJob.$inferSelect
 export type NewCompletedJob = typeof completedJob.$inferInsert
 export type NotStartedJob = typeof notStartedJob.$inferSelect
 export type NewNotStartedJob = typeof notStartedJob.$inferInsert
+export type QueueJobLifecycle = typeof queueJobLifecycle.$inferSelect
+export type NewQueueJobLifecycle = typeof queueJobLifecycle.$inferInsert
 export type WeeklySchedule = typeof weeklySchedule.$inferSelect
 export type NewWeeklySchedule = typeof weeklySchedule.$inferInsert
 export type CalendarPeriod = typeof calendarPeriod.$inferSelect
@@ -936,10 +1009,18 @@ export const processRelations = relations(process, ({ one, many }) => ({
     fields: [process.orgUnitId],
     references: [orgUnit.id],
   }),
+  processVisibilities: many(processVisibility),
   phases: many(phase),
   roleResponsibilities: many(roleResponsibility),
   steps: many(step),
   processStates: many(processState),
+}))
+
+export const processVisibilityRelations = relations(processVisibility, ({ one }) => ({
+  process: one(process, {
+    fields: [processVisibility.processId],
+    references: [process.id],
+  }),
 }))
 
 export const roleRelations = relations(role, ({ one, many }) => ({
@@ -1021,6 +1102,7 @@ export const flowRelations = relations(flow, ({ one, many }) => ({
     references: [step.id],
   }),
   toDos: many(toDo),
+  taskDeadlines: many(taskDeadline),
 }))
 
 export const externalParticipantRelations = relations(externalParticipant, ({ many }) => ({
@@ -1087,6 +1169,7 @@ export const toDoRelations = relations(toDo, ({ one, many }) => ({
     references: [role.id],
   }),
   publicCompletionInvitationAttempts: many(publicCompletionInvitationAttempt),
+  taskDeadlines: many(taskDeadline),
 }))
 
 export const publicCompletionInvitationAttemptRelations = relations(publicCompletionInvitationAttempt, ({ one }) => ({
@@ -1114,6 +1197,17 @@ export const scheduledFlowRelations = relations(scheduledFlow, ({ one }) => ({
   completedByRole: one(role, {
     fields: [scheduledFlow.completedByRoleId],
     references: [role.id],
+  }),
+}))
+
+export const taskDeadlineRelations = relations(taskDeadline, ({ one }) => ({
+  ownerToDo: one(toDo, {
+    fields: [taskDeadline.ownerToDoId],
+    references: [toDo.id],
+  }),
+  flow: one(flow, {
+    fields: [taskDeadline.flowId],
+    references: [flow.id],
   }),
 }))
 
@@ -1244,13 +1338,6 @@ export const permittedClientRoleRelations = relations(permittedClientRole, ({ on
   }),
 }))
 
-export const permittedClientEmailRelations = relations(permittedClientEmail, ({ one }) => ({
-  oauthClient: one(oauthClient, {
-    fields: [permittedClientEmail.oauthClientId],
-    references: [oauthClient.id],
-  }),
-}))
-
 export const invitationRelations = relations(invitation, ({ one, many }) => ({
   acceptedByProviderUser: one(providerUser, {
     fields: [invitation.acceptedByProviderUserId],
@@ -1280,7 +1367,6 @@ export const invitationRoleRelations = relations(invitationRole, ({ one }) => ({
 
 export const oauthClientRelations = relations(oauthClient, ({ many }) => ({
   permittedClientRoles: many(permittedClientRole),
-  permittedClientEmails: many(permittedClientEmail),
 }))
 
 export const weeklyScheduleRelations = relations(weeklySchedule, ({ one }) => ({

@@ -7,13 +7,15 @@ Feature: Provider-user Todo list
     Given I am authenticated without roles
     And the database is clean
     And I am authenticated with the "/Employee" role
-    When I start a purchase request for item "Chair" with value "150"
+    # Execution cleanup preserves purchase orders from the purchase feature.
+    # These items remain unpurchased while we exercise Todo visibility and paging.
+    When I start a purchase request for item "Todo list chair {purchase}" with value "150"
     And I wait for flow to advance
-    When I start a purchase request for item "Desk" with value "250"
+    When I start a purchase request for item "Todo list desk {purchase}" with value "250"
     And I wait for flow to advance
 
   Scenario: Paging and filters apply to Cedar-visible Todos
-    Given I am authenticated as provider user "finance-manager@example.com"
+    Given I read as provider user "finance-manager@example.com"
     When I query Todo list page 1 with limit 1
     Then the latest Todo list page has 1 node and hasNextPage is true
     And the latest Todo list node has only the public Todo keys
@@ -26,6 +28,6 @@ Feature: Provider-user Todo list
     Then the latest Todo list page has 0 nodes and hasNextPage is false
 
   Scenario: Cedar hides another role's Todos
-    Given I am authenticated as provider user "employee@example.com"
+    Given I read as provider user "employee@example.com"
     When I query Todo list page 1 with limit 10
     Then the latest Todo list page has 0 nodes and hasNextPage is false

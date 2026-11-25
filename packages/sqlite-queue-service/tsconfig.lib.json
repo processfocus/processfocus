@@ -23,13 +23,16 @@
       "path": "../request-time/tsconfig.lib.json"
     },
     {
-      "path": "../queue-service/tsconfig.lib.json"
-    },
-    {
       "path": "../graphql-db-operations/tsconfig.lib.json"
     },
     {
       "path": "../drizzle-sqlite/tsconfig.lib.json"
+    },
+    {
+      "path": "../db-info/tsconfig.lib.json"
+    },
+    {
+      "path": "../layer-turso-local/tsconfig.lib.json"
     }
   ]
 }

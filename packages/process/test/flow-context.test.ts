@@ -86,7 +86,7 @@ describe("getStepIdFromPath", () => {
 })
 
 describe("buildFlowContext", () => {
-  const baseDate = DateTime.unsafeFromDate(new Date("2025-01-01T10:00:00Z"))
+  const baseDate = DateTime.fromDateUnsafe(new Date("2025-01-01T10:00:00Z"))
   const processExecutionId = "pex-flow-context-123"
 
   function createCompletedStep(
@@ -125,9 +125,9 @@ describe("buildFlowContext", () => {
   })
 
   it("builds context with multiple completed steps", () => {
-    const step1Time = DateTime.unsafeFromDate(new Date("2025-01-01T10:00:00Z"))
-    const step2Time = DateTime.unsafeFromDate(new Date("2025-01-01T11:00:00Z"))
-    const step3Time = DateTime.unsafeFromDate(new Date("2025-01-01T12:00:00Z"))
+    const step1Time = DateTime.fromDateUnsafe(new Date("2025-01-01T10:00:00Z"))
+    const step2Time = DateTime.fromDateUnsafe(new Date("2025-01-01T11:00:00Z"))
+    const step3Time = DateTime.fromDateUnsafe(new Date("2025-01-01T12:00:00Z"))
 
     const steps: CompletedStepData[] = [
       createCompletedStep("hr/process/Submit request", step1Time, {
@@ -154,9 +154,9 @@ describe("buildFlowContext", () => {
   })
 
   it("sets startStep to the earliest completed step", () => {
-    const step1Time = DateTime.unsafeFromDate(new Date("2025-01-01T11:00:00Z"))
-    const step2Time = DateTime.unsafeFromDate(new Date("2025-01-01T10:00:00Z")) // Earlier
-    const step3Time = DateTime.unsafeFromDate(new Date("2025-01-01T12:00:00Z"))
+    const step1Time = DateTime.fromDateUnsafe(new Date("2025-01-01T11:00:00Z"))
+    const step2Time = DateTime.fromDateUnsafe(new Date("2025-01-01T10:00:00Z")) // Earlier
+    const step3Time = DateTime.fromDateUnsafe(new Date("2025-01-01T12:00:00Z"))
 
     // Pass steps in non-chronological order
     const steps: CompletedStepData[] = [

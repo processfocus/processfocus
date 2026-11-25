@@ -1,6 +1,6 @@
 import { cookies, headers } from "next/headers"
 import { type NextRequest, NextResponse } from "next/server"
-import { getAuthClient } from "@/lib/auth/client"
+import { getIssuerUrl } from "@/lib/auth/client"
 import { clearSession, getCookieNamesFromHost } from "@/lib/auth/session"
 
 const performLogout = async () => {
@@ -10,10 +10,15 @@ const performLogout = async () => {
   const refreshToken = cookieStore.get(RT)?.value
 
   if (refreshToken) {
-    const authClient = getAuthClient()
-    await authClient.logout(refreshToken).catch((err) => {
-      console.error("Failed to invalidate refresh token on server:", err)
-    })
+    try {
+      const response = await fetch(`${getIssuerUrl()}/oauth/logout`, {
+        method: "POST",
+        body: new URLSearchParams({ token: refreshToken }),
+      })
+      if (!response.ok) console.error("Server logout request failed")
+    } catch {
+      console.error("Server logout request failed")
+    }
   }
 
   await clearSession()

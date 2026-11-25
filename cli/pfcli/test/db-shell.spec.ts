@@ -49,7 +49,7 @@ const getFailureMessage = (exit: Exit.Exit<unknown, unknown>): string => {
     return ""
   }
 
-  const failure = Cause.failureOption(exit.cause)
+  const failure = Cause.findErrorOption(exit.cause)
   if (Option.isNone(failure)) {
     return ""
   }

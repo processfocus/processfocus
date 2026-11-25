@@ -8,6 +8,7 @@ import type { Execution, ExecutionPullBulk } from "@pf/graphql-schema"
  */
 export interface ExecutionEventDocument extends Execution {
   readonly startedByEmail?: string | null
+  readonly startedByServiceAccountId?: string | null
   readonly startedByRolePath?: string | null
   readonly stepOrgUnitPaths?: readonly string[]
 }
@@ -26,9 +27,7 @@ class SubscriptionNotSupportedError extends Data.TaggedError(
 /**
  * Service for broadcasting execution changes to WebSocket subscribers
  */
-export class ExecutionEvents extends Context.Tag(
-  "@pf/graphql-api/ExecutionEvents",
-)<
+export class ExecutionEvents extends Context.Service<
   ExecutionEvents,
   {
     /**
@@ -54,4 +53,4 @@ export class ExecutionEvents extends Context.Tag(
       SubscriptionNotSupportedError
     >
   }
->() {}
+>()("@pf/graphql-api/ExecutionEvents") {}

@@ -1,12 +1,14 @@
 "use client"
-
 import { useQuery } from "@tanstack/react-query"
+import { Schema } from "effect"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useState } from "react"
+import { QRCodeSVG } from "qrcode.react"
+import { useEffect, useRef, useState } from "react"
+import { EffectSchemaForm } from "@pf/form/effect-schema-form"
 import { Button } from "@pf/shadcn-components"
+import { DateTimeDisplay } from "@pf/shadcn-components/date-time-display"
 import { InvitationDetailSkeleton } from "./invitation-detail-skeleton"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -15,7 +17,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
+import type { LoginAuthProviders } from "@/lib/auth/providers"
+import { invitationForm } from "@/lib/forms/invitation"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 import {
   createInvitation,
@@ -31,24 +34,36 @@ import {
 
 interface InvitationDetailClientProps {
   invitationId?: string
+  invitationMethods?: LoginAuthProviders["invitationMethods"]
 }
 
-const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+export function InvitationDetailClient(props: InvitationDetailClientProps) {
+  return <InvitationEditor key={props.invitationId ?? "new"} {...props} />
+}
 
-export function InvitationDetailClient({
+function InvitationEditor({
   invitationId,
+  invitationMethods,
 }: InvitationDetailClientProps) {
   const router = useRouter()
   const client = useGraphqlClient()
-  const [email, setEmail] = useState("")
-  const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([])
-  const [formInitialized, setFormInitialized] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const [formReady, setFormReady] = useState(false)
+  const operationBusy = useRef(false)
+  const visibilityGeneration = useRef(0)
   const [deleting, setDeleting] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [revealedLink, setRevealedLink] = useState<string | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+
+  useEffect(() => {
+    // Next.js can retain route state in Activity; hiding the page must discard
+    // the revealed bearer URL as well as its QR code.
+    return () => {
+      visibilityGeneration.current++
+      setRevealedLink(null)
+    }
+  }, [])
 
   const {
     data: invitationDetail,
@@ -62,26 +77,37 @@ export function InvitationDetailClient({
   })
 
   const {
-    data: roles = [],
+    data: loadedRoles,
     isLoading: rolesLoading,
     error: rolesError,
+    refetch: refetchRoles,
   } = useQuery({
     queryKey: ["settings", "invitation-roles"],
     queryFn: () => fetchAllInvitationRoles(client),
   })
 
-  useEffect(() => {
-    if (!invitationDetail || formInitialized) {
-      return
-    }
+  const roles = loadedRoles ?? []
 
-    setEmail(invitationDetail.email)
-    setSelectedRoleIds(invitationDetail.roles.map((role) => role.id))
-    setFormInitialized(true)
-  }, [formInitialized, invitationDetail])
+  useEffect(() => {
+    let active = true
+    setFormReady(false)
+    setDeleteDialogOpen(false)
+    setError(null)
+    void Promise.all([
+      refetchRoles(),
+      ...(invitationId === undefined ? [] : [refetchInvitation()]),
+    ]).then(() => {
+      if (active) setFormReady(true)
+    })
+    return () => {
+      active = false
+    }
+  }, [invitationId, refetchInvitation, refetchRoles])
 
   const loading =
-    rolesLoading || (invitationId !== undefined && invitationLoading)
+    !formReady ||
+    rolesLoading ||
+    (invitationId !== undefined && invitationLoading)
   const queryError = invitationError || rolesError
   const isImmutable =
     invitationDetail?.status === "ACCEPTED" ||
@@ -99,71 +125,64 @@ export function InvitationDetailClient({
       : "Review and update the invitation before the user signs in."
     : "Create an invitation and assign the roles it should grant."
 
-  const handleRoleToggle = (roleId: string) => {
-    if (isReadOnly) {
-      return
-    }
-    setSelectedRoleIds((current) =>
-      current.includes(roleId)
-        ? current.filter((id) => id !== roleId)
-        : [...current, roleId],
-    )
-  }
+  const schema = invitationForm(
+    roles.map((role) => ({
+      value: role.id,
+      label: role.name,
+      description: role.path,
+    })),
+    isReadOnly,
+  )
 
-  const handleSave = async () => {
-    if (isReadOnly) {
-      setError(
-        "This invitation can no longer be changed. Create a new invitation if you need to grant roles again.",
-      )
-      return
+  const handleSave = async (values: Record<string, unknown>) => {
+    if (isReadOnly || operationBusy.current) {
+      return [
+        {
+          field: "",
+          message: "Wait for the current action to finish before saving.",
+        },
+      ]
     }
-
-    const trimmedEmail = email.trim()
-    if (!trimmedEmail) {
-      setError("Email is required")
-      return
-    }
-
-    if (!isValidEmail(trimmedEmail)) {
-      setError("Enter a valid email address")
-      return
-    }
-
-    if (selectedRoleIds.length === 0) {
-      setError("Select at least one role")
-      return
-    }
-
-    setSaving(true)
+    operationBusy.current = true
     setError(null)
-    const saveInvitation = invitationId
-      ? () =>
-          updateInvitation(client, invitationId, trimmedEmail, selectedRoleIds)
-      : () => createInvitation(client, trimmedEmail, selectedRoleIds)
-
     try {
-      const result = await saveInvitation()
+      const submitted = Schema.decodeUnknownSync(
+        Schema.Struct({
+          ...schema.fields.invitation.fields,
+          ...schema.fields.assignments.fields,
+        }),
+      )(values)
+      const result = invitationId
+        ? await updateInvitation(client, invitationId, submitted.email, [
+            ...submitted.roleIds,
+          ])
+        : await createInvitation(client, submitted.email, [
+            ...submitted.roleIds,
+          ])
       if (result.__typename === "SaveInvitationFailure") {
-        setError(result.error)
+        return [{ field: "", message: result.error }]
       } else {
-        router.push("/settings")
+        router.push("/settings/invitations")
         router.refresh()
+        return undefined
       }
     } catch (saveError) {
       let message = "Failed to save invitation"
       if (saveError instanceof Error) {
         message = saveError.message
       }
-      setError(message)
+      return [{ field: "", message }]
+    } finally {
+      operationBusy.current = false
     }
-    setSaving(false)
   }
 
   const handleDelete = async () => {
-    if (!invitationId || isReadOnly) {
+    if (!invitationId || isReadOnly || operationBusy.current) {
       return
     }
 
+    operationBusy.current = true
     try {
       setDeleting(true)
       setError(null)
@@ -177,7 +196,7 @@ export function InvitationDetailClient({
         setError(message)
       } else {
         setDeleteDialogOpen(false)
-        router.push("/settings")
+        router.push("/settings/invitations")
         router.refresh()
       }
     } catch (deleteError) {
@@ -188,17 +207,7 @@ export function InvitationDetailClient({
       setError(message)
     }
     setDeleting(false)
-  }
-
-  const formatWhen = (value: string | null | undefined) => {
-    if (!value) {
-      return null
-    }
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) {
-      return value
-    }
-    return date.toLocaleString()
+    operationBusy.current = false
   }
 
   const registrationLinkStatusLabel = (
@@ -221,11 +230,13 @@ export function InvitationDetailClient({
   const handleRegistrationLinkAction = async (
     action: "generate" | "reveal" | "rotate" | "revoke",
   ) => {
-    if (!invitationId || isReadOnly) {
+    if (!invitationId || isReadOnly || operationBusy.current) {
       return
     }
 
+    operationBusy.current = true
     setLinkBusy(true)
+    const generation = visibilityGeneration.current
     setError(null)
 
     try {
@@ -250,8 +261,10 @@ export function InvitationDetailClient({
       if (result.__typename === "RegistrationLinkActionFailure") {
         setError(result.error)
       } else {
-        setRevealedLink(result.registrationLinkUrl)
-        await copyLinkToClipboard(result.registrationLinkUrl)
+        if (generation === visibilityGeneration.current) {
+          setRevealedLink(result.registrationLinkUrl)
+          await copyLinkToClipboard(result.registrationLinkUrl)
+        }
         await refetchInvitation()
       }
     } catch (linkError) {
@@ -262,6 +275,7 @@ export function InvitationDetailClient({
       setError(message)
     } finally {
       setLinkBusy(false)
+      operationBusy.current = false
     }
   }
 
@@ -269,18 +283,26 @@ export function InvitationDetailClient({
     return <InvitationDetailSkeleton />
   }
 
-  if (queryError) {
-    const message =
-      queryError instanceof Error
-        ? queryError.message
-        : "Failed to load invitation data"
+  const queryErrorBanner = queryError ? (
+    <div
+      role="alert"
+      className="rounded-md border border-red-200 bg-red-50 p-4 text-red-700"
+    >
+      <p className="font-medium">Error</p>
+      <p className="text-sm">
+        {queryError instanceof Error
+          ? queryError.message
+          : "Failed to load invitation data"}
+      </p>
+    </div>
+  ) : null
 
-    return (
-      <div className="rounded-md border border-red-200 bg-red-50 p-4 text-red-700">
-        <p className="font-medium">Error</p>
-        <p className="text-sm">{message}</p>
-      </div>
-    )
+  if (
+    queryError &&
+    ((invitationDetail === undefined && invitationId !== undefined) ||
+      loadedRoles === undefined)
+  ) {
+    return queryErrorBanner
   }
 
   if (invitationId && !invitationDetail) {
@@ -302,9 +324,38 @@ export function InvitationDetailClient({
         </div>
 
         <Button asChild variant="outline">
-          <Link href="/settings">Back to Settings</Link>
+          <Link href="/settings/invitations">Back to Invited Users</Link>
         </Button>
       </div>
+
+      {!invitationId ? (
+        <div className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+          <p>
+            <strong>Invitations are not sent automatically.</strong>
+            {invitationMethods?.sso || invitationMethods?.passkey
+              ? " After creating the invitation:"
+              : null}
+          </p>
+          {invitationMethods?.sso || invitationMethods?.passkey ? (
+            <ul className="list-disc space-y-1 pl-5">
+              {invitationMethods.sso ? (
+                <li>
+                  <strong>SSO:</strong> Ask the person to visit the login page
+                  and sign in using the invited email address.
+                </li>
+              ) : null}
+              {invitationMethods.passkey ? (
+                <li>
+                  <strong>Passkey:</strong> Generate a registration link and
+                  send it to the person yourself.
+                </li>
+              ) : null}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      {queryErrorBanner}
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-red-700">
@@ -313,282 +364,308 @@ export function InvitationDetailClient({
         </div>
       )}
 
-      <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900">
-        <h2 className="text-lg font-semibold">Invitation</h2>
+      <fieldset disabled={deleting || linkBusy} className="space-y-6">
+        <EffectSchemaForm
+          schema={schema}
+          defaultValues={{
+            email: invitationDetail?.email ?? "",
+            roleIds: [
+              ...new Set(invitationDetail?.roles.map((role) => role.id) ?? []),
+            ],
+          }}
+          onSubmit={handleSave}
+        >
+          {({ formState: { isSubmitting: saving } }) => (
+            <>
+              {invitationDetail ? (
+                <div className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
+                  <p>
+                    Status:{" "}
+                    <span className="font-medium text-slate-900 dark:text-slate-100">
+                      {invitationDetail.status === "PENDING"
+                        ? "Pending"
+                        : invitationDetail.status === "ACCEPTED"
+                          ? "Accepted"
+                          : "Legacy closed"}
+                    </span>
+                  </p>
+                  {invitationDetail.status === "ACCEPTED" ? (
+                    <p>
+                      Accepted by{" "}
+                      {[
+                        invitationDetail.acceptedByProvider,
+                        invitationDetail.acceptedBySubject,
+                      ]
+                        .filter(Boolean)
+                        .join(" / ") || "unknown identity"}
+                      {invitationDetail.acceptedAt && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          <DateTimeDisplay
+                            kind="timestamp"
+                            value={invitationDetail.acceptedAt}
+                          />
+                        </>
+                      )}
+                    </p>
+                  ) : null}
+                  {invitationDetail.status === "LEGACY_CLOSED" ? (
+                    <p>
+                      Closed during migration
+                      {invitationDetail.legacyClosureReason
+                        ? ` (${invitationDetail.legacyClosureReason})`
+                        : ""}
+                      {invitationDetail.legacyClosedAt && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          <DateTimeDisplay
+                            kind="timestamp"
+                            value={invitationDetail.legacyClosedAt}
+                          />
+                        </>
+                      )}
+                      . This does not claim that this invitation created the
+                      user or assigned roles.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {invitationDetail && invitationDetail.status === "PENDING" ? (
+                <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900">
+                  <h2 className="text-lg font-semibold">Registration Link</h2>
+                  <p className="text-sm text-slate-600 dark:text-slate-400">
+                    Passkey Invitation registration requires a seven-day
+                    Registration Link. The bulk list never includes the bearer
+                    token; generate or reveal it explicitly when you need to
+                    share it outside Process Focus.
+                  </p>
 
-        <div className="space-y-2">
-          <label htmlFor="invitation-email" className="text-sm font-medium">
-            Email
-          </label>
-          <Input
-            id="invitation-email"
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="user@example.com"
-            disabled={saving || deleting || isReadOnly}
-            readOnly={isReadOnly}
-          />
-        </div>
+                  <div className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
+                    <p>
+                      Status:{" "}
+                      <span className="font-medium text-slate-900 dark:text-slate-100">
+                        {registrationLinkStatusLabel(
+                          invitationDetail.registrationLinkStatus,
+                        )}
+                      </span>
+                    </p>
+                    {invitationDetail.registrationLinkExpiresAt ? (
+                      <p>
+                        Expires:{" "}
+                        <DateTimeDisplay
+                          kind="timestamp"
+                          value={invitationDetail.registrationLinkExpiresAt}
+                          initialMode="browser-local"
+                        />
+                      </p>
+                    ) : null}
+                    {invitationDetail.registrationLinkGeneratedAt ? (
+                      <p>
+                        Last generated
+                        {invitationDetail.registrationLinkGeneratedBy
+                          ? ` by ${invitationDetail.registrationLinkGeneratedBy}`
+                          : ""}
+                        {" · "}
+                        <DateTimeDisplay
+                          kind="timestamp"
+                          value={invitationDetail.registrationLinkGeneratedAt}
+                        />
+                      </p>
+                    ) : null}
+                    {invitationDetail.registrationLinkRevealedAt ? (
+                      <p>
+                        Last revealed
+                        {invitationDetail.registrationLinkRevealedBy
+                          ? ` by ${invitationDetail.registrationLinkRevealedBy}`
+                          : ""}
+                        {" · "}
+                        <DateTimeDisplay
+                          kind="timestamp"
+                          value={invitationDetail.registrationLinkRevealedAt}
+                        />
+                      </p>
+                    ) : null}
+                    {invitationDetail.registrationLinkRevokedAt ? (
+                      <p>
+                        Last revoked
+                        {invitationDetail.registrationLinkRevokedBy
+                          ? ` by ${invitationDetail.registrationLinkRevokedBy}`
+                          : ""}
+                        {" · "}
+                        <DateTimeDisplay
+                          kind="timestamp"
+                          value={invitationDetail.registrationLinkRevokedAt}
+                        />
+                      </p>
+                    ) : null}
+                  </div>
 
-        {invitationDetail ? (
-          <div className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
-            <p>
-              Status:{" "}
-              <span className="font-medium text-slate-900 dark:text-slate-100">
-                {invitationDetail.status === "PENDING"
-                  ? "Pending"
-                  : invitationDetail.status === "ACCEPTED"
-                    ? "Accepted"
-                    : "Legacy closed"}
-              </span>
-            </p>
-            {invitationDetail.status === "ACCEPTED" ? (
-              <p>
-                Accepted by{" "}
-                {[
-                  invitationDetail.acceptedByProvider,
-                  invitationDetail.acceptedBySubject,
-                ]
-                  .filter(Boolean)
-                  .join(" / ") || "unknown identity"}
-                {formatWhen(invitationDetail.acceptedAt)
-                  ? ` at ${formatWhen(invitationDetail.acceptedAt)}`
-                  : ""}
-              </p>
-            ) : null}
-            {invitationDetail.status === "LEGACY_CLOSED" ? (
-              <p>
-                Closed during migration
-                {invitationDetail.legacyClosureReason
-                  ? ` (${invitationDetail.legacyClosureReason})`
-                  : ""}
-                {formatWhen(invitationDetail.legacyClosedAt)
-                  ? ` at ${formatWhen(invitationDetail.legacyClosedAt)}`
-                  : ""}
-                . This does not claim that this invitation created the user or
-                assigned roles.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+                  {revealedLink ? (
+                    <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                        Registration link (copy now; it is not stored in this
+                        page after you leave)
+                      </p>
+                      <code className="block break-all text-sm text-slate-900 dark:text-slate-100">
+                        {revealedLink}
+                      </code>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => copyLinkToClipboard(revealedLink)}
+                      >
+                        Copy to clipboard
+                      </Button>
+                      <figure className="space-y-2 pt-2">
+                        <QRCodeSVG
+                          value={revealedLink}
+                          size={256}
+                          level="M"
+                          marginSize={4}
+                          bgColor="#ffffff"
+                          fgColor="#000000"
+                          role="img"
+                          title="Registration link QR code"
+                          aria-label="Registration link QR code"
+                          className="h-auto max-w-full"
+                        />
+                        <figcaption className="text-sm text-slate-600 dark:text-slate-400">
+                          Scan to register on your phone.
+                        </figcaption>
+                      </figure>
+                    </div>
+                  ) : null}
 
-      {invitationDetail && invitationDetail.status === "PENDING" ? (
-        <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="text-lg font-semibold">Registration Link</h2>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Passkey Invitation registration requires a seven-day Registration
-            Link. The bulk list never includes the bearer token; generate or
-            reveal it explicitly when you need to share it outside Process
-            Focus.
-          </p>
+                  <div className="flex flex-wrap gap-2">
+                    {invitationDetail.registrationLinkStatus ===
+                      "NOT_GENERATED" ||
+                    invitationDetail.registrationLinkStatus === "EXPIRED" ||
+                    invitationDetail.registrationLinkStatus === "REVOKED" ? (
+                      <Button
+                        type="button"
+                        onClick={() => handleRegistrationLinkAction("generate")}
+                        disabled={saving || deleting || linkBusy}
+                      >
+                        {invitationDetail.registrationLinkStatus ===
+                        "NOT_GENERATED"
+                          ? "Generate registration link"
+                          : "Generate new registration link"}
+                      </Button>
+                    ) : null}
+                    {invitationDetail.registrationLinkStatus === "ACTIVE" ? (
+                      <>
+                        <Button
+                          type="button"
+                          onClick={() => handleRegistrationLinkAction("reveal")}
+                          disabled={saving || deleting || linkBusy}
+                        >
+                          Copy / reveal link
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => handleRegistrationLinkAction("rotate")}
+                          disabled={saving || deleting || linkBusy}
+                        >
+                          Rotate link
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={() => handleRegistrationLinkAction("revoke")}
+                          disabled={saving || deleting || linkBusy}
+                        >
+                          Revoke link
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
 
-          <div className="space-y-1 text-sm text-slate-600 dark:text-slate-400">
-            <p>
-              Status:{" "}
-              <span className="font-medium text-slate-900 dark:text-slate-100">
-                {registrationLinkStatusLabel(
-                  invitationDetail.registrationLinkStatus,
+              {roles.length === 0 ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
+                  No roles are available.
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {invitationId && !isReadOnly ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={() => setDeleteDialogOpen(true)}
+                    disabled={saving || deleting || linkBusy}
+                  >
+                    Delete Invitation
+                  </Button>
+                ) : null}
+
+                {!isReadOnly ? (
+                  <Button
+                    type="submit"
+                    // The schema preserves the invitation email contract; the
+                    // browser's email constraint accepts a narrower set.
+                    formNoValidate
+                    className="ml-auto"
+                    disabled={
+                      saving || deleting || linkBusy || roles.length === 0
+                    }
+                  >
+                    {saving
+                      ? "Saving..."
+                      : invitationId
+                        ? "Save"
+                        : "Create Invitation"}
+                  </Button>
+                ) : (
+                  <p className="ml-auto text-sm text-slate-500 dark:text-slate-400">
+                    No bootstrap or edit actions are available for this
+                    invitation.
+                  </p>
                 )}
-              </span>
-            </p>
-            {invitationDetail.registrationLinkExpiresAt ? (
-              <p>
-                Expires:{" "}
-                {formatWhen(invitationDetail.registrationLinkExpiresAt) ?? "—"}
-              </p>
-            ) : null}
-            {invitationDetail.registrationLinkGeneratedAt ? (
-              <p>
-                Last generated
-                {invitationDetail.registrationLinkGeneratedBy
-                  ? ` by ${invitationDetail.registrationLinkGeneratedBy}`
-                  : ""}
-                {formatWhen(invitationDetail.registrationLinkGeneratedAt)
-                  ? ` at ${formatWhen(invitationDetail.registrationLinkGeneratedAt)}`
-                  : ""}
-              </p>
-            ) : null}
-            {invitationDetail.registrationLinkRevealedAt ? (
-              <p>
-                Last revealed
-                {invitationDetail.registrationLinkRevealedBy
-                  ? ` by ${invitationDetail.registrationLinkRevealedBy}`
-                  : ""}
-                {formatWhen(invitationDetail.registrationLinkRevealedAt)
-                  ? ` at ${formatWhen(invitationDetail.registrationLinkRevealedAt)}`
-                  : ""}
-              </p>
-            ) : null}
-            {invitationDetail.registrationLinkRevokedAt ? (
-              <p>
-                Last revoked
-                {invitationDetail.registrationLinkRevokedBy
-                  ? ` by ${invitationDetail.registrationLinkRevokedBy}`
-                  : ""}
-                {formatWhen(invitationDetail.registrationLinkRevokedAt)
-                  ? ` at ${formatWhen(invitationDetail.registrationLinkRevokedAt)}`
-                  : ""}
-              </p>
-            ) : null}
-          </div>
-
-          {revealedLink ? (
-            <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Registration link (copy now; it is not stored in this page after
-                you leave)
-              </p>
-              <code className="block break-all text-sm text-slate-900 dark:text-slate-100">
-                {revealedLink}
-              </code>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => copyLinkToClipboard(revealedLink)}
-              >
-                Copy to clipboard
-              </Button>
-            </div>
-          ) : null}
-
-          <div className="flex flex-wrap gap-2">
-            {invitationDetail.registrationLinkStatus === "NOT_GENERATED" ||
-            invitationDetail.registrationLinkStatus === "EXPIRED" ||
-            invitationDetail.registrationLinkStatus === "REVOKED" ? (
-              <Button
-                type="button"
-                onClick={() => handleRegistrationLinkAction("generate")}
-                disabled={saving || deleting || linkBusy}
-              >
-                {invitationDetail.registrationLinkStatus === "NOT_GENERATED"
-                  ? "Generate registration link"
-                  : "Generate new registration link"}
-              </Button>
-            ) : null}
-            {invitationDetail.registrationLinkStatus === "ACTIVE" ? (
-              <>
-                <Button
-                  type="button"
-                  onClick={() => handleRegistrationLinkAction("reveal")}
-                  disabled={saving || deleting || linkBusy}
-                >
-                  Copy / reveal link
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => handleRegistrationLinkAction("rotate")}
-                  disabled={saving || deleting || linkBusy}
-                >
-                  Rotate link
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  onClick={() => handleRegistrationLinkAction("revoke")}
-                  disabled={saving || deleting || linkBusy}
-                >
-                  Revoke link
-                </Button>
-              </>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900">
-        <h2 className="text-lg font-semibold">Role Assignments</h2>
-
-        {roles.length === 0 ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-            No roles are available.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {roles.map((role) => (
-              <div key={role.id} className="flex items-center gap-3">
-                <Checkbox
-                  id={`role-${role.id}`}
-                  checked={selectedRoleIds.includes(role.id)}
-                  onCheckedChange={() => handleRoleToggle(role.id)}
-                  disabled={saving || deleting || isReadOnly}
-                />
-                <label
-                  htmlFor={`role-${role.id}`}
-                  className="flex cursor-pointer flex-col"
-                >
-                  <span className="font-medium">{role.name}</span>
-                  <span className="text-sm text-slate-500 dark:text-slate-400">
-                    {role.path}
-                  </span>
-                </label>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {invitationId && !isReadOnly ? (
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => setDeleteDialogOpen(true)}
-            disabled={saving || deleting}
-          >
-            Delete Invitation
-          </Button>
-        ) : null}
+              <Dialog
+                open={deleteDialogOpen}
+                onOpenChange={setDeleteDialogOpen}
+              >
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Delete Invitation</DialogTitle>
+                    <DialogDescription>
+                      This removes the invitation for{" "}
+                      {invitationDetail?.email ?? "this user"}.
+                    </DialogDescription>
+                  </DialogHeader>
 
-        {!isReadOnly ? (
-          <Button
-            type="button"
-            className="ml-auto"
-            onClick={handleSave}
-            disabled={saving || deleting || roles.length === 0}
-          >
-            {saving ? "Saving..." : invitationId ? "Save" : "Create Invitation"}
-          </Button>
-        ) : (
-          <p className="ml-auto text-sm text-slate-500 dark:text-slate-400">
-            No bootstrap or edit actions are available for this invitation.
-          </p>
-        )}
-      </div>
-
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Invitation</DialogTitle>
-            <DialogDescription>
-              This removes the invitation for{" "}
-              {invitationDetail?.email ?? (email || "this user")}.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setDeleteDialogOpen(false)}
-              disabled={deleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleting}
-            >
-              {deleting ? "Deleting..." : "Delete Invitation"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                  <DialogFooter>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setDeleteDialogOpen(false)}
+                      disabled={saving || deleting || linkBusy}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      onClick={handleDelete}
+                      disabled={saving || deleting || linkBusy}
+                    >
+                      {deleting ? "Deleting..." : "Delete Invitation"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </>
+          )}
+        </EffectSchemaForm>
+      </fieldset>
     </div>
   )
 }

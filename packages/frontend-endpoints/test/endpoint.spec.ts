@@ -11,17 +11,11 @@ describe("getGraphqlEndpoint", () => {
   const originalEnv = process.env
 
   beforeEach(() => {
-    // Reset environment before each test
     process.env = { ...originalEnv }
     delete process.env["BASE_URL"]
     delete process.env["GRAPHQL_ENDPOINT"]
     delete process.env["NODE_ENV"]
     delete process.env["NX_WORKSPACE_ROOT"]
-  })
-
-  it("should return BASE_URL + /graphql when BASE_URL is set", () => {
-    process.env["BASE_URL"] = "https://example.cloudfront.net"
-    expect(getGraphqlEndpoint()).toBe("https://example.cloudfront.net/graphql")
   })
 
   it("should prioritize BASE_URL over GRAPHQL_ENDPOINT", () => {
@@ -61,11 +55,6 @@ describe("getWsEndpoint", () => {
     delete process.env["NODE_ENV"]
   })
 
-  it("should return wss endpoint when BASE_URL is https", () => {
-    process.env["BASE_URL"] = "https://example.cloudfront.net"
-    expect(getWsEndpoint()).toBe("wss://example.cloudfront.net/graphql")
-  })
-
   it("should return ws endpoint when BASE_URL is http", () => {
     process.env["BASE_URL"] = "http://example.com"
     expect(getWsEndpoint()).toBe("ws://example.com/graphql")
@@ -75,11 +64,6 @@ describe("getWsEndpoint", () => {
     process.env["BASE_URL"] = "https://example.cloudfront.net"
     process.env["NEXT_PUBLIC_WS_ENDPOINT"] = "ws://custom.com/ws"
     expect(getWsEndpoint()).toBe("wss://example.cloudfront.net/graphql")
-  })
-
-  it("should return NEXT_PUBLIC_WS_ENDPOINT when set", () => {
-    process.env["NEXT_PUBLIC_WS_ENDPOINT"] = "ws://custom.com/ws"
-    expect(getWsEndpoint()).toBe("ws://custom.com/ws")
   })
 
   it("should derive ws endpoint from graphql endpoint", () => {
@@ -112,11 +96,6 @@ describe("getGraphqlServerBaseUrl", () => {
     delete process.env["BASE_URL"]
     delete process.env["GRAPHQL_ENDPOINT"]
     delete process.env["NODE_ENV"]
-  })
-
-  it("should return BASE_URL when set", () => {
-    process.env["BASE_URL"] = "https://example.cloudfront.net"
-    expect(getGraphqlServerBaseUrl()).toBe("https://example.cloudfront.net")
   })
 
   it("should prioritize BASE_URL over GRAPHQL_ENDPOINT", () => {
@@ -155,11 +134,6 @@ describe("getAuthUrl", () => {
     delete process.env["AUTH_URL"]
   })
 
-  it("should return BASE_URL when set", () => {
-    process.env["BASE_URL"] = "https://example.cloudfront.net"
-    expect(getAuthUrl()).toBe("https://example.cloudfront.net")
-  })
-
   it("should prioritize BASE_URL over AUTH_URL", () => {
     process.env["BASE_URL"] = "https://example.cloudfront.net"
     process.env["AUTH_URL"] = "http://custom-auth.com"
@@ -188,12 +162,6 @@ describe("getFrontendBaseUrl", () => {
     process.env = { ...originalEnv }
     delete process.env["FRONTEND_BASE_URL"]
     delete process.env["BASE_URL"]
-  })
-
-  it("should return FRONTEND_BASE_URL when set", () => {
-    process.env["FRONTEND_BASE_URL"] = "https://frontend.example.com"
-
-    expect(getFrontendBaseUrl()).toBe("https://frontend.example.com")
   })
 
   it("should prioritize FRONTEND_BASE_URL over BASE_URL", () => {

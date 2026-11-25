@@ -71,7 +71,7 @@ export const runTodoList = (options: TodoListOptions) =>
       },
       errorMessagePrefix: "",
     })
-    const response = yield* Schema.decodeUnknown(TodosData)(data).pipe(
+    const response = yield* Schema.decodeUnknownEffect(TodosData)(data).pipe(
       Effect.mapError(
         (cause) =>
           new CliError({

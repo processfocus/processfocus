@@ -1,0 +1,1 @@
+ALTER TABLE `pf_user` DROP COLUMN `last_logged_in`;

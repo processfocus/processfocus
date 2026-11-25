@@ -50,11 +50,9 @@ export const buildTodoChangeEvent = (
     return null
   }
 
-  // Map all TodoRows to GraphQL format
   const documents = todos.map(mapTodoRowToGraphql)
 
   // Use the last todo for checkpoint (highest updatedAt)
-  // Safe to use non-null assertion: length > 0 check above guarantees this exists
   // biome-ignore lint/style/noNonNullAssertion: length check above guarantees this exists
   const lastTodo = documents[documents.length - 1]!
 

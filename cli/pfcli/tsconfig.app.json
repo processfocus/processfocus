@@ -26,6 +26,9 @@
       "path": "../../packages/hosting-contract/tsconfig.lib.json"
     },
     {
+      "path": "../../packages/identity-management/tsconfig.lib.json"
+    },
+    {
       "path": "../../packages/sqlite-operations/tsconfig.lib.json"
     },
     {
@@ -59,7 +62,16 @@
       "path": "../../packages/frontend-endpoints/tsconfig.lib.json"
     },
     {
+      "path": "../../packages/realtime-client/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/form-schema/tsconfig.lib.json"
+    },
+    {
       "path": "../../packages/drizzle-sqlite/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/delegation/tsconfig.lib.json"
     },
     {
       "path": "../../packages/db-info/tsconfig.lib.json"
@@ -71,13 +83,13 @@
       "path": "../../packages/auth-policy/tsconfig.lib.json"
     },
     {
-      "path": "../../packages/auth-local-cedar/tsconfig.lib.json"
-    },
-    {
       "path": "../../packages/auth-config/tsconfig.lib.json"
     },
     {
       "path": "../../packages/auth-api/tsconfig.lib.json"
+    },
+    {
+      "path": "../../packages/audit/tsconfig.lib.json"
     }
   ]
 }

@@ -33,6 +33,7 @@ describe("buildOrganisationEmbedManifest", () => {
 
     const start = new Form(process, "Submit enquiry", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com/"],
@@ -51,107 +52,21 @@ describe("buildOrganisationEmbedManifest", () => {
       buildOrganisationEmbedManifest(org),
     )
 
-    expect(manifest.entries).toEqual([
-      expect.objectContaining({
-        stepPath: "/school/enrolment/Submit enquiry",
-        processName: "Enrolment Enquiry",
-        mutationName: "startSchoolEnrolment",
-        sites: ["https://school.example.com"],
-        thankYou: "Thanks for your enquiry.",
-        formDefinition: expect.objectContaining({
-          components: expect.objectContaining({
-            firstName: expect.objectContaining({ _tag: "text" }),
-          }),
-          rules: [],
-        }),
-      }),
-    ])
+    expect(manifest.entries[0]).toMatchObject({
+      stepPath: "/school/enrolment/Submit enquiry",
+      formPath: "/school/enrolment/Submit enquiry",
+      mutationName: "startSchoolEnrolment",
+      sites: ["https://school.example.com"],
+      lookups: [],
+    })
+    expect(manifest.entries[0]).not.toHaveProperty("formDefinition")
+    expect(manifest.entries[0]).not.toHaveProperty("jsonSchema")
     expect(
-      Object.values(
-        manifest.entries[0]?.formDefinition?.components ?? {},
-      ).every((component) => typeof component._tag === "string"),
-    ).toBe(true)
-    expect(parseOrganisationEmbedManifest(manifest)).toEqual(manifest)
-
-    expect(() =>
-      parseOrganisationEmbedManifest({
-        ...manifest,
-        entries: manifest.entries.map((entry) => ({
-          ...entry,
-          formDefinition: {
-            components: entry.formDefinition?.components,
-            rules: {},
-          },
-        })),
-      }),
-    ).toThrow("must be a valid client form definition")
-
-    expect(() =>
-      parseOrganisationEmbedManifest({
-        ...manifest,
-        entries: manifest.entries.map(
-          ({ formDefinition: _, ...entry }) => entry,
-        ),
-      }),
-    ).toThrow(
-      "entries[0].formDefinition must be a valid client form definition",
-    )
-
+      parseOrganisationEmbedManifest(JSON.parse(JSON.stringify(manifest))),
+    ).toEqual(manifest)
     expect(() =>
       parseOrganisationEmbedManifest({ ...manifest, version: 0 }),
-    ).toThrow("organisation embed manifest version must be 2")
-  })
-
-  it("includes serialized rules in embedded form manifests", async () => {
-    const { org, unit, role } = makeOrg()
-    const process = new Process(unit, "enrolment", {
-      name: "Enrolment Enquiry",
-      purpose: "Capture enquiries",
-    })
-
-    const start = new Form(process, "Submit enquiry", {
-      role,
-      embed: {
-        externalParticipantEmailField: "email",
-        sites: ["https://school.example.com/"],
-        thankYou: "Thanks for your enquiry.",
-      },
-      form: () => ({
-        email: ES.String,
-        firstName: TextField({ label: "First name" }),
-        details: TextField({ label: "Details" }),
-      }),
-    }).rules((value, rule) => [
-      rule.when(value.firstName.blank()).effects({
-        details: { disabled: true },
-      }),
-    ])
-
-    process.start(start).end()
-
-    const manifest = await Effect.runPromise(
-      buildOrganisationEmbedManifest(org),
-    )
-
-    expect(manifest.entries).toEqual([
-      expect.objectContaining({
-        formDefinition: {
-          components: expect.objectContaining({
-            firstName: expect.objectContaining({ _tag: "text" }),
-            details: expect.objectContaining({ _tag: "text" }),
-          }),
-          rules: [
-            {
-              condition: {
-                _tag: "blank",
-                value: { _tag: "field", path: ["firstName"] },
-              },
-              effects: [{ target: ["details"], state: { disabled: true } }],
-            },
-          ],
-        },
-      }),
-    ])
+    ).toThrow("version must be 3")
   })
 
   it("rejects embedded forms that are not process start steps", async () => {
@@ -171,6 +86,7 @@ describe("buildOrganisationEmbedManifest", () => {
     const flow = process.start(start)
     const followUp = new Form(flow, "Follow up", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com"],
@@ -200,6 +116,7 @@ describe("buildOrganisationEmbedManifest", () => {
 
     const start = new Form(process, "Submit enquiry", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com"],
@@ -220,19 +137,13 @@ describe("buildOrganisationEmbedManifest", () => {
       buildOrganisationEmbedManifest(org),
     )
 
-    expect(manifest.entries).toEqual([
-      expect.objectContaining({
-        stepPath: "/school/enrolment/Submit enquiry",
-        formDefinition: expect.objectContaining({
-          components: expect.objectContaining({
-            campusId: expect.objectContaining({
-              _tag: "lookup",
-              field: "campusId",
-              label: "Campus",
-            }),
-          }),
-        }),
-      }),
+    expect(manifest.entries[0]?.lookups).toEqual([
+      {
+        type: "lookup",
+        field: "campusId",
+        normalizedField: "campusId",
+        dependencies: [],
+      },
     ])
   })
 
@@ -247,6 +158,7 @@ describe("buildOrganisationEmbedManifest", () => {
       () =>
         new Form(process, "Submit enquiry", {
           role,
+          browser: { entrypoint: "form.ts", exportName: "form" },
           embed: {
             externalParticipantEmailField: "email",
             sites: ["https://school.example.com"],
@@ -270,6 +182,7 @@ describe("buildOrganisationEmbedManifest", () => {
 
     const start = new Form(process, "Submit enquiry", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com"],
@@ -299,58 +212,65 @@ describe("buildOrganisationEmbedManifest", () => {
       buildOrganisationEmbedManifest(org),
     )
 
-    expect(manifest.entries).toEqual([
-      expect.objectContaining({
-        formDefinition: expect.objectContaining({
-          components: expect.objectContaining({
-            campusId: expect.objectContaining({
-              _tag: "lookup",
-              field: "campusId",
-            }),
-            classId: expect.objectContaining({
-              _tag: "lookup",
-              field: "classId",
-              dependencies: ["campusId"],
-              queryName: "lookupSchoolEnrolmentSubmitEnquiryClassId",
-            }),
-          }),
-        }),
-      }),
+    expect(manifest.entries[0]?.lookups).toEqual([
+      {
+        type: "lookup",
+        field: "campusId",
+        normalizedField: "campusId",
+        dependencies: [],
+      },
+      {
+        type: "lookup",
+        field: "classId",
+        normalizedField: "classId",
+        dependencies: ["campusId"],
+        queryName: "lookupSchoolEnrolmentSubmitEnquiryClassId",
+      },
     ])
   })
 
-  it("rejects embedded forms that use file fields", async () => {
-    const { org, unit, role } = makeOrg()
-    const process = new Process(unit, "enrolment", {
-      name: "Enrolment Enquiry",
-      purpose: "Capture enquiries",
-    })
-    const documents = new DocumentStore(org, "files")
+  it.each([false, true])(
+    "rejects embedded file fields, including list children (nested=%s)",
+    async (nested) => {
+      const { org, unit, role } = makeOrg()
+      const process = new Process(unit, "enrolment", {
+        name: "Enrolment Enquiry",
+        purpose: "Capture enquiries",
+      })
+      const documents = new DocumentStore(org, "files")
 
-    const start = new Form(process, "Submit enquiry", {
-      role,
-      embed: {
-        externalParticipantEmailField: "email",
-        sites: ["https://school.example.com"],
-        thankYou: "Thanks",
-      },
-      form: () => ({
-        email: ES.String,
-        attachment: FileField({
-          label: "Attachment",
-          documentStore: documents,
+      const start = new Form(process, "Submit enquiry", {
+        role,
+        browser: { entrypoint: "form.ts", exportName: "form" },
+        embed: {
+          externalParticipantEmailField: "email",
+          sites: ["https://school.example.com"],
+          thankYou: "Thanks",
+        },
+        form: () => ({
+          email: ES.String,
+          attachment: nested
+            ? ES.Array(
+                ES.Struct({
+                  file: FileField({
+                    label: "Attachment",
+                    documentStore: documents,
+                  }),
+                }),
+              )
+            : FileField({ label: "Attachment", documentStore: documents }),
         }),
-      }),
-    })
+      })
 
-    process.start(start).end()
+      process.start(start).end()
 
-    await expect(
-      Effect.runPromise(buildOrganisationEmbedManifest(org)),
-    ).rejects.toThrow(
-      "Embedded form /school/enrolment/Submit enquiry uses unsupported field type file.",
-    )
-  })
+      await expect(
+        Effect.runPromise(buildOrganisationEmbedManifest(org)),
+      ).rejects.toThrow(
+        "Embedded file uploads require an anonymous upload authorization model.",
+      )
+    },
+  )
 
   it("rejects embedded processes with multiple start steps", async () => {
     const { org, unit, role } = makeOrg()
@@ -361,6 +281,7 @@ describe("buildOrganisationEmbedManifest", () => {
 
     const primary = new Form(process, "Primary", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com"],

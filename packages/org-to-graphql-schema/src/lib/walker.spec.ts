@@ -1,5 +1,10 @@
 import { Schema as ES, Effect, Exit } from "effect"
-import { MetricBreakdown, RadioField } from "@pf/form-schema"
+import {
+  FormLabel,
+  MetricBreakdown,
+  RadioField,
+  Wrapper,
+} from "@pf/form-schema"
 import { walkOutputAST } from "./output-walker"
 import { walkAST } from "./walker"
 import { describe, expect, it } from "bun:test"
@@ -87,7 +92,7 @@ describe("GraphQL walker", () => {
 
   it("should reject mixed literal unions instead of dropping branches", () => {
     const schema = ES.Struct({
-      mixed: ES.Literal("one", 2),
+      mixed: ES.Literals(["one", 2]),
     })
 
     const inputResult = Effect.runSyncExit(walkAST(schema.ast, "TestInput"))
@@ -101,7 +106,7 @@ describe("GraphQL walker", () => {
 
   it("should generate optional scalar fields for nullable literal unions", () => {
     const schema = ES.Struct({
-      decision: ES.Literal("approve", null),
+      decision: ES.NullOr(ES.Literal("approve")),
     })
 
     const inputResult = Effect.runSync(walkAST(schema.ast, "TestInput"))
@@ -162,7 +167,7 @@ describe("GraphQL walker", () => {
 
   it("should generate list type with radio literal union items", () => {
     const schema = ES.Struct({
-      decisions: ES.Array(ES.Literal("approve", "reject")),
+      decisions: ES.Array(ES.Literals(["approve", "reject"])),
     })
 
     const result = Effect.runSync(walkAST(schema.ast, "TestInput"))
@@ -207,5 +212,24 @@ describe("GraphQL walker", () => {
     expect(result.auxiliary.join("\n")).toContain(
       "buckets: [TestOutputCostsBucket!]!",
     )
+  })
+
+  it("should inline flatten wrappers in output types", () => {
+    const schema = ES.Struct({
+      orderNumber: ES.String,
+      deliveryAddress: Wrapper({
+        addressLine1: ES.String,
+        city: ES.String,
+      }).annotate({ [FormLabel]: "Delivery address" }),
+    })
+
+    const result = Effect.runSync(walkOutputAST(schema.ast, "TestOutput"))
+
+    expect(result.main).toBe(`type TestOutput {
+  orderNumber: String!
+  addressLine1: String!
+  city: String!
+}`)
+    expect(result.auxiliary).toHaveLength(0)
   })
 })

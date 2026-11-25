@@ -15,6 +15,10 @@ export class XeroInvoiceError extends Data.TaggedError("XeroInvoiceError")<{
   readonly fields?: readonly string[]
   readonly retryAfterSeconds?: number
   readonly cause?: unknown
+  /** The invoice POST was explicitly rejected; a later manual retry may use a new key. */
+  readonly externalWriteRejected?: boolean
+  /** Repeated-draft failures before POST are known not to have created an invoice. */
+  readonly draftCreationOutcome?: "not-created" | "unconfirmed"
 }> {}
 
 export const xeroValidationError = (

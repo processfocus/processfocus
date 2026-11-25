@@ -11,9 +11,6 @@
   "include": ["src/**/*.ts"],
   "references": [
     {
-      "path": "../form-rule/tsconfig.lib.json"
-    },
-    {
       "path": "../frontend-plugin-host/tsconfig.lib.json"
     },
     {

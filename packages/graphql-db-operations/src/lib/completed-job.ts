@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import type { UserDetails } from "./user-details"
 
@@ -18,9 +18,7 @@ export const getStartedSystemStepCompletedJobId = (executionId: string) =>
  * This pattern handles the case where a job commits successfully but the worker
  * crashes before acknowledging the job to the queue.
  */
-export class CompletedJobOperations extends Context.Tag(
-  "@pf/graphql-db-operations/CompletedJobOperations",
-)<
+export class CompletedJobOperations extends Context.Service<
   CompletedJobOperations,
   {
     /**
@@ -50,4 +48,4 @@ export class CompletedJobOperations extends Context.Tag(
       jobId: string,
     ) => Effect.Effect<void, SqlError, RequestTime | UserDetails>
   }
->() {}
+>()("@pf/graphql-db-operations/CompletedJobOperations") {}

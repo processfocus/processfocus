@@ -1,7 +1,11 @@
-import { NotFound } from "@mcrovero/effect-nextjs/Navigation"
 import { Effect } from "effect"
 import StartProcessClient from "./client"
+import ListPage from "@/app/(protected)/lists/[...listPath]/page"
+import { parseListReturnDestination } from "@/app/(protected)/lists/lib/list-refresh"
+import { NotFound } from "@/lib/effect/navigation"
 import { BasePage } from "@/lib/effect/runtime"
+
+export const instant = false
 
 /**
  * Start process page - thin server wrapper that passes URL params to client.
@@ -12,10 +16,10 @@ const StartProcessPage = Effect.fn("StartProcessPage")(function* ({
   searchParams,
 }: {
   params: Promise<{ startStepPath: string[] }>
-  searchParams: Promise<{ draftId?: string }>
+  searchParams: Promise<{ returnTo?: string | string[] }>
 }) {
   const { startStepPath: pathSegments } = yield* Effect.promise(() => params)
-  const { draftId } = yield* Effect.promise(() => searchParams)
+  const { returnTo } = yield* Effect.promise(() => searchParams)
 
   // Guard against asset-like requests accidentally hitting this catch-all route
   // (e.g. `/processes/start/hr/installHook.js.map`).
@@ -33,7 +37,26 @@ const StartProcessPage = Effect.fn("StartProcessPage")(function* ({
   // Full path for lookup: "/engineering/bug-report-fix/Report bug"
   const startStepPath = `/${pathSegments.map(decodeURIComponent).join("/")}`
 
-  return <StartProcessClient startStepPath={startStepPath} draftId={draftId} />
+  // Relative List destinations are validated by the same parser as close/submit.
+  // A hard navigation has no intercepted background: render the real List here.
+  // Match the client's URLSearchParams.get() behavior for repeated parameters.
+  const destination = parseListReturnDestination(
+    (Array.isArray(returnTo) ? returnTo[0] : returnTo) ?? null,
+    "http://localhost",
+  )
+  if (destination) {
+    const listUrl = new URL(destination.href, "http://localhost")
+    return (
+      <ListPage
+        params={Promise.resolve({
+          listPath: destination.listPath.slice(1).split("/"),
+        })}
+        searchParams={Promise.resolve(Object.fromEntries(listUrl.searchParams))}
+      />
+    )
+  }
+
+  return <StartProcessClient startStepPath={startStepPath} />
 })
 
 export default BasePage.build(StartProcessPage)

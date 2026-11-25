@@ -43,63 +43,29 @@ const readReplicationCheckpoints = (page: Page): Promise<StorageEntry[]> =>
 const isDraftPushResponse = (response: Response): boolean =>
   response.request().postData()?.includes("PushDraftProcessExecution") === true
 
-const readDraftStorageKeys = (page: Page): Promise<string[]> =>
-  page.evaluate(() =>
-    Object.keys(localStorage).filter(
-      (key) =>
-        key.startsWith("RxDB-ls-doc-") &&
-        key.includes("--draftProcessExecution--") &&
-        key.includes("-pst-"),
-    ),
-  )
-
 When(
-  "I save the process form as a server-side draft",
-  async ({ page, scenarioState }) => {
-    const draftKeysBeforeSave = await readDraftStorageKeys(page)
-    const pushResponsePromise = page.waitForResponse(isDraftPushResponse)
-    await page.getByRole("button", { name: "Save draft" }).click()
-    const pushResponse = await pushResponsePromise
-    expect(pushResponse.ok()).toBe(true)
-
+  "I edit the purchase request item to {string} and then {string}",
+  async ({ page }, first: string, latest: string) => {
+    const item = page.getByRole("textbox", { name: "Item", exact: true })
+    for (const value of [first, latest]) {
+      const pushResponsePromise = page.waitForResponse(isDraftPushResponse)
+      await item.fill(value)
+      const pushResponse = await pushResponsePromise
+      expect(pushResponse.ok()).toBe(true)
+      expect(await pushResponse.json()).toMatchObject({
+        data: { pushDraftProcessExecution: [] },
+      })
+    }
     await expect
-      .poll(
-        async () => {
-          const currentKeys = await readDraftStorageKeys(page)
-          return currentKeys.some((key) => !draftKeysBeforeSave.includes(key))
-        },
-        { message: "Waiting for the new draft document in RxDB" },
-      )
-      .toBe(true)
-    const draftStorageKey = (await readDraftStorageKeys(page)).find(
-      (key) => !draftKeysBeforeSave.includes(key),
-    )
-    if (!draftStorageKey)
-      throw new Error("New RxDB draft document was not found")
-    const draftIdStart = draftStorageKey.lastIndexOf("-pst-") + 1
-    const draftId = draftStorageKey.slice(draftIdStart)
-    scenarioState.set("rxdbLifecycleDraftId", draftId)
-
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            (id) =>
-              Object.keys(localStorage).some(
-                (key) =>
-                  key.includes("--draftProcessExecution--") &&
-                  key.endsWith(`-${id}`),
-              ),
-            draftId,
+      .poll(() =>
+        page.evaluate(() =>
+          Object.keys(localStorage).some((key) =>
+            key.startsWith("process-start-draft-"),
           ),
-        { message: "Waiting for the server-side draft to persist in RxDB" },
+        ),
       )
-      .toBe(true)
-
-    await page.goto("/processes", { waitUntil: "domcontentloaded" })
-    await expect(
-      page.getByRole("link", { name: "Continue" }).first(),
-    ).toBeVisible({ timeout: 15_000 })
+      .toBe(false)
+    await page.getByRole("button", { name: "Close", exact: true }).click()
   },
 )
 
@@ -214,31 +180,11 @@ Then(
 )
 
 Then(
-  "the server-side draft should be pulled into the fresh database",
-  async ({ page, scenarioState }) => {
-    const draftId = scenarioState.get("rxdbLifecycleDraftId")
-    if (typeof draftId !== "string") {
-      throw new Error("Server-side draft id was not recorded")
-    }
-    await expect
-      .poll(
-        () =>
-          page.evaluate(
-            (id) =>
-              Object.keys(localStorage).some(
-                (key) =>
-                  key.includes("--draftProcessExecution--") &&
-                  key.endsWith(`-${id}`) &&
-                  localStorage.getItem(key) !== null,
-              ),
-            draftId,
-          ),
-        { message: "Waiting for the server-side draft to be pulled" },
-      )
-      .toBe(true)
+  "the purchase request item should be {string}",
+  async ({ page }, item: string) => {
     await expect(
-      page.getByRole("link", { name: "Continue" }).first(),
-    ).toBeVisible({ timeout: 15_000 })
+      page.getByRole("textbox", { name: "Item", exact: true }),
+    ).toHaveValue(item, { timeout: 15_000 })
   },
 )
 
@@ -275,19 +221,24 @@ When(
       { key: markerKey, thresholdMs: FIVE_DAYS_MS },
     )
 
-    const pageReloaded = page.waitForEvent(
-      "framenavigated",
-      (frame) => frame === page.mainFrame(),
+    const tabs = [page, peer]
+    const reloads = tabs.map((tab) =>
+      tab.waitForEvent("framenavigated", (frame) => frame === tab.mainFrame()),
     )
-    const peerReloaded = peer.waitForEvent(
-      "framenavigated",
-      (frame) => frame === peer.mainFrame(),
-    )
-    await Promise.all([
-      page.evaluate("window.dispatchEvent(new Event('pageshow'))"),
-      peer.evaluate("window.dispatchEvent(new Event('pageshow'))"),
-    ])
-    await Promise.all([pageReloaded, peerReloaded])
+    const resumes = tabs.map(async (tab) => {
+      try {
+        await tab.evaluate("window.dispatchEvent(new Event('pageshow'))")
+      } catch (error) {
+        // Either tab can trigger the coordinated reload before evaluate returns.
+        // Both main-frame navigations and the new generation still must be observed.
+        if (
+          !(error instanceof Error) ||
+          !error.message.includes("Execution context was destroyed")
+        )
+          throw error
+      }
+    })
+    await Promise.all([...resumes, ...reloads])
   },
 )
 

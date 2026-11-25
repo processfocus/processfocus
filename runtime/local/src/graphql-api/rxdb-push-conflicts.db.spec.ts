@@ -66,7 +66,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           Effect.sync(() => {
             events.push(event)
           }),
-        subscribe: () => Effect.dieMessage("not used"),
+        subscribe: () => Effect.die(new Error("not used")),
       })
       const OrganisationTest = Layer.succeed(OrganisationProvider, {
         organisation: fixture.org,

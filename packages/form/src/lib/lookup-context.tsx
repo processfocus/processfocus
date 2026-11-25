@@ -6,6 +6,7 @@ import type { CalendarSlotFieldItem } from "@pf/shadcn-components"
 export interface LookupSuggestion {
   readonly value: string
   readonly label: string
+  readonly searchText?: string
 }
 
 export type CalendarSlotItem = CalendarSlotFieldItem
@@ -19,6 +20,23 @@ export interface LookupOptions {
  * Implemented by the frontend to call the GraphQL lookupSuggestions query.
  */
 export interface LookupService {
+  /** Resolve one eligible identity; never fetch a choices dataset. */
+  readonly resolveSelection?: (
+    stepPath: string,
+    field: string,
+    value: string,
+    options?: LookupOptions,
+  ) => Promise<LookupSuggestion | null>
+  /** Server queries must match/rank before limiting; this result reports truncation. */
+  readonly search?: (
+    stepPath: string,
+    field: string,
+    filter: string,
+    limit: number,
+    options?: LookupOptions,
+  ) => Promise<{ items: LookupSuggestion[]; hasMore: boolean }>
+  readonly fetchPrefill?: (queryName: string, value: string) => Promise<unknown>
+
   /** Fetch suggestions via the generic `lookupSuggestions` query. */
   readonly fetchSuggestions: (
     stepPath: string,

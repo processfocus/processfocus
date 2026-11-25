@@ -1,11 +1,16 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { copyFile, mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { connect } from "@tursodatabase/database"
+import { DateTime, Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-sqlite"
+import type { UserDetailsValue } from "@pf/graphql-db-operations"
 import {
   DraftProcessExecutionQueries,
   type DraftProcessExecutionRow,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { storeOrganisation } from "@pf/org-to-db"
 import {
@@ -22,9 +27,14 @@ import {
   TypedSqliteDrizzle,
 } from "@pf/service-drizzle-sqlite/test"
 import {
+  DatabaseTestFile,
+  TypedSqliteDrizzleLayer,
+} from "@pf/service-drizzle-sqlite/test-file"
+import {
   SqliteDbOperationsLive,
   SqliteGraphqlDbOperationsLive,
 } from "@pf/sqlite-operations"
+import { SqliteDraftProcessExecutionQueriesLive } from "../src/lib/draft-process-execution"
 import { describe, expect, it } from "bun:test"
 
 /**
@@ -73,16 +83,13 @@ describe("pullDraftProcessExecution", () => {
 
   const RequestTimeTest = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
   const GraphqlOrgLayer = OrganisationProviderTest(testOrganisation)
-  const UserDetailsTest = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "usr-draft-owner",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsTest = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "usr-draft-owner",
+  } as UserDetailsValue)
 
   const TestLayer = Layer.provideMerge(
     Layer.mergeAll(
@@ -95,7 +102,7 @@ describe("pullDraftProcessExecution", () => {
     DatabaseTest,
   )
 
-  type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+  type TestRequirements = Layer.Success<typeof TestLayer>
 
   const runTest = <A, E>(
     test: Effect.Effect<A, E, TestRequirements>,
@@ -110,7 +117,7 @@ describe("pullDraftProcessExecution", () => {
               id: "usr-draft-owner",
               provider: "test",
               sub: "draft-owner",
-              lastLoggedIn: DateTime.unsafeMake(Date.now()),
+              createdAt: DateTime.makeUnsafe(Date.now()),
             })
             .onConflictDoNothing()
           return yield* test
@@ -119,6 +126,174 @@ describe("pullDraftProcessExecution", () => {
       ),
     )
   }
+
+  it("bounds Turso reads for initial pulls, checkpoint pulls, and ID lookups", async () => {
+    // The shell exposes statement metrics; the npm driver only exposes plans.
+    const shell = Bun.which("tursodb")
+    if (!shell) {
+      throw new Error(
+        "Install the pinned Turso shell with `mise install http:tursodb` and add it to PATH",
+      )
+    }
+    const directory = await mkdtemp(join(tmpdir(), "pf-draft-pull-"))
+    const path = join(directory, "drafts.db")
+    const unrelatedCount = 250
+    const owner = "usr-draft-owner"
+    const other = "usr-other-draft-owner"
+    const captured: { sql: string; params: readonly unknown[] }[] = []
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* storeOrganisation(testOrganisation)
+          const db = yield* TypedSqliteDrizzle
+          const [process] = yield* db.query.process.findMany()
+          const [step] = yield* db.query.step.findMany()
+          const now = DateTime.makeUnsafe("2026-11-01T00:00:00Z")
+          yield* db.insert(schema.user).values(
+            [owner, other].map((id) => ({
+              id,
+              provider: "test",
+              sub: id,
+              createdAt: now,
+            })),
+          )
+          const state = {
+            processId: process!.id,
+            startStepId: step!.id,
+            state: {},
+            createdAt: now,
+            updatedAt: now,
+          }
+          yield* db.insert(schema.processState).values([
+            { ...state, id: "draft", startedByUserId: owner },
+            {
+              ...state,
+              id: "tombstone",
+              startedByUserId: owner,
+              _deleted: true,
+            },
+          ])
+          const unrelated = Array.from({ length: unrelatedCount }, (_, i) => ({
+            id: `unrelated-${i}`,
+          }))
+          // Make the initial pull walk the unrelated states before the draft.
+          const earlier = DateTime.subtract(now, { seconds: 1 })
+          yield* db.insert(schema.processState).values(
+            unrelated.map((row) => ({
+              ...state,
+              ...row,
+              startedByUserId: other,
+              updatedAt: earlier,
+            })),
+          )
+          yield* db.insert(schema.processExecution).values(
+            unrelated.map(({ id }) => ({
+              id: `execution-${id}`,
+              processStateId: id,
+            })),
+          )
+
+          const client = yield* SqlClient.SqlClient
+          // Measure the production statements with their original bindings.
+          const recordingClient = new Proxy(client, {
+            get(target, key, receiver) {
+              if (key === "unsafe") {
+                return (sql: string, params: readonly unknown[] = []) => {
+                  captured.push({ sql, params })
+                  return target.unsafe(sql, params)
+                }
+              }
+              return Reflect.get(target, key, receiver)
+            },
+          })
+          yield* Effect.gen(function* () {
+            const queries = yield* DraftProcessExecutionQueries
+            const first = yield* queries.pullDraftProcessExecution(null, 1)
+            expect(first.map(({ id }) => id)).toEqual(["draft"])
+            const next = yield* queries.pullDraftProcessExecution(
+              getCheckpoint(first),
+              10,
+            )
+            expect(next.map(({ id, deleted }) => ({ id, deleted }))).toEqual([
+              { id: "tombstone", deleted: true },
+            ])
+            const byId = yield* queries.getProcessStates([
+              "draft",
+              "unrelated-0",
+            ])
+            expect(byId.map(({ id }) => id)).toEqual(["draft"])
+          }).pipe(
+            Effect.provide(UserDetailsTest),
+            Effect.provide(
+              SqliteDraftProcessExecutionQueriesLive.pipe(
+                Layer.provide(Layer.fresh(TypedSqliteDrizzleLayer)),
+                Layer.provide(
+                  Layer.succeed(SqlClient.SqlClient, recordingClient),
+                ),
+              ),
+            ),
+          )
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              SqliteDbOperationsLive,
+              GraphqlOrgLayer,
+              RequestTimeTest,
+            ).pipe(Layer.provideMerge(DatabaseTestFile(path))),
+          ),
+        ),
+      )
+      expect(captured).toHaveLength(3)
+      const planPath = join(directory, "plans.db")
+      await copyFile(path, planPath)
+      const turso = await connect(planPath)
+      try {
+        for (const [index, query] of captured.entries()) {
+          const params = query.params.map((value) => {
+            if (typeof value === "string" || typeof value === "number")
+              return value
+            throw new Error("Unexpected draft query binding")
+          })
+          const result = Bun.spawnSync([shell, "--quiet", path], {
+            stdin: Buffer.from(
+              [
+                ...params.map(
+                  (value, i) =>
+                    `.parameter set ?${i + 1} ${JSON.stringify(value)}`,
+                ),
+                ".stats on",
+                `${query.sql};`,
+                "",
+              ].join("\n"),
+            ),
+          })
+          expect(result.stderr.toString()).toBe("")
+          expect(result.exitCode).toBe(0)
+          const rowsRead = result.stdout
+            .toString()
+            .match(/Rows read:\s+(\d+)/)?.[1]
+          expect(rowsRead).toBeDefined()
+          // Pulls may visit each state once; a targeted ID lookup may not.
+          expect(Number(rowsRead)).toBeLessThanOrEqual(
+            index === 2 ? 16 : unrelatedCount + 16,
+          )
+          const plan = JSON.stringify(
+            await (await turso.prepare(`EXPLAIN QUERY PLAN ${query.sql}`)).all(
+              ...params,
+            ),
+          )
+          expect(plan).not.toContain("SCAN pf_process_state_its_is_draft")
+          expect(plan).not.toContain("SCAN pf_process_execution")
+          expect(plan).toContain("pf_process_execution_processstateidx_idx")
+          expect(plan).toContain("pf_provider_user_user_unique_idx")
+        }
+      } finally {
+        await turso.close()
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 
   it("should return empty array for empty database", () =>
     runTest(
@@ -151,7 +326,7 @@ describe("pullDraftProcessExecution", () => {
           id: "usr-other-draft-owner",
           provider: "test",
           sub: "other-draft-owner",
-          lastLoggedIn: now,
+          createdAt: now,
         })
         yield* db.insert(schema.processState).values([
           {

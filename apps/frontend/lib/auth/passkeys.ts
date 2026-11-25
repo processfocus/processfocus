@@ -1,7 +1,9 @@
 import { Schema } from "effect"
 
 const IsoDate = Schema.String.pipe(
-  Schema.filter((value) => Number.isFinite(Date.parse(value))),
+  Schema.check(
+    Schema.makeFilter((value) => Number.isFinite(Date.parse(value))),
+  ),
 )
 
 export const PasskeyCredential = Schema.Struct({
@@ -26,11 +28,17 @@ export type PasskeyList = typeof PasskeyList.Type
 
 export const RenamePasskey = Schema.Struct({
   id: Schema.NonEmptyString,
-  name: Schema.Trim.pipe(Schema.minLength(1), Schema.maxLength(128)),
+  name: Schema.Trim.pipe(
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(128)),
+  ),
 })
 
 export const StartPasskeyEnrollment = Schema.Struct({
-  name: Schema.Trim.pipe(Schema.minLength(1), Schema.maxLength(128)),
+  name: Schema.Trim.pipe(
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(128)),
+  ),
 })
 
 export const PasskeyEnrollmentOptions = Schema.Struct({
@@ -51,21 +59,20 @@ export const PasskeyEnrollmentOptions = Schema.Struct({
         Schema.Struct({ type: Schema.Literal("public-key"), alg: Schema.Int }),
       ),
     ),
-    timeout: Schema.optionalWith(Schema.Number, { exact: true }),
-    attestation: Schema.optionalWith(
-      Schema.Literal("none", "indirect", "direct", "enterprise"),
-      { exact: true },
+    timeout: Schema.optionalKey(Schema.Number),
+    attestation: Schema.optionalKey(
+      Schema.Literals(["none", "indirect", "direct", "enterprise"]),
     ),
-    excludeCredentials: Schema.optionalWith(
+    excludeCredentials: Schema.optionalKey(
       Schema.mutable(
         Schema.Array(
           Schema.Struct({
             id: Schema.NonEmptyString,
             type: Schema.Literal("public-key"),
-            transports: Schema.optionalWith(
+            transports: Schema.optionalKey(
               Schema.mutable(
                 Schema.Array(
-                  Schema.Literal(
+                  Schema.Literals([
                     "ble",
                     "cable",
                     "hybrid",
@@ -73,41 +80,32 @@ export const PasskeyEnrollmentOptions = Schema.Struct({
                     "nfc",
                     "smart-card",
                     "usb",
-                  ),
+                  ]),
                 ),
               ),
-              { exact: true },
             ),
           }),
         ),
       ),
-      { exact: true },
     ),
-    authenticatorSelection: Schema.optionalWith(
+    authenticatorSelection: Schema.optionalKey(
       Schema.Struct({
-        authenticatorAttachment: Schema.optionalWith(
-          Schema.Literal("platform", "cross-platform"),
-          { exact: true },
+        authenticatorAttachment: Schema.optionalKey(
+          Schema.Literals(["platform", "cross-platform"]),
         ),
-        residentKey: Schema.optionalWith(
-          Schema.Literal("required", "preferred", "discouraged"),
-          { exact: true },
+        residentKey: Schema.optionalKey(
+          Schema.Literals(["required", "preferred", "discouraged"]),
         ),
-        requireResidentKey: Schema.optionalWith(Schema.Boolean, {
-          exact: true,
-        }),
-        userVerification: Schema.optionalWith(
-          Schema.Literal("required", "preferred", "discouraged"),
-          { exact: true },
+        requireResidentKey: Schema.optionalKey(Schema.Boolean),
+        userVerification: Schema.optionalKey(
+          Schema.Literals(["required", "preferred", "discouraged"]),
         ),
       }),
-      { exact: true },
     ),
-    extensions: Schema.optionalWith(
+    extensions: Schema.optionalKey(
       Schema.Struct({
-        credProps: Schema.optionalWith(Schema.Boolean, { exact: true }),
+        credProps: Schema.optionalKey(Schema.Boolean),
       }),
-      { exact: true },
     ),
   }),
 })

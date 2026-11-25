@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type DateTime, type Effect, type Option } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import type { UserDetails } from "./user-details"
 
@@ -47,11 +47,60 @@ export interface ScheduledFlowData {
  * This ensures crash-safety: if the server crashes after committing but before
  * enqueuing, the job can retry and find the scheduled_flow row.
  */
-export class ScheduledFlowOperations extends Context.Tag(
-  "@pf/graphql-db-operations/ScheduledFlowOperations",
-)<
+export class ScheduledFlowOperations extends Context.Service<
   ScheduledFlowOperations,
   {
+    readonly insertTaskDeadline: (input: {
+      readonly ownerTodoId: string
+      readonly flowId: string
+      readonly name: string
+      readonly dueAt: DateTime.Utc
+      readonly interrupting: boolean
+    }) => Effect.Effect<string, SqlError, RequestTime | UserDetails>
+
+    readonly getTaskDeadline: (id: string) => Effect.Effect<
+      {
+        readonly ownerTodoId: string
+        readonly flowId: string
+        readonly dueAt: DateTime.Utc
+        readonly interrupting: boolean
+        readonly triggeredAt: DateTime.Utc | null
+        readonly disarmedAt: DateTime.Utc | null
+      } | null,
+      SqlError
+    >
+
+    /** Caller holds the transaction through downstream work creation. */
+    readonly claimTaskDeadline: (
+      id: string,
+      ownerTodoId: string,
+    ) => Effect.Effect<boolean, SqlError, RequestTime | UserDetails>
+
+    readonly disarmTaskDeadlines: (
+      ownerTodoId: string,
+    ) => Effect.Effect<void, SqlError, RequestTime | UserDetails>
+
+    /** Retire a claimed owner without recording a form completion. Caller holds its lock. */
+    readonly interruptTask: (
+      ownerTodoId: string,
+    ) => Effect.Effect<void, SqlError, RequestTime | UserDetails>
+
+    readonly hasTaskDeadlines: (
+      processExecutionId: string,
+    ) => Effect.Effect<boolean, SqlError>
+
+    /** Pending attachments whose durable handoffs must be delivered after restart. */
+    readonly queryPendingTaskDeadlines: (
+      processExecutionId: string,
+    ) => Effect.Effect<
+      Array<{
+        readonly id: string
+        readonly scheduledAt: DateTime.Utc
+        readonly withoutWaiting: boolean
+      }>,
+      SqlError
+    >
+
     /**
      * Insert a scheduled flow record.
      * Should be called inside a transaction before enqueueing a job.
@@ -147,4 +196,4 @@ export class ScheduledFlowOperations extends Context.Tag(
       scheduledFlowId: string,
     ) => Effect.Effect<boolean, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/ScheduledFlowOperations") {}

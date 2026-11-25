@@ -7,55 +7,52 @@ An **Organisation** in Process Focus represents your company, department, or tea
 
 ## The Organisation Hierarchy
 
-The top level organisation can contain organisational units. This
-allows you to model an organisation with departments, or a company
-with teams.
+Model the way your organisation is structured. Departments and teams are both
+organisational units. You can place them directly under the organisation or
+nest them to reflect how they fit together.
 
-Process Focus uses a hierarchical model to represent your organisation:
+### Departments
 
+If your organisation is divided into departments, place each department
+directly under the organisation. For example, a manufacturer might have
+Production, Sales, and Finance departments:
+
+```text
+Manufacturer
+├── Production
+├── Sales
+└── Finance
 ```
-Organisation
-├── Org Units
-│   ├── Sales Department
-│   ├── Engineering Team
-│   └── Finance Department
-├── Teams
-│   └── Members (Users)
-└── Roles
-    └── Permissions
+
+### Teams without departments
+
+If you have teams but no departments, place the teams directly under the
+organisation. For example, a design studio might have a Design team and a
+Client Services team:
+
+```text
+Design studio
+├── Design
+└── Client Services
 ```
 
-## Organisational Units (Org Units)
+### Teams within departments
 
-Org Units let you model the structure of your organisation. They are hierarchical containers that can represent:
+If a department is divided into teams, place each team under its department.
+For example, the manufacturer can split Production into Assembly and Quality
+Control while leaving Sales and Finance as they are:
 
-- **Departments** - Sales, Engineering, HR, Finance
-- **Teams** - Product Team A, Support Team B
-- **Divisions** - Regional offices, business units
-- **Projects** - Temporary structures for specific initiatives
-
-Each org unit can have its own:
-
-- Members and managers
-- Processes and workflows
-- Data visibility rules
-- Approval hierarchies
-
-> **Note:** For detailed information about creating and configuring org units, see the [Organisational Units](/docs/org-units) section.
-
-## Organisation Settings
-
-Organisation settings include:
-
-- **Display Name** - How the organisation appears in the UI
-- **Timezone** - Default timezone for dates and scheduling
-- **Default Language** - Language for generated forms and notifications
-- **Security Policies** - Password requirements, session timeouts
-- **Branding** - Custom colors and logos (Enterprise plans)
+```text
+Manufacturer
+├── Production
+│   ├── Assembly
+│   └── Quality Control
+├── Sales
+└── Finance
+```
 
 ## Best Practices
 
-- Align org units with your actual business structure
+- Align organisational units with your actual business structure
 - Use meaningful names that everyone understands
-- Define clear ownership and responsibilities per org unit
-- Regularly review and update the structure as your organisation evolves
+- Define clear ownership and responsibilities for each organisational unit

@@ -5,12 +5,12 @@ import {
   InvitationLifecycleStatus,
   InvitationSource,
   SettingsQueries,
-  issueRegistrationLinkForEmail,
 } from "@pf/graphql-db-operations"
+import { issueRegistrationLinkForEmail } from "@pf/identity-management"
 import {
   decryptRegistrationLinkToken,
   hashRegistrationLinkToken,
-} from "@pf/graphql-schema"
+} from "@pf/identity-management/credentials"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { DatabaseTest } from "@pf/service-drizzle-sqlite/test"
 import { SqliteSettingsQueriesLive } from "../src/lib/settings-queries.js"
@@ -114,10 +114,13 @@ describe("issueRegistrationLinkForEmail", () => {
           frontendOrigin,
           secret,
         }
-        const first = yield* issueRegistrationLinkForEmail({
-          ...input,
-          rotate: false,
-        })
+        const first = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            ...input,
+            rotate: false,
+          },
+        )
         expect(first.ok).toBe(true)
         const db = yield* TypedSqliteDrizzle
         yield* db
@@ -128,15 +131,21 @@ describe("issueRegistrationLinkForEmail", () => {
             }),
           })
           .where(eq(schema.invitation.id, invitation.id))
-        const rotated = yield* issueRegistrationLinkForEmail({
-          ...input,
-          rotate: true,
-        })
+        const rotated = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            ...input,
+            rotate: true,
+          },
+        )
         expect(rotated.ok).toBe(true)
         const settings = yield* SettingsQueries
         yield* settings.revokeRegistrationLink(invitation.id, "admin")
         expect(
-          (yield* issueRegistrationLinkForEmail({ ...input, rotate: true })).ok,
+          (yield* issueRegistrationLinkForEmail(yield* SettingsQueries, {
+            ...input,
+            rotate: true,
+          })).ok,
         ).toBe(false)
       }),
     )
@@ -150,14 +159,17 @@ describe("issueRegistrationLinkForEmail", () => {
         const { invitation } = yield* seedInvitation({ email })
         const settings = yield* SettingsQueries
 
-        const result = yield* issueRegistrationLinkForEmail({
-          email: `  ${email.toUpperCase()}  `,
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const result = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email: `  ${email.toUpperCase()}  `,
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
 
         expect(result.ok).toBe(true)
         if (!result.ok) {
@@ -210,14 +222,17 @@ describe("issueRegistrationLinkForEmail", () => {
         const { invitation } = yield* seedInvitation({ email })
         const settings = yield* SettingsQueries
 
-        const first = yield* issueRegistrationLinkForEmail({
-          email,
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const first = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email,
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
         expect(first.ok).toBe(true)
         if (!first.ok) {
           return
@@ -230,14 +245,17 @@ describe("issueRegistrationLinkForEmail", () => {
         const firstHash = firstLive?.tokenHash
         expect(firstHash).toBeDefined()
 
-        const rotated = yield* issueRegistrationLinkForEmail({
-          email,
-          rotate: true,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const rotated = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email,
+            rotate: true,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
         expect(rotated.ok).toBe(true)
         if (!rotated.ok) {
           return
@@ -264,14 +282,17 @@ describe("issueRegistrationLinkForEmail", () => {
           status: InvitationLifecycleStatus.Accepted,
         })
 
-        const result = yield* issueRegistrationLinkForEmail({
-          email: "accepted@example.com",
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const result = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email: "accepted@example.com",
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
 
         expect(result.ok).toBe(false)
         if (result.ok) {
@@ -285,14 +306,17 @@ describe("issueRegistrationLinkForEmail", () => {
   it("fails for a missing email", async () => {
     await run(
       Effect.gen(function* () {
-        const result = yield* issueRegistrationLinkForEmail({
-          email: "missing@example.com",
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const result = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email: "missing@example.com",
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
 
         expect(result.ok).toBe(false)
         if (result.ok) {
@@ -311,14 +335,17 @@ describe("issueRegistrationLinkForEmail", () => {
           withPasskey: false,
         })
 
-        const result = yield* issueRegistrationLinkForEmail({
-          email: "nopasskey@example.com",
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const result = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email: "nopasskey@example.com",
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
 
         expect(result.ok).toBe(false)
         if (result.ok) {
@@ -334,24 +361,30 @@ describe("issueRegistrationLinkForEmail", () => {
       Effect.gen(function* () {
         yield* seedInvitation({ email: "already-active@example.com" })
 
-        const first = yield* issueRegistrationLinkForEmail({
-          email: "already-active@example.com",
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const first = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email: "already-active@example.com",
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
         expect(first.ok).toBe(true)
 
-        const second = yield* issueRegistrationLinkForEmail({
-          email: "already-active@example.com",
-          rotate: false,
-          actor: "console-admin@example.com",
-          organisationScope,
-          frontendOrigin,
-          secret,
-        })
+        const second = yield* issueRegistrationLinkForEmail(
+          yield* SettingsQueries,
+          {
+            email: "already-active@example.com",
+            rotate: false,
+            actor: "console-admin@example.com",
+            organisationScope,
+            frontendOrigin,
+            secret,
+          },
+        )
         expect(second.ok).toBe(false)
         if (second.ok) {
           return

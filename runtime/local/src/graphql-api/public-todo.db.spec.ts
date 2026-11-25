@@ -1,18 +1,45 @@
 import { randomUUID } from "node:crypto"
-import * as Otel from "@effect/opentelemetry"
-import { FileSystem } from "@effect/platform"
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
-import { EnqueueError, QueueService } from "@processfocus/runtime"
-import { DateTime, Schema as ES, Effect, Either, FiberRef, Layer } from "effect"
-import type { AuthorizationService } from "@pf/auth-policy"
-import { EmailField } from "@pf/form-schema"
+import {
+  type EmailMessage,
+  EmailSender,
+  EnqueueError,
+  NotificationDeliveryConfig,
+  QueueService,
+} from "@processfocus/runtime"
+import {
+  DateTime,
+  Schema as ES,
+  Effect,
+  FileSystem,
+  Layer,
+  Result,
+} from "effect"
+import {
+  LocalCedarAuthorizationLive,
+  LocalCedarConfig,
+  LocalCedarConfigDefault,
+} from "@pf/auth-local-cedar"
+import {
+  AuthorizationService,
+  GraphQLField,
+  ProviderUserPrincipal,
+} from "@pf/auth-policy"
+import {
+  BooleanField,
+  CurrentProviderUser,
+  EmailField,
+  ProviderUserField,
+  TextField,
+  TextFieldFrom,
+} from "@pf/form-schema"
+import { withFormRules } from "@pf/form-submission-schema"
 import {
   type BusinessMetricDimensionInput,
   type UserContext,
-  completeStep,
   makeBusinessMetricDimensionsLayer,
-  startProcess,
   systemSchema,
 } from "@pf/graphql-api"
 import {
@@ -20,26 +47,18 @@ import {
   type ProcessExecutionOperations,
   StepCompletionOperations,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import {
-  PUBLIC_TODO_TOKEN_AUDIENCE,
-  encryptPublicTodoToken,
-} from "@pf/graphql-schema"
-import {
   EXECUTION_EVENT_QUEUE,
-  type EmailMessage,
-  EmailSender,
   NOTIFICATION_DELIVERY_QUEUE,
-  NotificationDeliveryConfig,
   type NotificationDeliveryPayload,
   PROCESS_EVENT_QUEUE,
   TODO_EVENT_QUEUE,
-  applyPublicCompletionDeliveryCallback,
   notificationDeliveryHandler,
 } from "@pf/job-handler"
 import {
   Form,
+  FormSubmissionError,
   NodeStep,
   OrgUnit,
   Organisation,
@@ -48,6 +67,16 @@ import {
   Role,
   normalizePath,
 } from "@pf/process"
+import { applyPublicCompletionDeliveryCallback } from "@pf/process-execution/worker"
+import {
+  PUBLIC_TODO_TOKEN_AUDIENCE,
+  encryptPublicTodoToken,
+} from "@pf/public-completion/credentials"
+import { executionIdentity } from "../../../../packages/graphql-api/src/lib/execution-adapter"
+import {
+  completeStep,
+  startProcess,
+} from "../../../../packages/process-execution/src/lib/process-operations"
 import {
   businessMetricsOtlpUrl,
   businessMetricsPrometheusUrl,
@@ -101,7 +130,7 @@ afterAll(() => {
 })
 
 const makeContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: { by: "frontend", id: null } as UserContext["_userDetails"],
   jwt: undefined,
   userId: "frontend",
@@ -110,9 +139,7 @@ const makeContext = (): UserContext => ({
 const makePublicTodoAuthorizationLayer = () =>
   makeAuthorizationLayer({
     canCompleteStep: () => Effect.succeed(true),
-    canCompleteTodo: () => Effect.succeed(true),
     canCorrectPublicCompletionTodo: () => Effect.succeed(true),
-    canCompletePublicTodo: () => Effect.succeed(true),
   })
 
 const makePublicTodoOrganisation = (
@@ -138,7 +165,56 @@ const makePublicTodoOrganisation = (
   const startFlow = process.start(start)
   const complete = new Form(startFlow, "Complete", {
     role: employee,
-    form: () => ({ comment: ES.String }),
+    form: withFormRules(
+      ES.Struct({
+        comment: TextFieldFrom(ES.Trim.check(ES.isMinLength(1)), {
+          label: "Comment",
+        }),
+        details: ES.optional(TextField()),
+        showDetails: ES.optional(BooleanField()),
+        fixed: ES.optional(TextField()),
+        staff: ES.optional(TextField({ permission: { modify: employee } })),
+        requestedFor: ES.optional(
+          ProviderUserField({ default: CurrentProviderUser }),
+        ),
+      }),
+      (values) => ({
+        details: {
+          hidden: values.showDetails !== true,
+          required: values.showDetails === true,
+        },
+        fixed: { disabled: true },
+      }),
+    ),
+    browser: { entrypoint: "public-form.ts", exportName: "publicForm" },
+    bindings: (state: Record<string, unknown>) => ({
+      comment: { label: `Comment for ${state["child"] ?? "recipient"}` },
+      fixed: { default: "authoritative" },
+      staff: { default: "protected" },
+    }),
+    onSubmit: (input) =>
+      Effect.gen(function* () {
+        // An actual database read determines this server-only rejection.
+        const operations = yield* StepCompletionOperations
+        if (input.comment.startsWith("todo:")) {
+          const todo = yield* operations
+            .queryTodoById(input.comment.slice(5))
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new FormSubmissionError({
+                    field: "comment",
+                    message: "Could not check Todo",
+                  }),
+              ),
+            )
+          if (todo)
+            return yield* new FormSubmissionError({
+              field: "comment",
+              message: "This Todo already exists",
+            })
+        }
+      }),
     publicCompletion: {
       recipient: (state: Record<string, unknown>) => ({
         email:
@@ -147,7 +223,7 @@ const makePublicTodoOrganisation = (
             : "fresh@example.com",
         displayName: "Fresh Recipient",
       }),
-      expiresAt: () => DateTime.unsafeMake("2026-04-07T10:00:00.000Z"),
+      expiresAt: () => DateTime.makeUnsafe("2026-04-07T10:00:00.000Z"),
       formTitle: "Complete your public task",
       formDescription: "Fill in the details and submit this form.",
       thankYou: stringThankYou
@@ -216,10 +292,7 @@ const makePublicTodoLayer = <R>(
       orgPath: "/tmp/org",
       schemaPath: "/tmp/org.graphql",
     }),
-    Layer.succeed(
-      UserDetails,
-      FiberRef.unsafeMake<UserDetailsValue>({ by: "frontend", id: null }),
-    ),
+    Layer.succeed(UserDetails, { by: "frontend", id: null }),
   )
 
 type PublicTodoRequirements<R> =
@@ -256,6 +329,7 @@ const runPublicTodoEffect = <R, A, E, RExtra = never>(
 const completePublicTodoEffect = (
   token: string,
   input: Record<string, unknown>,
+  context: UserContext = makeContext(),
 ) =>
   Effect.gen(function* () {
     const schema = yield* systemSchema
@@ -267,7 +341,7 @@ const completePublicTodoEffect = (
       context: UserContext,
     ) => Effect.Effect<Record<string, unknown>, unknown>
 
-    return yield* resolver(undefined, { token, input }, makeContext())
+    return yield* resolver(undefined, { token, input }, context)
   })
 
 const queryPublicCompletionCorrectionEffect = (todoId: string) =>
@@ -377,6 +451,204 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(enqueuedJobs).not.toEqual([])
     })
 
+    it("enforces executable public rules, restricted fields and backend checks before persistence", async () => {
+      const seed = makePublicTodoOrganisation(
+        `${db.name}-shared-${uniqueSuffix()}`,
+      )
+      await runPublicTodoEffect(
+        db,
+        [],
+        seed.org,
+        Effect.gen(function* () {
+          const active = yield* seedActiveTodo(db, {
+            organisation: seed.org,
+            orgUnitPath: seed.orgUnitPath,
+            rolePath: seed.rolePath,
+            processPath: seed.processPath,
+            startStepPath: seed.startStepPath,
+            todoStepPath: seed.todoStepPath,
+            state: { child: "Alex" },
+          })
+          const token = yield* makeToken(active.todoId, "parent@example.com")
+          const existing = yield* seedActiveTodo(db, {
+            organisation: seed.org,
+            orgUnitPath: seed.orgUnitPath,
+            rolePath: seed.rolePath,
+            processPath: seed.processPath,
+            startStepPath: seed.startStepPath,
+            todoStepPath: seed.todoStepPath,
+          })
+          const schema = yield* systemSchema
+          const query = schema.resolvers?.Query?.["publicTodo"] as unknown as (
+            parent: unknown,
+            args: { token: string },
+            context: UserContext,
+          ) => Effect.Effect<{ formMetadata: Record<string, unknown> }, unknown>
+          const metadata = (yield* query(undefined, { token }, makeContext()))
+            .formMetadata
+          expect(metadata["defaultValues"]).not.toHaveProperty("staff")
+          expect(metadata["requestData"]).toMatchObject({
+            inaccessible: ["staff"],
+            presentation: { comment: { label: "Comment for Alex" } },
+          })
+          expect(JSON.stringify(metadata)).not.toContain("protected")
+          for (const input of [
+            { comment: "   " },
+            { comment: "ok", showDetails: true },
+            { comment: "ok", staff: "forged" },
+            { comment: `todo:${existing.todoId}` },
+          ]) {
+            const rejected = yield* completePublicTodoEffect(token, input).pipe(
+              Effect.result,
+            )
+            expect(Result.isFailure(rejected)).toBe(true)
+            expect((yield* db.getTodoById(active.todoId))?.deleted).toBe(false)
+          }
+          yield* completePublicTodoEffect(token, {
+            comment: "  Finished  ",
+            details: "hidden draft",
+            fixed: "forged disabled value",
+          })
+          const persisted = yield* db.getProcessStateByExecutionId(
+            active.executionId,
+          )
+          expect(persisted?.state).toMatchObject({
+            comment: "Finished",
+            fixed: "authoritative",
+          })
+          expect(persisted?.state).not.toHaveProperty("details")
+          expect(persisted?.state).not.toHaveProperty("requestedFor")
+          expect(
+            (yield* db.getTodoById(active.todoId))
+              ?.completedByExternalParticipantId,
+          ).not.toBeNull()
+        }),
+      )
+    })
+
+    it("preserves Step ancestry, provider field permissions and external attribution on public submission", async () => {
+      const seed = makePublicTodoOrganisation(
+        `${db.name}-provider-${uniqueSuffix()}`,
+      )
+      const email = "employee@example.com"
+      const properties = {
+        userId: email,
+        email,
+        roles: [seed.rolePath],
+        orgUnitPath: seed.orgUnitPath,
+        orgUnitId: seed.orgUnitPath,
+      }
+      const context: UserContext = {
+        ...makeContext(),
+        userId: email,
+        _userDetails: { by: email, id: email },
+        jwt: {
+          mode: "access",
+          type: "user",
+          properties,
+          aud: "graphql-api",
+          iss: "test",
+          sub: email,
+          exp: 0,
+          iat: 0,
+        },
+      }
+      await runPublicTodoEffect(
+        db,
+        [],
+        seed.org,
+        Effect.gen(function* () {
+          const active = yield* seedActiveTodo(db, {
+            organisation: seed.org,
+            orgUnitPath: seed.orgUnitPath,
+            rolePath: seed.rolePath,
+            processPath: seed.processPath,
+            startStepPath: seed.startStepPath,
+            todoStepPath: seed.todoStepPath,
+          })
+          const auth = yield* AuthorizationService
+          const principal = new ProviderUserPrincipal(email, properties)
+          expect(
+            yield* auth.canAccessField(
+              principal,
+              new GraphQLField("Query.publicTodo"),
+              "query",
+            ),
+          ).toBe(true)
+          expect(
+            yield* auth.canAccessField(
+              principal,
+              new GraphQLField("Mutation.completePublicTodo"),
+              "mutation",
+            ),
+          ).toBe(true)
+          const token = yield* makeToken(active.todoId, "parent@example.com")
+          const schema = yield* systemSchema
+          const query = schema.resolvers?.Query?.["publicTodo"] as unknown as (
+            parent: unknown,
+            args: { token: string },
+            context: UserContext,
+          ) => Effect.Effect<{ formMetadata: Record<string, unknown> }, unknown>
+          const metadata = (yield* query(undefined, { token }, context))
+            .formMetadata
+          expect(metadata["defaultValues"]).toMatchObject({
+            staff: "protected",
+            requestedFor: email,
+          })
+          expect(metadata["requestData"]).toMatchObject({ inaccessible: [] })
+          const result = yield* completePublicTodoEffect(
+            token,
+            { comment: "Done", staff: "Approved" },
+            context,
+          )
+          expect(result["status"]).toBe("COMPLETED")
+          const persisted = yield* db.getProcessStateByExecutionId(
+            active.executionId,
+          )
+          expect(persisted?.state).toMatchObject({
+            staff: "Approved",
+            requestedFor: email,
+          })
+          expect(persisted?.state).not.toHaveProperty("_completionIdentity")
+          const todo = yield* db.getTodoById(active.todoId)
+          expect(todo?.deleted).toBe(true)
+          expect(todo?.completedByExternalParticipantId).toBe(
+            (yield* db.getExternalParticipantIdsByEmail(
+              "parent@example.com",
+            ))[0],
+          )
+        }).pipe(
+          Effect.provideService(UserDetails, context._userDetails),
+          Effect.provide(
+            LocalCedarAuthorizationLive.pipe(
+              Layer.provide(
+                Layer.effect(
+                  LocalCedarConfig,
+                  Effect.gen(function* () {
+                    const defaults = yield* LocalCedarConfig
+                    return {
+                      ...defaults,
+                      policiesText: [
+                        ...defaults.policiesText,
+                        `forbid (
+                          principal is PF::PublicLink,
+                          action == PF::Action::"complete",
+                          resource
+                        ) unless {
+                          resource in PF::Process::"${seed.processPath}" &&
+                          resource in PF::OrgUnit::"${seed.orgUnitPath}"
+                        };`,
+                      ],
+                    }
+                  }),
+                ).pipe(Layer.provide(LocalCedarConfigDefault())),
+              ),
+            ),
+          ),
+        ),
+      )
+    })
+
     it("recovers external enqueue when a completed public todo is submitted again", async () => {
       const enqueuedJobs: EnqueuedJob[] = []
       const seed = makePublicTodoOrganisation(
@@ -406,7 +678,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                   message: "Simulated post-commit enqueue failure",
                 }),
               ),
-          } as unknown as QueueService["Type"]
+          } as unknown as QueueService["Service"]
 
           const firstError = yield* completePublicTodoEffect(token, {
             comment: "Done",
@@ -643,8 +915,8 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             (message) => message.to === "wrong@example.com",
           )
           if (initialMessage === undefined) {
-            return yield* Effect.dieMessage(
-              "Expected email sender to capture initial invitation",
+            return yield* Effect.die(
+              new Error("Expected email sender to capture initial invitation"),
             )
           }
 
@@ -684,8 +956,8 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                 typeof payload.publicTodo.token === "string",
             )
           if (freshPayload === undefined) {
-            return yield* Effect.dieMessage(
-              "Expected corrected public completion invitation job",
+            return yield* Effect.die(
+              new Error("Expected corrected public completion invitation job"),
             )
           }
 
@@ -696,12 +968,21 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           const freshAttemptId =
             freshPayload.publicTodo.publicCompletionInvitationAttemptId
           if (freshAttemptId === undefined) {
-            return yield* Effect.dieMessage(
-              "Expected corrected invitation attempt id",
+            return yield* Effect.die(
+              new Error("Expected corrected invitation attempt id"),
             )
           }
           const correctedMessage = deliveredMessages.find(
             (message) => message.to === "fixed@example.com",
+          )
+          const invitationUrl = correctedMessage?.html?.match(
+            /href="([^"]*\/public\/form\/[^"/]+)"/,
+          )?.[1]
+          if (invitationUrl === undefined) {
+            throw new Error("Expected Public Form link in delivered invitation")
+          }
+          const deliveredToken = decodeURIComponent(
+            new URL(invitationUrl).pathname.slice("/public/form/".length),
           )
           const afterCorrectionTodo = yield* db.getTodoById(activeTodo.todoId)
           const oldLinkResult = yield* completePublicTodoEffect(oldToken, {
@@ -709,7 +990,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           })
           const afterOldLink = yield* db.getTodoById(activeTodo.todoId)
           const newLinkResult = yield* completePublicTodoEffect(
-            freshPayload.publicTodo.token,
+            deliveredToken,
             { comment: "Done" },
           )
           const afterNewLink = yield* db.getTodoById(activeTodo.todoId)
@@ -948,7 +1229,7 @@ externalMetricsIt(
       ),
       exportIntervalMillis: 60_000,
     })
-    const telemetry = Otel.NodeSdk.layer(() => ({
+    const telemetry = NodeSdk.layer(() => ({
       resource: { serviceName: "external-action-integration" },
       metricReader: reader,
     }))
@@ -1025,14 +1306,14 @@ externalMetricsIt(
                   { email },
                   form.submissionEffectSchema,
                   form,
-                  makeContext(),
+                  executionIdentity(makeContext()),
                   { executionId },
                 )
               expect(
-                Either.isLeft(yield* submit("invalid").pipe(Effect.either)),
+                Result.isFailure(yield* submit("invalid").pipe(Effect.result)),
               ).toBe(true)
               const queue = yield* QueueService
-              const failingQueue: QueueService["Type"] = {
+              const failingQueue: QueueService["Service"] = {
                 ...queue,
                 enqueue: (name) =>
                   Effect.fail(
@@ -1043,10 +1324,10 @@ externalMetricsIt(
                   ),
               }
               expect(
-                Either.isLeft(
+                Result.isFailure(
                   yield* submit("parent@example.com").pipe(
                     Effect.provideService(QueueService, failingQueue),
-                    Effect.either,
+                    Effect.result,
                   ),
                 ),
               ).toBe(true)
@@ -1058,26 +1339,26 @@ externalMetricsIt(
 
               const token = yield* makeToken(todo.todoId, "parent@example.com")
               expect(
-                Either.isLeft(
+                Result.isFailure(
                   yield* completePublicTodoEffect("invalid-token", {
                     comment: "Done",
-                  }).pipe(Effect.either),
+                  }).pipe(Effect.result),
                 ),
               ).toBe(true)
               expect(
-                Either.isLeft(
+                Result.isFailure(
                   yield* completePublicTodoEffect(token, { comment: 123 }).pipe(
-                    Effect.either,
+                    Effect.result,
                   ),
                 ),
               ).toBe(true)
               expect(
-                Either.isLeft(
+                Result.isFailure(
                   yield* completePublicTodoEffect(token, {
                     comment: "Done",
                   }).pipe(
                     Effect.provideService(QueueService, failingQueue),
-                    Effect.either,
+                    Effect.result,
                   ),
                 ),
               ).toBe(true)
@@ -1097,7 +1378,7 @@ externalMetricsIt(
               const legacyToken = yield* makeToken(legacy.todoId)
               // Commit succeeds; external dispatch fails. The replay recovers dispatch only.
               expect(
-                Either.isLeft(
+                Result.isFailure(
                   yield* completePublicTodoEffect(legacyToken, {
                     comment: "Done",
                   }).pipe(
@@ -1105,7 +1386,7 @@ externalMetricsIt(
                       ...failingQueue,
                       queueInTransaction: false,
                     }),
-                    Effect.either,
+                    Effect.result,
                   ),
                 ),
               ).toBe(true)
@@ -1133,7 +1414,7 @@ externalMetricsIt(
                 { comment: "Staff completion" },
                 seed.form,
                 seed.form.submissionEffectSchema,
-                makeContext(),
+                executionIdentity(makeContext()),
               )
             }).pipe(
               Effect.provide(

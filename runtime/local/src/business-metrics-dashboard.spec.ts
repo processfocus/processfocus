@@ -31,7 +31,7 @@ const readDashboard = async () => {
   return {
     contents,
     contract: await Schema.decodeUnknownPromise(
-      Schema.parseJson(DashboardContract),
+      Schema.fromJsonString(DashboardContract),
     )(contents),
   }
 }

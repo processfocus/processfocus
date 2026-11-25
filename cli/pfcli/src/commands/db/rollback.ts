@@ -1,5 +1,6 @@
 import { Console, Effect } from "effect"
 import { CliError } from "../../errors"
+import { acquireAccessToken } from "../../utils/credentials"
 import {
   buildExecutionEventSource,
   closeExecutionEventSource,
@@ -81,7 +82,7 @@ export const runRollbackDb = (
       Effect.gen(function* () {
         const rollbackResult = yield* graphqlRequest<StartRollbackDbResponse>(
           endpoint,
-          credentials.accessToken,
+          acquireAccessToken(credentials),
           START_ROLLBACK_DB_MUTATION,
           {
             projectId,
@@ -107,7 +108,7 @@ export const runRollbackDb = (
     const subscriptionTransport =
       yield* graphqlRequest<SubscriptionTransportResponse>(
         endpoint,
-        credentials.accessToken,
+        acquireAccessToken(credentials),
         SUBSCRIPTION_TRANSPORT_QUERY,
         {},
       )

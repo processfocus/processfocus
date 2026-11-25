@@ -1,5 +1,5 @@
 import type { Effect, Schema } from "effect"
-import type { LookupItem } from "@pf/form-schema"
+import type { LookupFieldMetadata, LookupItem } from "@pf/form-schema"
 
 /**
  * Input for independent lookup queries — just filter.
@@ -36,6 +36,10 @@ export interface LookupOverride {
  * Storage interface so accessors can write back without depending on Form.
  */
 export interface LookupOverrideStore {
+  _setLookupResolver(
+    fieldName: string,
+    resolve: NonNullable<LookupFieldMetadata["resolve"]>,
+  ): void
   _setLookupOverride(fieldName: string, override: LookupOverride): void
 }
 
@@ -69,6 +73,11 @@ export class LookupAccessor<
     this._store._setLookupOverride(this.fieldName, {
       query: query as LookupOverride["query"],
     })
+  }
+
+  /** Server-owned eligibility and label lookup, independent of search mode. */
+  setResolver(resolve: NonNullable<LookupFieldMetadata["resolve"]>): void {
+    this._store._setLookupResolver(this.fieldName, resolve)
   }
 
   /**

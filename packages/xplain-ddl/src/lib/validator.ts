@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import type {
   AssertConstraintNode,
   AttributeNode,
@@ -17,13 +17,10 @@ export const validateSemantics = (
     const baseMap = buildBaseMap(program.bases)
     const typeMap = buildTypeMap(program.types)
 
-    // Check for duplicate bases
     const baseDuplicateErrors = checkDuplicateBases(program.bases)
 
-    // Check for duplicate types
     const typeDuplicateErrors = checkDuplicateTypes(program.types)
 
-    // Check for cycles in type references
     const cycleErrors = checkTypeCycles(program.types, typeMap)
 
     // Check for orphaned extends
@@ -98,14 +95,11 @@ export const validateSemantics = (
     const allValidations = [...typeValidations]
 
     if (allValidations.length > 0) {
-      yield* Effect.all(allValidations, {
+      yield* Effect.validate(allValidations, (effect) => effect, {
         concurrency: "unbounded",
-        mode: "validate",
       }).pipe(
-        Effect.catchAll((errorOptions) => {
-          const validationErrors = errorOptions.flatMap((option) =>
-            Option.getOrElse(option, () => []),
-          )
+        Effect.catch((errorOptions) => {
+          const validationErrors = errorOptions.flat()
           return Effect.fail([...initialErrors, ...validationErrors])
         }),
       )
@@ -305,22 +299,18 @@ const validateType = (
       return yield* Effect.fail(errors)
     }
 
-    // Validate attributes
     const attrValidations = type.attributes.map((attr) =>
       validateAttribute(attr, type, baseMap, typeMap),
     )
 
-    // Validate indexes
     const indexValidations = [...type.indexes, ...type.uniqueIndexes].map(
       (index) => validateIndex(index, type),
     )
 
-    // Validate extends
     const extendValidations = type.extends.map((extend) =>
       validateExtend(extend, type, typeMap),
     )
 
-    // Validate static assert constraints
     const assertValidations = type.asserts.map((assertion) =>
       validateAssertConstraint(assertion, type),
     )
@@ -330,22 +320,22 @@ const validateType = (
     const assertNameErrors = checkDuplicateAssertConstraints(type)
 
     // Run all validations in parallel and collect all errors
-    yield* Effect.all(
+    yield* Effect.validate(
       [
         ...attrValidations,
         ...indexValidations,
         ...extendValidations,
         ...assertValidations,
       ],
+      (effect) => effect,
       {
         concurrency: "unbounded",
-        mode: "validate",
       },
     ).pipe(
       Effect.mapError((errorOptions) => [
         ...virtualAttrErrors,
         ...assertNameErrors,
-        ...errorOptions.flatMap((option) => Option.getOrElse(option, () => [])),
+        ...errorOptions.flat(),
       ]),
     )
 
@@ -442,14 +432,11 @@ const validateAttribute = (
     }
 
     if (expressionValidations.length > 0) {
-      yield* Effect.all(expressionValidations, {
+      yield* Effect.validate(expressionValidations, (effect) => effect, {
         concurrency: "unbounded",
-        mode: "validate",
       }).pipe(
-        Effect.catchAll((errorOptions) => {
-          const exprErrors = errorOptions.flatMap((option) =>
-            Option.getOrElse(option, () => []),
-          )
+        Effect.catch((errorOptions) => {
+          const exprErrors = errorOptions.flat()
           errors.push(...exprErrors)
           return Effect.void
         }),
@@ -588,20 +575,18 @@ const validateExpression = (
 
       case "binary_op": {
         // Validate left and right expressions in parallel
-        yield* Effect.all(
+        yield* Effect.validate(
           [
             validateExpression(expr.left, type, typeMap),
             validateExpression(expr.right, type, typeMap),
           ],
+          (effect) => effect,
           {
             concurrency: "unbounded",
-            mode: "validate",
           },
         ).pipe(
-          Effect.catchAll((errorOptions) => {
-            const binaryErrors = errorOptions.flatMap((option) =>
-              Option.getOrElse(option, () => []),
-            )
+          Effect.catch((errorOptions) => {
+            const binaryErrors = errorOptions.flat()
             errors.push(...binaryErrors)
             return Effect.void
           }),
@@ -611,21 +596,19 @@ const validateExpression = (
 
       case "conditional": {
         // Validate condition, then, and else expressions in parallel
-        yield* Effect.all(
+        yield* Effect.validate(
           [
             validateExpression(expr.condition, type, typeMap),
             validateExpression(expr.thenExpr, type, typeMap),
             validateExpression(expr.elseExpr, type, typeMap),
           ],
+          (effect) => effect,
           {
             concurrency: "unbounded",
-            mode: "validate",
           },
         ).pipe(
-          Effect.catchAll((errorOptions) => {
-            const condErrors = errorOptions.flatMap((option) =>
-              Option.getOrElse(option, () => []),
-            )
+          Effect.catch((errorOptions) => {
+            const condErrors = errorOptions.flat()
             errors.push(...condErrors)
             return Effect.void
           }),
@@ -740,14 +723,11 @@ const validateExpression = (
         }
 
         if (validationEffects.length > 0) {
-          yield* Effect.all(validationEffects, {
+          yield* Effect.validate(validationEffects, (effect) => effect, {
             concurrency: "unbounded",
-            mode: "validate",
           }).pipe(
-            Effect.catchAll((errorOptions) => {
-              const retrievalErrors = errorOptions.flatMap((option) =>
-                Option.getOrElse(option, () => []),
-              )
+            Effect.catch((errorOptions) => {
+              const retrievalErrors = errorOptions.flat()
               errors.push(...retrievalErrors)
               return Effect.void
             }),
@@ -807,9 +787,8 @@ const validateExtend = (
       }
     }
 
-    // Validate expression
     yield* validateExpression(extend.expression, type, typeMap).pipe(
-      Effect.catchAll((exprErrors) => {
+      Effect.catch((exprErrors) => {
         errors.push(...exprErrors)
         return Effect.void
       }),

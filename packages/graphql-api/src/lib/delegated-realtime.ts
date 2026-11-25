@@ -6,9 +6,10 @@ import { hasDelegation, isProviderUserSession } from "./session-guards"
 import type { UserContext } from "./types"
 
 /** Opt in only at the local runtime, alongside DelegationSessionService. */
-export class LocalDelegatedRealtime extends Context.Tag(
-  "@pf/graphql-api/LocalDelegatedRealtime",
-)<LocalDelegatedRealtime, { readonly transport: "local" }>() {
+export class LocalDelegatedRealtime extends Context.Service<
+  LocalDelegatedRealtime,
+  { readonly transport: "local" }
+>()("@pf/graphql-api/LocalDelegatedRealtime") {
   static readonly layer = Layer.succeed(LocalDelegatedRealtime, {
     transport: "local",
   })
@@ -48,6 +49,14 @@ export const refreshRealtimeContext = (
 ): Effect.Effect<UserContext, GraphQLError> =>
   Effect.gen(function* () {
     const now = yield* DateTime.now
+    if (
+      context.jwt?.properties.workload ||
+      (isProviderUserSession(context.jwt?.properties) &&
+        context.jwt.properties.sso)
+    ) {
+      const jwt = yield* acceptVerifiedGraphqlJwt(context.jwt)
+      return { ...context, jwt, _requestTime: now }
+    }
     if (!hasDelegation(context.jwt?.properties)) {
       return { ...context, _requestTime: now }
     }
@@ -81,7 +90,7 @@ export const refreshRealtimeContext = (
     }
   }).pipe(
     Effect.timeout("10 seconds"),
-    Effect.catchAllCause(() => Effect.fail(invalid())),
+    Effect.catchCause(() => Effect.fail(invalid())),
   )
 
 /** Internal source event: filtering is deferred until the fresh delivery context. */
@@ -115,13 +124,22 @@ export const guardRealtimeStream = <A, B>(
   const iterator = source[Symbol.asyncIterator]()
   const props = options.context.jwt?.properties
   const delegated = hasDelegation(props)
-  const deadline =
-    delegated && isProviderUserSession(props) && props.delegation
+  const deadline = props?.workload
+    ? Math.min(
+        options.context.jwt?.exp ? options.context.jwt.exp * 1000 : 0,
+        props.workload.expiresAt,
+      )
+    : delegated && isProviderUserSession(props) && props.delegation
       ? Math.min(
           options.context.jwt?.exp ? options.context.jwt.exp * 1000 : 0,
           props.delegation.expiresAt,
         )
-      : Number.POSITIVE_INFINITY
+      : isProviderUserSession(props) && props.sso
+        ? Math.min(
+            options.context.jwt?.exp ? options.context.jwt.exp * 1000 : 0,
+            props.sso.expiresAt,
+          )
+        : Number.POSITIVE_INFINITY
   let closed = false
   let failure: unknown
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -157,12 +175,16 @@ export const guardRealtimeStream = <A, B>(
       .catch(() => {})
   }
   const assertDeadline = () => {
-    if (DateTime.toEpochMillis(DateTime.unsafeNow()) >= deadline)
+    if (DateTime.toEpochMillis(DateTime.nowUnsafe()) >= deadline)
       throw invalid()
   }
   const check = async () => {
     assertDeadline()
-    const context = await wait(options.refresh(abort.signal))
+    const context = await wait(
+      options.refresh(abort.signal).catch(() => {
+        throw new GraphQLError("Subscription authorization or delivery failed")
+      }),
+    )
     assertDeadline()
     return context
   }
@@ -177,10 +199,10 @@ export const guardRealtimeStream = <A, B>(
         .finally(() => clearTimeout(timeout))
     }, idleRecheckMs)
   }
-  if (delegated) {
+  if (Number.isFinite(deadline)) {
     deadlineTimer = setTimeout(
       () => close(invalid()),
-      Math.max(0, deadline - DateTime.toEpochMillis(DateTime.unsafeNow())),
+      Math.max(0, deadline - DateTime.toEpochMillis(DateTime.nowUnsafe())),
     )
     schedule()
   }

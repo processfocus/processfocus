@@ -1,3 +1,4 @@
+import { DateTimeDisplay } from "@pf/shadcn-components/date-time-display"
 import { useMocks } from "./mocks-provider"
 import type { Execution, SlaBucket, TrendPoint } from "@/lib/mock-data"
 import { cn } from "@/lib/utils"
@@ -440,20 +441,6 @@ function RoleLoadCard({
   )
 }
 
-function formatRelativeTime(isoString: string | null | undefined): string {
-  if (!isoString) return "—"
-  const date = new Date(isoString)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-  if (diffDays === 0) return "Today"
-  if (diffDays === 1) return "Yesterday"
-  if (diffDays < 7) return `${diffDays} days ago`
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
-  return date.toLocaleDateString()
-}
-
 function formatLiveCycleTime(durationMs: number | null | undefined): string {
   if (
     durationMs === null ||
@@ -580,7 +567,14 @@ function LiveRecentExecutionsTable({
                   </td>
                   <td className="rounded-r-xl px-3 py-3">
                     <div className="text-sm text-slate-600 dark:text-slate-300">
-                      {formatRelativeTime(exec.finishedAt)}
+                      {exec.finishedAt ? (
+                        <DateTimeDisplay
+                          kind="timestamp"
+                          value={exec.finishedAt}
+                        />
+                      ) : (
+                        "Not finished"
+                      )}
                     </div>
                   </td>
                 </tr>

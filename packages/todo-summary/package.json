@@ -14,10 +14,9 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
     "@pf/graphql-db-operations": "workspace:*",
     "@pf/process": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

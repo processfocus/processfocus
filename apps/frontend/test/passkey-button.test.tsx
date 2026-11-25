@@ -13,6 +13,7 @@ mock.module("@simplewebauthn/browser", () => ({
 }))
 
 const { PasskeyButton } = await import("../app/login/passkey-button")
+const { authenticateWithPasskey } = await import("../lib/auth/verify-passkey")
 const originalGlobals = {
   document: globalThis.document,
   fetch: globalThis.fetch,
@@ -88,6 +89,76 @@ describe("PasskeyButton", () => {
     )
     expect(startAuthentication).toHaveBeenCalledTimes(1)
     expect(container.querySelector('input[type="email"]')).toBeNull()
+  })
+
+  test("offers useful guidance when passkey verification fails", async () => {
+    const responses = [
+      Response.json({}),
+      Response.json({ challengeId: "challenge", options: {} }),
+      Response.json({ error: "Invalid credentials" }, { status: 401 }),
+    ]
+    globalThis.fetch = mock(() =>
+      Promise.resolve(responses.shift() ?? Response.json({})),
+    ) as typeof fetch
+
+    await act(async () => root.render(<PasskeyButton />))
+    await act(async () => container.querySelector("button")?.click())
+
+    expect(container.textContent).toContain(
+      "may not be registered for this site",
+    )
+    expect(container.textContent).toContain(
+      "Try another passkey or sign-in method",
+    )
+    expect(container.textContent).not.toContain("Your token was not changed")
+  })
+
+  test.each([
+    new Response("request timed out", { status: 408 }),
+    new Response("too many requests", { status: 429 }),
+    new Response("service unavailable", { status: 503 }),
+    new Response("invalid response", { status: 200 }),
+  ])(
+    "offers retry guidance when the verification service fails",
+    async (failure) => {
+      const responses = [
+        Response.json({}),
+        Response.json({ challengeId: "challenge", options: {} }),
+        failure,
+      ]
+      const fetchMock = mock(() =>
+        Promise.resolve(responses.shift() ?? Response.json({})),
+      )
+      globalThis.fetch = fetchMock as typeof fetch
+
+      await act(async () => root.render(<PasskeyButton />))
+      await act(async () => container.querySelector("button")?.click())
+
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(container.textContent).toContain("Please try again")
+      expect(container.textContent).not.toContain("may not be registered")
+    },
+  )
+
+  test("reassures in-place verification that the token was not changed", async () => {
+    const responses = [
+      Response.json({}),
+      Response.json({ challengeId: "challenge", options: {} }),
+      Response.json({ error: "Unknown credential" }, { status: 400 }),
+    ]
+    const fetchMock = mock(() =>
+      Promise.resolve(responses.shift() ?? Response.json({})),
+    )
+    globalThis.fetch = fetchMock as typeof fetch
+
+    await expect(
+      authenticateWithPasskey({
+        redirect: undefined,
+        purpose: "reauthenticate",
+        inPlace: true,
+      }),
+    ).rejects.toThrow("Your token was not changed.")
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
   test("registration still prompts for email when Open Registration is enabled", async () => {

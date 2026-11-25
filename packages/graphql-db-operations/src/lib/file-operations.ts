@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 
 /**
@@ -8,9 +8,7 @@ import type { RequestTime } from "@pf/request-time"
  * Creates file records in the database, validates uploads,
  * and marks files as uploaded after successful transfer.
  */
-export class FileOperations extends Context.Tag(
-  "@pf/graphql-db-operations/FileOperations",
-)<
+export class FileOperations extends Context.Service<
   FileOperations,
   {
     /**
@@ -94,4 +92,4 @@ export class FileOperations extends Context.Tag(
      */
     readonly deleteFile: (fileId: string) => Effect.Effect<boolean, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/FileOperations") {}

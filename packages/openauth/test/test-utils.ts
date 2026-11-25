@@ -3,12 +3,8 @@
  * Also provides createTestAppFromIssuer helper for tests.
  */
 
-import {
-  HttpApp,
-  type HttpServerRequest,
-  type HttpServerResponse,
-} from "@effect/platform"
-import { Effect, Layer, ManagedRuntime, type Runtime } from "effect"
+import { type Context, Effect, Layer, ManagedRuntime } from "effect"
+import { HttpEffect, type HttpServerRequest, type HttpServerResponse } from "effect/http"
 import type {
   AllowCallbackInput,
   OnRefreshScopeInput,
@@ -48,7 +44,7 @@ import type { SubjectSchema } from "../src/subject.js"
 const DEFAULT_BASE_URL = "http://localhost"
 
 /**
- * Wrapper around an HttpApp that provides a convenient `.request()` method for testing.
+ * Wrapper around an HttpEffect that provides a convenient `.request()` method for testing.
  */
 export interface TestApp {
   /**
@@ -134,7 +130,7 @@ const buildAllLayersFromConfig = <
   // Build layers for all services
   // For tests, we crash on invalid config (programming error)
   const clientRegistryLayer = makeClientRegistryService(resolvedClients).pipe(
-    Layer.catchAll((error) => Layer.die(error)),
+    Layer.orDie,
   )
   const providerRegistryLayer = makeProviderRegistryService(
     config.providers as Record<string, Provider<unknown>>,
@@ -183,12 +179,12 @@ const buildAllLayersFromConfig = <
  * Create a TestApp with services wrapped into each request handler.
  */
 const createTestAppWithLayers = (
-  runtime: Runtime.Runtime<AllServices>,
+  runtime: Context.Context<AllServices>,
   app: Issuer,
   baseUrl = DEFAULT_BASE_URL,
 ): TestApp => {
   // Create the handler once using the provided runtime
-  const handler = HttpApp.toWebHandlerRuntime(runtime)(app)
+  const handler = HttpEffect.toWebHandlerWith<AllServices, Effect.Services<Issuer>>(runtime)(app)
 
   // Track the last used origin for resolving relative URLs
   let lastOrigin = baseUrl
@@ -275,7 +271,7 @@ export const createIssuer = <
     const managedRuntime = ManagedRuntime.make(allLayers)
 
     // Get the actual runtime from the managed runtime
-    const runtime = yield* Effect.promise(() => managedRuntime.runtime())
+    const runtime = yield* Effect.promise(() => managedRuntime.context())
 
     // Build the issuer app using the SAME runtime (not the layers again)
     // This ensures the same encryption keys are used

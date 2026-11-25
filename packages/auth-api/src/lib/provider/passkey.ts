@@ -46,6 +46,7 @@ export const handlePasskeySuccess = (
         orgUnitPath: providerUser.orgUnitPath,
         roles: providerUser.roles,
         humanSession: true,
+        authenticationMethod: "passkey",
         ...(value.type === "authentication"
           ? {
               humanAuthentication: {

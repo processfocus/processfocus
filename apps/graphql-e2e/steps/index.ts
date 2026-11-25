@@ -4,6 +4,7 @@ import "../support/world"
 // Hooks for starting/stopping the local runtime
 import "../support/hooks"
 
+export { planProviderUsers } from "../support/provider-user"
 export * from "./auth.steps"
 export * from "./cedar-policies.steps"
 export * from "./cleanup.steps"

@@ -1,5 +1,6 @@
-import { DateTime, Effect, FiberRef, Layer, ManagedRuntime } from "effect"
-import { buildSchema, parse, subscribe } from "graphql"
+import type { Context } from "effect"
+import { DateTime, Effect, Layer, ManagedRuntime } from "effect"
+import { buildSchema, graphql, parse, subscribe } from "graphql"
 import {
   AuthorizationService,
   CurrentPrincipal,
@@ -8,7 +9,6 @@ import {
   ProviderUserPrincipal,
   ServiceAccountPrincipal,
   type StepResource,
-  type TodoResource,
   type UserPrincipal,
 } from "@pf/auth-policy"
 import {
@@ -38,13 +38,10 @@ import {
 import type { UserContext } from "../src/lib/types"
 import { describe, expect, it } from "bun:test"
 
-const fixedRequestTime = DateTime.unsafeMake(
+const fixedRequestTime = DateTime.makeUnsafe(
   new Date("2026-03-27T00:00:00.000Z"),
 )
-const requestTimeTest = Layer.succeed(
-  RequestTime,
-  FiberRef.unsafeMake(fixedRequestTime),
-)
+const requestTimeTest = Layer.succeed(RequestTime, fixedRequestTime)
 
 const makeContext = (clientId: string, roles?: string[]): UserContext => ({
   _requestTime: fixedRequestTime,
@@ -95,17 +92,17 @@ const makeProviderContext = (props: {
 
 const makeAuthorizationService = (
   canComplete: (principal: UserPrincipal | ServiceAccountPrincipal) => boolean,
-): AuthorizationService["Type"] => ({
+): Context.Service.Shape<typeof AuthorizationService> => ({
   canIssueDelegationSecret: () => Effect.succeed(false),
+  canViewEmbeddedForm: () => Effect.succeed(false),
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(false),
-  canCompleteStep: (principal) => Effect.succeed(canComplete(principal)),
-  canCompleteTodo: (principal) => Effect.succeed(canComplete(principal)),
+  policyVersion: Effect.succeed("test-policy"),
+  canCompleteStep: (principal) =>
+    Effect.succeed("roles" in principal && canComplete(principal)),
   canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-  canCompletePublicTodo: () => Effect.succeed(false),
   canRequestRole: () => Effect.succeed(false),
-  canRequestProviderUserPermissions: () => Effect.succeed(false),
   canActOnBehalfOf: () => Effect.succeed(false),
   canViewExecution: () => Effect.succeed(false),
   canRestartExecution: () => Effect.succeed(false),
@@ -150,10 +147,10 @@ const noAbandonableStepsLayer = Layer.mergeAll(
   Layer.succeed(StepCompletionOperations, {
     queryActiveTodoStepPaths: () => Effect.succeed([]),
     queryFailedTodosForExecution: () => Effect.succeed([]),
-  } as unknown as StepCompletionOperations["Type"]),
+  } as unknown as Context.Service.Shape<typeof StepCompletionOperations>),
   Layer.succeed(ScheduledFlowOperations, {
     queryPendingAbandonStepPaths: () => Effect.succeed([]),
-  } as unknown as ScheduledFlowOperations["Type"]),
+  } as unknown as Context.Service.Shape<typeof ScheduledFlowOperations>),
 )
 
 const failedSystemStartAbandonLayer = Layer.mergeAll(
@@ -166,7 +163,7 @@ const failedSystemStartAbandonLayer = Layer.mergeAll(
           startStepPath: "/weekly-access-review/Collect",
         },
       ]),
-  } as unknown as ExecutionQueries["Type"]),
+  } as unknown as Context.Service.Shape<typeof ExecutionQueries>),
   Layer.succeed(StepRoleQueries, {
     queryRolePathsByStepPath: () =>
       Effect.succeed({
@@ -266,14 +263,10 @@ describe("checkStepAuthorization", () => {
 
     const authLayerWithTracking = Layer.succeed(AuthorizationService, {
       ...makeAuthorizationService(() => false),
-      canCompleteStep: (
-        _principal: UserPrincipal | ServiceAccountPrincipal,
-        resource: StepResource,
-      ) => {
+      canCompleteStep: (_principal, resource: StepResource) => {
         trialRoles.push(resource.role?.id ?? "")
         return Effect.succeed(resource.role?.id === "/Supporting")
       },
-      canCompletePublicTodo: () => Effect.succeed(false),
     })
 
     const result = await Effect.runPromise(
@@ -306,7 +299,6 @@ describe("checkStepAuthorization", () => {
         seenResource = resource
         return Effect.succeed(true)
       },
-      canCompletePublicTodo: () => Effect.succeed(false),
     })
     const noRoleStepLayer = Layer.succeed(StepRoleQueries, {
       queryRolePathsByStepPath: (_stepPath: string) =>
@@ -352,7 +344,6 @@ describe("checkStepAuthorization", () => {
     const authLayer = Layer.succeed(AuthorizationService, {
       ...makeAuthorizationService(() => false),
       canCompleteStep: () => Effect.succeed(false),
-      canCompletePublicTodo: () => Effect.succeed(false),
     })
 
     const exit = await Effect.runPromise(
@@ -369,9 +360,9 @@ describe("checkStepAuthorization", () => {
 
     expect(exit._tag).toBe("Failure")
     if (exit._tag === "Failure") {
-      const error = exit.cause
-      expect(error._tag).toBe("Fail")
-      if ("error" in error) {
+      const error = exit.cause.reasons[0]
+      expect(error?._tag).toBe("Fail")
+      if (error && "error" in error) {
         expect(error.error._tag).toBe("NotAuthorized")
         expect((error.error as NotAuthorized).action).toBe("start")
       }
@@ -385,12 +376,15 @@ describe("checkTodoAuthorization", () => {
     let seenAssignedTo: string | undefined
     const authLayer = Layer.succeed(AuthorizationService, {
       ...makeAuthorizationService(() => false),
-      canCompleteTodo: (_principal, resource: TodoResource) => {
+      canCompleteStep: (_principal, _resource, context) => {
         seenPrincipalId = _principal.uid.id
-        seenAssignedTo = resource.assignedTo?.id
+        seenAssignedTo =
+          context && "todoId" in context
+            ? (context.assignedToProviderUserEmail ?? undefined)
+            : undefined
         return Effect.succeed(
           _principal.uid.id === "recipient@example.com" &&
-            resource.assignedTo?.id === "recipient@example.com",
+            seenAssignedTo === "recipient@example.com",
         )
       },
     })
@@ -427,7 +421,7 @@ describe("filterAuthorizedTodos", () => {
     let seenOrgUnitId: string | undefined
     const authLayer = Layer.succeed(AuthorizationService, {
       ...makeAuthorizationService(() => false),
-      canCompleteTodo: (_principal, resource: TodoResource) => {
+      canCompleteStep: (_principal, resource) => {
         seenOrgUnitId = resource.orgUnit?.id
         return Effect.succeed(resource.orgUnit?.id === "/schools/north")
       },
@@ -510,14 +504,11 @@ describe("filterAuthorizedTodos", () => {
       let checkedCorrection = false
       const authLayer = Layer.succeed(AuthorizationService, {
         ...makeAuthorizationService(() => false),
-        canCompleteTodo: () => {
+        canCompleteStep: () => {
           checkedNormalCompletion = true
           return Effect.succeed(false)
         },
-        canCorrectPublicCompletionTodo: (
-          _principal,
-          resource: TodoResource,
-        ) => {
+        canCorrectPublicCompletionTodo: (_principal, resource) => {
           checkedCorrection = true
           return Effect.succeed(resource.role?.id === "/Employee")
         },
@@ -613,7 +604,7 @@ describe("filterAuthorizedTodos", () => {
     let checkedCorrection = false
     const authLayer = Layer.succeed(AuthorizationService, {
       ...makeAuthorizationService(() => false),
-      canCompleteTodo: () => {
+      canCompleteStep: () => {
         checkedNormalCompletion = true
         return Effect.succeed(true)
       },
@@ -693,6 +684,31 @@ describe("filterAuthorizedTodos", () => {
 })
 
 describe("filterAuthorizedDrafts", () => {
+  const startStepRoles = Layer.succeed(StepRoleQueries, {
+    queryRolePathsByStepPath: () =>
+      Effect.succeed({
+        rolePath: "/Employee",
+        supportingRolePaths: [],
+        startsProcess: true,
+        embedded: false,
+      }),
+    queryRolePathsByStepPaths: (paths) =>
+      Effect.succeed(
+        new Map(
+          paths.map((path) => [
+            path,
+            {
+              rolePath: "/Employee",
+              supportingRolePaths: [],
+              startsProcess: !path.endsWith("/Not a start"),
+              embedded: false,
+            },
+          ]),
+        ),
+      ),
+    queryRoleIdByPath: () => Effect.succeed(undefined),
+  })
+
   const draft = (
     id: string,
     owner: Pick<
@@ -714,8 +730,7 @@ describe("filterAuthorizedDrafts", () => {
   })
 
   const authLayer = Layer.succeed(AuthorizationService, {
-    ...makeAuthorizationService(() => false),
-    canDraftStep: () => Effect.succeed(true),
+    ...makeAuthorizationService(() => true),
   })
 
   it("allows only the service account's persisted user-owned drafts", async () => {
@@ -735,7 +750,7 @@ describe("filterAuthorizedDrafts", () => {
         orgUnit: { type: "PF::OrgUnit", id: "/" },
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(authLayer, stepRoleLayer, requestTimeTest),
+          Layer.mergeAll(authLayer, startStepRoles, requestTimeTest),
         ),
       ),
     )
@@ -743,7 +758,7 @@ describe("filterAuthorizedDrafts", () => {
     expect(result).toEqual([owned])
   })
 
-  it("allows only the provider user's email-owned drafts", async () => {
+  it("returns saved start forms only for their provider-user owner", async () => {
     const owned = draft("pst-owned", {
       startedByEmail: "owner@example.com",
       startedByUserId: "usr-owner",
@@ -754,13 +769,24 @@ describe("filterAuthorizedDrafts", () => {
     })
 
     const result = await Effect.runPromise(
-      filterAuthorizedDrafts([owned, other], {
-        uid: { type: "PF::ProviderUser", id: "owner@example.com" },
-        roles: [{ type: "PF::Role", id: "/Employee" }],
-        orgUnit: { type: "PF::OrgUnit", id: "/" },
-      }).pipe(
+      filterAuthorizedDrafts(
+        [
+          owned,
+          other,
+          {
+            ...owned,
+            id: "pst-not-a-start",
+            startStepPath: "/finance/expenses/Not a start",
+          },
+        ],
+        {
+          uid: { type: "PF::ProviderUser", id: "owner@example.com" },
+          roles: [{ type: "PF::Role", id: "/Employee" }],
+          orgUnit: { type: "PF::OrgUnit", id: "/" },
+        },
+      ).pipe(
         Effect.provide(
-          Layer.mergeAll(authLayer, stepRoleLayer, requestTimeTest),
+          Layer.mergeAll(authLayer, startStepRoles, requestTimeTest),
         ),
       ),
     )
@@ -810,7 +836,7 @@ describe("filterAuthorizedDrafts", () => {
     const checked: string[] = []
     const auth = Layer.succeed(AuthorizationService, {
       ...makeAuthorizationService(() => false),
-      canDraftStep: (actor, resource) => {
+      canCompleteStep: (actor, resource) => {
         expect(actor).toBe(principal)
         expect(resource.embedded).toBe(true)
         checked.push(resource.role?.id ?? "none")
@@ -828,6 +854,120 @@ describe("filterAuthorizedDrafts", () => {
   })
 })
 
+describe("workload capability boundaries", () => {
+  it.each([
+    {
+      field: "createDatabaseDownloadSession",
+      operation: "mutation",
+      directive: 'action: "databaseTransfer"',
+      workloadAllowed: true,
+    },
+    {
+      field: "createDatabaseShellSession",
+      operation: "mutation",
+      directive: 'action: "databaseShell"',
+      workloadAllowed: false,
+    },
+    {
+      field: "publicCompletionUrl",
+      operation: "query",
+      directive: 'tag: "ci"',
+      workloadAllowed: true,
+    },
+  ])(
+    "enforces workload and Cedar boundaries for $field",
+    async ({ field, operation, directive, workloadAllowed }) => {
+      let cedarAllowed = false
+      const runtime = ManagedRuntime.make(
+        Layer.mergeAll(
+          requestTimeTest,
+          Layer.succeed(UserDetails, { id: "owner", by: "owner@example.com" }),
+          Layer.succeed(CurrentPrincipal, null),
+          Layer.succeed(AuthorizationService, {
+            ...makeAuthorizationService(() => false),
+            canAccessFeature: () => Effect.succeed(cedarAllowed),
+            canAccessField: () => Effect.succeed(cedarAllowed),
+          }),
+        ),
+      )
+      const base = buildSchema(`
+      directive @auth(action: String, tag: String) on FIELD_DEFINITION
+      type Query { ${operation === "query" ? `${field}: String @auth(${directive})` : "hello: String"} }
+      ${operation === "mutation" ? `type Mutation { ${field}: String @auth(${directive}) }` : ""}
+    `)
+      let issued = 0
+      const rootType =
+        operation === "query" ? base.getQueryType() : base.getMutationType()
+      rootType!.getFields()[field]!.resolve = () => {
+        issued++
+        return "capability"
+      }
+      const schema = transformSchemaWithAuthDirective(
+        base,
+        createResolverExecutor(runtime),
+      )
+      const context = makeProviderContext({
+        providerUserId: "owner",
+        email: "owner@example.com",
+        roles: ["/Administrator"],
+      })
+      const human = context.jwt!.properties
+      context.jwt!.properties = {
+        ...human,
+        workload: {
+          clientId: "ci",
+          machineUserId: "machine",
+          bindingId: "binding",
+          repositoryId: "123",
+          repositoryOwnerId: "456",
+          workflowRef: "workflow",
+          ref: "refs/heads/trunk",
+          event: "push",
+          environment: "test",
+          sha: "abc",
+          runId: "789",
+          runAttempt: "1",
+          expiresAt: Date.now() + 60_000,
+        },
+      }
+      try {
+        const denied = await graphql({
+          schema,
+          source: `${operation} { ${field} }`,
+          contextValue: context,
+        })
+        expect(denied.errors).toHaveLength(1)
+        expect(issued).toBe(0)
+        cedarAllowed = true
+        const workload = await graphql({
+          schema,
+          source: `${operation} { ${field} }`,
+          contextValue: context,
+        })
+        if (workloadAllowed) {
+          expect(workload.errors).toBeUndefined()
+          expect(workload.data?.[field]).toBe("capability")
+          expect(issued).toBe(1)
+        } else {
+          expect(workload.errors?.[0]?.message).toContain("Workload")
+          expect(issued).toBe(0)
+        }
+        context.jwt!.properties = human
+        const allowed = await graphql({
+          schema,
+          source: `${operation} { ${field} }`,
+          contextValue: context,
+        })
+        expect(allowed.errors).toBeUndefined()
+        expect(allowed.data?.[field]).toBe("capability")
+        expect(issued).toBe(workloadAllowed ? 2 : 1)
+      } finally {
+        await runtime.dispose()
+      }
+    },
+  )
+})
+
 describe("root subscription authorization", () => {
   it("authorizes before acquiring the source and again on delivery with the delegation principal", async () => {
     let allowed = false
@@ -837,17 +977,11 @@ describe("root subscription authorization", () => {
       Layer.mergeAll(
         LocalDelegatedRealtime.layer,
         requestTimeTest,
-        Layer.succeed(
-          UserDetails,
-          FiberRef.unsafeMake<UserContext["_userDetails"]>({
-            id: "usr-owner",
-            by: "owner@example.com",
-          }),
-        ),
-        Layer.succeed(
-          CurrentPrincipal,
-          FiberRef.unsafeMake<UserPrincipal | null>(null),
-        ),
+        Layer.succeed(UserDetails, {
+          id: "usr-owner",
+          by: "owner@example.com",
+        }),
+        Layer.succeed(CurrentPrincipal, null),
         Layer.succeed(AuthorizationService, {
           ...makeAuthorizationService(() => false),
           canAccessField: (principal) => {
@@ -1008,10 +1142,10 @@ describe("filterAuthorizedExecutions", () => {
       Layer.succeed(StepCompletionOperations, {
         queryActiveTodoStepPaths: () =>
           Effect.succeed(["/career-guidance/Waiting"]),
-      } as unknown as StepCompletionOperations["Type"]),
+      } as unknown as Context.Service.Shape<typeof StepCompletionOperations>),
       Layer.succeed(ScheduledFlowOperations, {
         queryPendingAbandonStepPaths: () => Effect.succeed([]),
-      } as unknown as ScheduledFlowOperations["Type"]),
+      } as unknown as Context.Service.Shape<typeof ScheduledFlowOperations>),
     )
 
     const doc: ExecutionEventDocument = {
@@ -1070,10 +1204,10 @@ describe("filterAuthorizedExecutions", () => {
       Layer.succeed(StepCompletionOperations, {
         queryActiveTodoStepPaths: () =>
           Effect.succeed(["/career-guidance/Waiting"]),
-      } as unknown as StepCompletionOperations["Type"]),
+      } as unknown as Context.Service.Shape<typeof StepCompletionOperations>),
       Layer.succeed(ScheduledFlowOperations, {
         queryPendingAbandonStepPaths: () => Effect.succeed([]),
-      } as unknown as ScheduledFlowOperations["Type"]),
+      } as unknown as Context.Service.Shape<typeof ScheduledFlowOperations>),
       Layer.succeed(StepRoleQueries, {
         queryRolePathsByStepPath: (_stepPath: string) =>
           Effect.succeed({
@@ -1267,10 +1401,10 @@ describe("filterAuthorizedExecutions", () => {
               isSystemStep: true,
             },
           ]),
-      } as unknown as StepCompletionOperations["Type"]),
+      } as unknown as Context.Service.Shape<typeof StepCompletionOperations>),
       Layer.succeed(ScheduledFlowOperations, {
         queryPendingAbandonStepPaths: () => Effect.succeed([]),
-      } as unknown as ScheduledFlowOperations["Type"]),
+      } as unknown as Context.Service.Shape<typeof ScheduledFlowOperations>),
       Layer.succeed(StepRoleQueries, {
         queryRolePathsByStepPath: () =>
           Effect.succeed({

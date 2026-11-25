@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
-import { SqlClient } from "@effect/sql"
-import type { SqlError } from "@effect/sql/SqlError"
 import { Data, Effect, HashMap, Option, Ref } from "effect"
+import { SqlClient } from "effect/sql"
+import type { SqlError } from "effect/sql/SqlError"
+import { awsRoleBindingIdentityKey } from "@pf/auth-config"
 import type { Organisation } from "@pf/process"
 import {
   DbOperations,
@@ -21,10 +22,12 @@ import {
 import type { ExtractedOrgUnitData } from "./types"
 import {
   walkAuthenticationConfig,
+  walkAwsRoleBindings,
   walkDocumentStores,
   walkInvitations,
   walkOrganisation,
   walkSecretClients,
+  walkWorkloadClients,
 } from "./walker"
 
 /**
@@ -46,6 +49,7 @@ const buildFlowFingerprint = (params: {
   targetStepPath: string
   isElse: boolean
   isOnError: boolean
+  deadlineName?: string
   taggedErrors: readonly string[] | null
 }) =>
   [
@@ -54,7 +58,8 @@ const buildFlowFingerprint = (params: {
     `else:${params.isElse ? 1 : 0}`,
     `onError:${params.isOnError ? 1 : 0}`,
     `tags:${params.taggedErrors ? [...params.taggedErrors].sort().join("\u001f") : ""}`,
-  ].join("\u001e")
+  ].join("\u001e") +
+  (params.deadlineName ? `\u001edeadline:${params.deadlineName}` : "")
 
 /**
  * Error thrown when a source step is not found in the step map.
@@ -88,14 +93,14 @@ export class InvitationRoleNotFound extends Data.TaggedError(
   readonly rolePath: string
 }> {}
 
+export class WorkloadClientConflict extends Data.TaggedError(
+  "WorkloadClientConflict",
+)<{
+  readonly clientId: string
+}> {}
+
 /**
  * Stores an organisation and all its processes, steps, flows, and roles in the database.
- *
- * This function uses a three-pass approach for efficiency:
- * 1. Pass 1: Upsert all org units and roles, building a global role path→PK map
- * 2. Pass 2: Upsert all processes, steps, and flows using the global role map
- * 3. Pass 3: Upsert OAuth provider configurations
- * 4. Delete orphaned records not in the current structure
  *
  * The two-pass approach enables roles defined at any org unit level (including the root organisation)
  * to be referenced by steps in child org units, which is a common pattern where org-level roles
@@ -178,7 +183,6 @@ const upsertOrgUnitsAndRoles: <R>(
     orgUnitPathToPkRef,
     pathRefs,
   ) {
-    // Upsert the org unit and get its database PK
     const orgUnitId = yield* dbOps.upsertOrgUnit(
       {
         name: orgUnitData.name,
@@ -283,7 +287,6 @@ const upsertProcessesStepsFlowsAndResponsibilities: <R>(
 
     const orgUnitPk = orgUnitIdOption.value
 
-    // Get the global role map for lookups
     const rolePathToPkMap = yield* Ref.get(rolePathToPkRef)
 
     // Upsert all processes for this org unit
@@ -291,7 +294,6 @@ const upsertProcessesStepsFlowsAndResponsibilities: <R>(
       orgUnitData.processes,
       (process) =>
         Effect.gen(function* () {
-          // Upsert process and get its PK
           const processId = yield* dbOps.upsertProcess(
             {
               orgUnitPath: process.orgUnitPath,
@@ -390,6 +392,7 @@ const upsertProcessesStepsFlowsAndResponsibilities: <R>(
                   targetStepPath: flow.targetStepPath,
                   isElse: flow.isElse,
                   isOnError: flow.isOnError,
+                  ...(flow.deadlineName && { deadlineName: flow.deadlineName }),
                   taggedErrors: flow.taggedErrors,
                 })
                 const occurrence = flowKeyCounts.get(fingerprint) ?? 0
@@ -469,14 +472,49 @@ export const storeOrganisation = (
   | TargetStepNotFound
   | OrgUnitPkNotFound
   | InvitationRoleNotFound
+  | WorkloadClientConflict
   | FlowCrossProcessError,
   SqlClient.SqlClient | DbOperations
 > =>
   Effect.gen(function* () {
+    const secretClients = walkSecretClients(org)
+    const workloadClients = walkWorkloadClients(org)
+    const awsRoleBindings = walkAwsRoleBindings(org)
+    const identities = new Set<string>()
+    const bindingIds = new Set<string>()
+    for (const binding of awsRoleBindings) {
+      const identity = awsRoleBindingIdentityKey(binding)
+      if (
+        identities.has(identity) ||
+        bindingIds.has(binding.id) ||
+        workloadClients.some(
+          (client) => client.clientId === binding.serviceAccountId,
+        ) ||
+        secretClients.some(
+          (client) =>
+            client.clientId === binding.serviceAccountId &&
+            client.audience !== "graphql-api",
+        )
+      ) {
+        return yield* new WorkloadClientConflict({
+          clientId: binding.serviceAccountId,
+        })
+      }
+      identities.add(identity)
+      bindingIds.add(binding.id)
+    }
+    // Include unconfigured secrets: selecting two methods is still ambiguous.
+    const clientIds = new Set(secretClients.map((client) => client.clientId))
+    for (const client of workloadClients) {
+      if (clientIds.has(client.clientId)) {
+        return yield* new WorkloadClientConflict({ clientId: client.clientId })
+      }
+      clientIds.add(client.clientId)
+    }
+
     // Extract organisation data in hierarchical structure
     const orgData = yield* walkOrganisation(org)
 
-    // Get required services
     const sql = yield* SqlClient.SqlClient
     const dbOps = yield* DbOperations
 
@@ -505,9 +543,10 @@ export const storeOrganisation = (
         HashMap.empty<string, string>(),
       )
 
-      // Perform all operations in a transaction
       yield* sql.withTransaction(
         Effect.gen(function* () {
+          const processRevision = yield* dbOps.nextProcessReplicationRevision
+
           // Pass 1: Upsert all org units and roles, build global maps
           yield* upsertOrgUnitsAndRoles(
             orgData.rootOrgUnit,
@@ -570,6 +609,7 @@ export const storeOrganisation = (
             passkeyConfig = {
               ...passkeyConfig,
               ...passkeyOriginOverride(process.env),
+              accountLabel: org.acronym || org.name,
               inviteOnly: authConfig.inviteOnly,
               delegatedAccess: authConfig.delegatedAccess,
             }
@@ -620,13 +660,10 @@ export const storeOrganisation = (
 
           // Pass 5: Upsert OAuth clients for M2M authentication
           // Filter out clients with empty secrets (not configured in env)
-          const secretClients = walkSecretClients(org).filter(
-            (client) => client.secret.length > 0,
-          )
           const clientIdsRef = yield* Ref.make<ReadonlyArray<string>>([])
 
           yield* Effect.forEach(
-            secretClients,
+            secretClients.filter((client) => client.secret.length > 0),
             (client) =>
               Effect.gen(function* () {
                 // Hash the secret using Argon2id before storing
@@ -635,6 +672,12 @@ export const storeOrganisation = (
                   client.clientId,
                   secretHash,
                   client.audience,
+                  undefined,
+                  awsRoleBindings
+                    .filter(
+                      (binding) => binding.serviceAccountId === client.clientId,
+                    )
+                    .map((binding) => ({ ...binding })),
                 )
                 yield* Ref.update(clientIdsRef, (ids) => [
                   ...ids,
@@ -643,6 +686,49 @@ export const storeOrganisation = (
               }),
             { concurrency: 1 },
           )
+
+          for (const client of workloadClients) {
+            // Empty hash cannot authenticate; trust configuration selects the exchange method.
+            yield* dbOps.upsertOAuthClient(
+              client.clientId,
+              "",
+              client.audience,
+              {
+                bindings: client.bindings,
+                ...(client.databaseTransferProjects
+                  ? {
+                      databaseTransferProjects: client.databaseTransferProjects,
+                    }
+                  : {}),
+                ...(client.deploymentProjects
+                  ? { deploymentProjects: client.deploymentProjects }
+                  : {}),
+              },
+            )
+            yield* Ref.update(clientIdsRef, (ids) => [...ids, client.clientId])
+          }
+
+          for (const clientId of new Set(
+            awsRoleBindings.map((binding) => binding.serviceAccountId),
+          )) {
+            if (
+              secretClients.some(
+                (client) =>
+                  client.clientId === clientId && client.secret.length > 0,
+              )
+            )
+              continue
+            yield* dbOps.upsertOAuthClient(
+              clientId,
+              "",
+              "graphql-api",
+              undefined,
+              awsRoleBindings
+                .filter((binding) => binding.serviceAccountId === clientId)
+                .map((binding) => ({ ...binding })),
+            )
+            yield* Ref.update(clientIdsRef, (ids) => [...ids, clientId])
+          }
 
           // Pass 6: Upsert business calendar data (weekly schedules and holiday rules)
           // Get root org unit PK for calendar data
@@ -804,6 +890,13 @@ export const storeOrganisation = (
           // Pending model-owned invitations only. Accepted history and
           // dashboard/process/legacy sources are not model orphans.
           yield* dbOps.deleteOrphanedInvitations([...invitationIds])
+          // Permission-only imports must move beyond every existing checkpoint,
+          // even when imports share a millisecond or a caller reuses RequestTime.
+          // Historical scope rows plus this committed model revision are the
+          // durable removal record; delivery evaluates current effective Cedar.
+          const changedProcesses =
+            yield* dbOps.setProcessReplicationRevision(processRevision)
+          yield* dbOps.enqueueProcessChanges(changedProcesses)
         }),
       )
     })

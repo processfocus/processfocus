@@ -1,22 +1,32 @@
 /// <reference lib="dom" />
 
 import { existsSync } from "node:fs"
-import { FetchHttpClient, HttpApp } from "@effect/platform"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { type BrowserContext, type Page, chromium } from "@playwright/test"
 import { and, eq } from "drizzle-orm"
-import { DateTime, Effect, Layer, Option } from "effect"
+import { Clock, ConfigProvider, DateTime, Effect, Layer, Option } from "effect"
+import { FetchHttpClient, HttpEffect } from "effect/http"
+import { SqlClient } from "effect/sql"
 import { SignJWT } from "jose"
 import {
   AuthenticationDatabase,
   createAuthenticationServer,
+  exchangePasskeyRecoveryLink,
+  issuePasskeyRecoveryLink,
 } from "@pf/auth-api"
+import { isSqlLockError } from "@pf/db-info"
 import * as schema from "@pf/drizzle-sqlite"
+import { makeTursoLive } from "@pf/layer-turso-local"
 import { KeyManagementService, KeyManagementServiceLive } from "@pf/openauth"
 import { createClient } from "@pf/openauth/client"
 import {
   DatabaseTest,
   TypedSqliteDrizzle,
+  TypedSqliteDrizzleLayer,
 } from "@pf/service-drizzle-sqlite/test"
+import { DatabaseTestFile } from "@pf/service-drizzle-sqlite/test-file"
 import {
   SqliteAuthenticationDatabaseLive,
   SqliteOpenAuthStorageServiceLive,
@@ -59,12 +69,69 @@ interface AuthenticationCeremony {
   }
 }
 
-const AuthenticationLayer = SqliteAuthenticationDatabaseLive.pipe(
-  Layer.provideMerge(DatabaseTest),
+const services = Layer.mergeAll(
+  SqliteAuthenticationDatabaseLive,
+  SqliteOpenAuthStorageServiceLive,
+  LocalAuditLive.pipe(Layer.provide(SqliteAuditPersistenceLive)),
+  FetchHttpClient.layer,
 )
-const TestLayer = SqliteOpenAuthStorageServiceLive.pipe(
-  Layer.provideMerge(AuthenticationLayer),
-  Layer.provideMerge(FetchHttpClient.layer),
+const TestLayer = services.pipe(Layer.provideMerge(DatabaseTest))
+
+// A second local connection attempts an unrelated commit between validation
+// and the issuer's first write, without relying on browser or scheduler timing.
+const contendedLocalRuntime = Layer.unwrap(
+  Effect.gen(function* () {
+    const dir = yield* Effect.acquireRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "passkey-round-trip-"))),
+      (dir) => Effect.promise(() => rm(dir, { recursive: true, force: true })),
+    )
+    const path = join(dir, "pf.db")
+    yield* Effect.void.pipe(Effect.provide(DatabaseTestFile(path)))
+    const config = ConfigProvider.layer(
+      ConfigProvider.fromUnknown({ SQLITE_DATABASE_PATH: path }),
+    )
+    const competitor = makeTursoLive({ busy_timeout: 0 }).pipe(
+      Layer.provide(config),
+    )
+    const write = Effect.promise(() =>
+      Effect.runPromise(
+        Effect.flatMap(
+          SqlClient.SqlClient,
+          (sql) => sql`INSERT INTO other_work VALUES (1)`,
+        ).pipe(
+          Effect.catchIf(isSqlLockError, () => Effect.void),
+          Effect.provide(competitor),
+        ),
+      ),
+    )
+    const local = TypedSqliteDrizzleLayer.pipe(
+      Layer.provideMerge(makeTursoLive()),
+      Layer.provide(config),
+    )
+    yield* Effect.flatMap(
+      SqlClient.SqlClient,
+      (sql) => sql`CREATE TABLE other_work (n INTEGER)`,
+    ).pipe(Effect.provide(local))
+    const competing = Layer.effect(
+      AuthenticationDatabase,
+      Effect.map(AuthenticationDatabase, (db) => ({
+        ...db,
+        createProviderUser: (
+          ...args: Parameters<typeof db.createProviderUser>
+        ) => write.pipe(Effect.andThen(db.createProviderUser(...args))),
+        advancePasskeyCredentialCounter: (
+          ...args: Parameters<typeof db.advancePasskeyCredentialCounter>
+        ) =>
+          write.pipe(
+            Effect.andThen(db.advancePasskeyCredentialCounter(...args)),
+          ),
+      })),
+    )
+    return competing.pipe(
+      Layer.provideMerge(services),
+      Layer.provideMerge(local),
+    )
+  }),
 )
 const itWithChromium = existsSync(chromium.executablePath()) ? it : it.skip
 
@@ -313,7 +380,7 @@ const prepareAuthentication = async (
 
 describe("passkey auth-server real round trip", () => {
   itWithChromium(
-    "registers and signs in usernameless, rejects replay, and keeps identity writes atomic",
+    "registers and signs in usernameless under local writer contention, rejects replay, and keeps identity writes atomic",
     async () => {
       await Effect.runPromise(
         Effect.scoped(
@@ -338,7 +405,10 @@ describe("passkey auth-server real round trip", () => {
                 },
               ],
             })
-            const handler = HttpApp.toWebHandlerRuntime(runtime)(app)
+            const handler = HttpEffect.toWebHandlerWith<
+              never,
+              Effect.Services<typeof app>
+            >(runtime)(app)
             const server = yield* Effect.acquireRelease(
               Effect.sync(() =>
                 Bun.serve({
@@ -384,7 +454,7 @@ describe("passkey auth-server real round trip", () => {
                 options: {
                   protocol: "ctap2",
                   ctap2Version: "ctap2_1",
-                  transport: "internal",
+                  transport: "usb",
                   hasResidentKey: true,
                   hasUserVerification: true,
                   isUserVerified: true,
@@ -419,6 +489,7 @@ describe("passkey auth-server real round trip", () => {
                 publicKey: schema.passkeyCredential.passkeyPublicKey,
                 counter: schema.passkeyCredential.signatureCounter,
                 transports: schema.passkeyCredential.passkeyTransports,
+                name: schema.passkeyCredential.passkeyName,
                 lastUsedAt: schema.passkeyCredential.passkeyLastUsedAt,
               })
               .from(schema.providerUser)
@@ -441,12 +512,29 @@ describe("passkey auth-server real round trip", () => {
               }),
             )
             expect(firstRows[0]?.publicKey.length).toBeGreaterThan(40)
-            expect(firstRows[0]?.transports).toContain("internal")
+            expect(firstRows[0]?.transports).toContain("usb")
+            expect(firstRows[0]?.name).toBe("USB security key")
             expect(
               Buffer.from(firstRows[0]?.userHandle ?? "", "base64url"),
             ).toHaveLength(32)
             expect(firstRows[0]?.userHandle).not.toContain(firstEmail)
             expect(firstRows[0]?.lastUsedAt).toBeNull()
+            expect(
+              yield* db
+                .select({
+                  kind: schema.auditEvent.auditKind,
+                  details: schema.auditEvent.auditDetails,
+                })
+                .from(schema.auditEvent),
+            ).toEqual([
+              {
+                kind: "login",
+                details: {
+                  actorUserId: firstRows[0]!.userId,
+                  authenticationMethod: "passkey",
+                },
+              },
+            ])
 
             yield* Effect.promise(() => startAuthorization(page, issuer))
             const authentication = yield* Effect.promise(() =>
@@ -498,6 +586,14 @@ describe("passkey auth-server real round trip", () => {
               Number(firstRows[0]?.counter),
             )
             expect(advancedCredential?.lastUsedAt).not.toBeNull()
+            const audits = yield* db.select().from(schema.auditEvent)
+            expect(audits).toHaveLength(2)
+            expect(new Set(audits.map((event) => event.id)).size).toBe(2)
+            for (const event of audits)
+              expect(event.auditDetails).toEqual({
+                actorUserId: firstRows[0]!.userId,
+                authenticationMethod: "passkey",
+              })
 
             const secondEmail = "person.tag@example.com"
             yield* Effect.promise(() => startAuthorization(page, issuer))
@@ -550,7 +646,7 @@ describe("passkey auth-server real round trip", () => {
               .values({
                 provider: "passkey",
                 sub: "collision-owner-handle",
-                lastLoggedIn: now,
+                createdAt: now,
               })
               .returning()
             if (!owner) throw new Error("Failed to create collision owner")
@@ -607,256 +703,342 @@ describe("passkey auth-server real round trip", () => {
             expect(collidingCredentials).toHaveLength(1)
             expect(collidingCredentials[0]?.userId).toBe(owner.id)
           }),
-        ).pipe(Effect.provide(TestLayer)),
+        ).pipe(Effect.provide(contendedLocalRuntime)),
       )
     },
     { timeout: 30_000 },
   )
 
-  itWithChromium(
-    "adds a second independent credential from a signed-in session and signs in with both",
-    async () => {
-      const managementLayer = Layer.mergeAll(
-        TestLayer,
-        KeyManagementServiceLive.pipe(Layer.provide(TestLayer)),
-      )
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const db = yield* TypedSqliteDrizzle
-            const authDb = yield* AuthenticationDatabase
-            const [rootOrgUnit] = yield* db
-              .insert(schema.orgUnit)
-              .values({
-                name: "Root Organization",
-                orgUnitLevel: "root",
-                path: "/",
-                parentOrgUnitId: null,
-              })
-              .returning({ id: schema.orgUnit.id })
-            if (!rootOrgUnit) throw new Error("Failed to create root org unit")
+  for (const enrollment of ["management", "recovery"] as const) {
+    itWithChromium(
+      `adds an independent credential through ${enrollment}, refuses reuse, and signs in with both`,
+      async () => {
+        const managementLayer = Layer.mergeAll(
+          TestLayer,
+          KeyManagementServiceLive.pipe(Layer.provide(TestLayer)),
+        )
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const db = yield* TypedSqliteDrizzle
+              const authDb = yield* AuthenticationDatabase
+              const [rootOrgUnit] = yield* db
+                .insert(schema.orgUnit)
+                .values({
+                  name: "Root Organization",
+                  orgUnitLevel: "root",
+                  path: "/",
+                  parentOrgUnitId: null,
+                })
+                .returning({ id: schema.orgUnit.id })
+              if (!rootOrgUnit)
+                throw new Error("Failed to create root org unit")
 
-            const { app, runtime } = yield* createAuthenticationServer({
-              clients: [
-                {
-                  id: "passkey-round-trip",
-                  redirectUris: ["http://localhost:3000/callback"],
-                  audience: "passkey-round-trip",
+              const { app, runtime } = yield* createAuthenticationServer({
+                clients: [
+                  {
+                    id: "passkey-round-trip",
+                    redirectUris: ["http://localhost:3000/callback"],
+                    audience: "passkey-round-trip",
+                  },
+                ],
+              })
+              const handler = HttpEffect.toWebHandlerWith<
+                never,
+                Effect.Services<typeof app>
+              >(runtime)(app)
+              const server = yield* Effect.acquireRelease(
+                Effect.sync(() =>
+                  Bun.serve({
+                    port: 0,
+                    fetch: (request) =>
+                      new URL(request.url).pathname === "/webauthn-test"
+                        ? new Response(
+                            "<!doctype html><title>WebAuthn test</title>",
+                            {
+                              headers: { "Content-Type": "text/html" },
+                            },
+                          )
+                        : handler(request),
+                  }),
+                ),
+                (server) => Effect.promise(() => server.stop()),
+              )
+              const issuer = `http://localhost:${server.port}`
+              yield* db.insert(schema.oauthProvider).values({
+                providerName: "passkey",
+                providerConfig: {
+                  rpName: "Passkey Management Round Trip",
+                  rpID: "localhost",
+                  origin: issuer,
+                  inviteOnly: false,
                 },
-              ],
-            })
-            const handler = HttpApp.toWebHandlerRuntime(runtime)(app)
-            const server = yield* Effect.acquireRelease(
-              Effect.sync(() =>
-                Bun.serve({
-                  port: 0,
-                  fetch: (request) =>
-                    new URL(request.url).pathname === "/webauthn-test"
-                      ? new Response(
-                          "<!doctype html><title>WebAuthn test</title>",
-                          {
-                            headers: { "Content-Type": "text/html" },
-                          },
-                        )
-                      : handler(request),
+              })
+
+              const browser = yield* Effect.acquireRelease(
+                Effect.promise(() => chromium.launch()),
+                (browser) => Effect.promise(() => browser.close()),
+              )
+              const context = yield* Effect.acquireRelease(
+                Effect.promise(() => browser.newContext()),
+                (context) => Effect.promise(() => context.close()),
+              )
+              const page = yield* Effect.promise(() => context.newPage())
+              const cdp = yield* Effect.promise(() =>
+                context.newCDPSession(page),
+              )
+              yield* Effect.promise(() => cdp.send("WebAuthn.enable"))
+              const authenticatorOptions = {
+                protocol: "ctap2" as const,
+                ctap2Version: "ctap2_1" as const,
+                transport: "internal" as const,
+                hasResidentKey: true,
+                hasUserVerification: true,
+                isUserVerified: true,
+                automaticPresenceSimulation: true,
+              }
+              const firstAuthenticator = yield* Effect.promise(() =>
+                cdp.send("WebAuthn.addVirtualAuthenticator", {
+                  options: authenticatorOptions,
                 }),
-              ),
-              (server) => Effect.promise(() => server.stop()),
-            )
-            const issuer = `http://localhost:${server.port}`
-            yield* db.insert(schema.oauthProvider).values({
-              providerName: "passkey",
-              providerConfig: {
-                rpName: "Passkey Management Round Trip",
-                rpID: "localhost",
-                origin: issuer,
-                inviteOnly: false,
-              },
-            })
+              )
+              yield* Effect.promise(() => page.goto(`${issuer}/webauthn-test`))
 
-            const browser = yield* Effect.acquireRelease(
-              Effect.promise(() => chromium.launch()),
-              (browser) => Effect.promise(() => browser.close()),
-            )
-            const context = yield* Effect.acquireRelease(
-              Effect.promise(() => browser.newContext()),
-              (context) => Effect.promise(() => context.close()),
-            )
-            const page = yield* Effect.promise(() => context.newPage())
-            const cdp = yield* Effect.promise(() => context.newCDPSession(page))
-            yield* Effect.promise(() => cdp.send("WebAuthn.enable"))
-            const authenticatorOptions = {
-              protocol: "ctap2" as const,
-              ctap2Version: "ctap2_1" as const,
-              transport: "internal" as const,
-              hasResidentKey: true,
-              hasUserVerification: true,
-              isUserVerified: true,
-              automaticPresenceSimulation: true,
-            }
-            const firstAuthenticator = yield* Effect.promise(() =>
-              cdp.send("WebAuthn.addVirtualAuthenticator", {
-                options: authenticatorOptions,
-              }),
-            )
-            yield* Effect.promise(() => page.goto(`${issuer}/webauthn-test`))
+              const email = "spare-key@example.com"
+              yield* Effect.promise(() => startAuthorization(page, issuer))
+              const firstRegistration = yield* Effect.promise(() =>
+                prepareRegistration(context, page, issuer, email),
+              )
+              const firstVerify = yield* Effect.promise(() =>
+                postJson(context, `${issuer}/oauth/passkey/register-verify`, {
+                  challengeId: firstRegistration.challengeId,
+                  response: firstRegistration.response,
+                }),
+              )
+              expect(firstVerify.status).toBe(302)
 
-            const email = "spare-key@example.com"
-            yield* Effect.promise(() => startAuthorization(page, issuer))
-            const firstRegistration = yield* Effect.promise(() =>
-              prepareRegistration(context, page, issuer, email),
-            )
-            const firstVerify = yield* Effect.promise(() =>
-              postJson(context, `${issuer}/oauth/passkey/register-verify`, {
-                challengeId: firstRegistration.challengeId,
-                response: firstRegistration.response,
-              }),
-            )
-            expect(firstVerify.status).toBe(302)
-
-            const owner = yield* authDb.findProviderUserByEmail(email)
-            if (Option.isNone(owner)) throw new Error("Missing owner")
-            const key = yield* (yield* KeyManagementService).signingKey
-            const clock = yield* Effect.clock
-            const token = yield* Effect.promise(() =>
-              new SignJWT({
-                mode: "access",
-                type: "providerUser",
-                properties: {
-                  humanSession: true,
+              const owner = yield* authDb.findProviderUserByEmail(email)
+              if (Option.isNone(owner)) throw new Error("Missing owner")
+              const recoverySession = yield* Effect.gen(function* () {
+                if (enrollment !== "recovery") return undefined
+                const [role] = yield* db
+                  .insert(schema.role)
+                  .values({
+                    name: "Tester",
+                    orgUnitId: rootOrgUnit.id,
+                    path: "/Tester",
+                  })
+                  .returning({ id: schema.role.id })
+                if (!role) throw new Error("Missing role")
+                yield* authDb.assignProviderUserRoles(owner.value.id, [role.id])
+                yield* db.insert(schema.invitation).values({
+                  invitationId: "recovery-round-trip",
+                  email,
+                  invitationStatus: "pending",
+                  invitationPendingEmail: email,
+                  invitationSource: "dashboard",
+                })
+                yield* authDb.acceptPendingInvitationForUser({
+                  email,
                   userId: owner.value.id,
-                  email: owner.value.email,
-                  orgUnitId: owner.value.orgUnitId,
-                  orgUnitPath: owner.value.orgUnitPath,
-                  roles: [],
-                },
+                  provider: "passkey",
+                  subject: owner.value.sub,
+                  acceptedAt: yield* DateTime.now,
+                })
+                const link = yield* issuePasskeyRecoveryLink({
+                  email,
+                  actor: "operator@example.com",
+                  frontendOrigin: issuer,
+                })
+                if (!link.ok) throw new Error(link.error)
+                const linkToken = new URLSearchParams(
+                  new URL(link.registrationLinkUrl).hash.slice(1),
+                ).get("token")
+                if (!linkToken) throw new Error("Missing recovery token")
+                const session = yield* exchangePasskeyRecoveryLink(linkToken)
+                if (Option.isNone(session))
+                  throw new Error("Missing recovery session")
+                return session.value.sessionBearer
               })
-                .setProtectedHeader({ alg: key.alg, kid: key.id })
-                .setIssuer(issuer)
-                .setAudience("passkey-round-trip")
-                .setSubject(`providerUser:${owner.value.id}`)
-                .setIssuedAt(Math.floor(clock.unsafeCurrentTimeMillis() / 1000))
-                .setExpirationTime(
-                  Math.floor(clock.unsafeCurrentTimeMillis() / 1000) + 3600,
+              const key = yield* (yield* KeyManagementService).signingKey
+              const clock = yield* Clock.Clock
+              const token = yield* Effect.promise(() =>
+                new SignJWT({
+                  mode: "access",
+                  type: "providerUser",
+                  properties: {
+                    humanSession: true,
+                    userId: owner.value.id,
+                    email: owner.value.email,
+                    orgUnitId: owner.value.orgUnitId,
+                    orgUnitPath: owner.value.orgUnitPath,
+                    roles: [],
+                  },
+                })
+                  .setProtectedHeader({ alg: key.alg, kid: key.id })
+                  .setIssuer(issuer)
+                  .setAudience("passkey-round-trip")
+                  .setSubject(`providerUser:${owner.value.id}`)
+                  .setIssuedAt(
+                    Math.floor(clock.currentTimeMillisUnsafe() / 1000),
+                  )
+                  .setExpirationTime(
+                    Math.floor(clock.currentTimeMillisUnsafe() / 1000) + 3600,
+                  )
+                  .sign(key.private),
+              )
+
+              const startEnrollment = () =>
+                postJson(
+                  context,
+                  recoverySession
+                    ? `${issuer}/oauth/passkey/register-options`
+                    : `${issuer}/oauth/passkeys`,
+                  recoverySession
+                    ? { sessionBearer: recoverySession }
+                    : { name: "Spare key" },
+                  recoverySession ? {} : { authorization: `Bearer ${token}` },
                 )
-                .sign(key.private),
-            )
+              yield* Effect.promise(() => startAuthorization(page, issuer))
+              const reuseOptions = yield* Effect.promise(startEnrollment)
+              expect(reuseOptions.status).toBe(200)
+              const reuseBody = (yield* Effect.promise(() =>
+                reuseOptions.json(),
+              )) as Parameters<typeof prepareRegistrationFromOptions>[1]
+              // Reusing the same authenticator must not replace its resident key
+              // while leaving an orphaned credential in the server's list.
+              yield* Effect.promise(async () => {
+                await expect(
+                  prepareRegistrationFromOptions(page, reuseBody),
+                ).rejects.toThrow(/InvalidStateError/)
+              })
+              expect(
+                yield* authDb.listPasskeyCredentialsForUser(owner.value.id),
+              ).toHaveLength(1)
 
-            const secondAuthenticator = yield* Effect.promise(() =>
-              cdp.send("WebAuthn.addVirtualAuthenticator", {
-                options: {
-                  ...authenticatorOptions,
-                  transport: "usb",
-                },
-              }),
-            )
-            yield* Effect.promise(() =>
-              cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
-                authenticatorId: firstAuthenticator.authenticatorId,
-                enabled: false,
-              }),
-            )
+              const secondAuthenticator = yield* Effect.promise(() =>
+                cdp.send("WebAuthn.addVirtualAuthenticator", {
+                  options: {
+                    ...authenticatorOptions,
+                    transport: "usb",
+                  },
+                }),
+              )
+              yield* Effect.promise(() =>
+                cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
+                  authenticatorId: firstAuthenticator.authenticatorId,
+                  enabled: false,
+                }),
+              )
 
-            const started = yield* Effect.promise(() =>
-              postJson(
-                context,
-                `${issuer}/oauth/passkeys`,
-                { name: "Spare key" },
-                { authorization: `Bearer ${token}` },
-              ),
-            )
-            expect(started.status).toBe(200)
-            const startedBody = (yield* Effect.promise(() =>
-              started.json(),
-            )) as Parameters<typeof prepareRegistrationFromOptions>[1]
-            expect(startedBody.options.excludeCredentials).toEqual([
-              expect.objectContaining({
-                id: firstRegistration.response.id,
-              }),
-            ])
+              const started = yield* Effect.promise(startEnrollment)
+              expect(started.status).toBe(200)
+              const startedBody = (yield* Effect.promise(() =>
+                started.json(),
+              )) as Parameters<typeof prepareRegistrationFromOptions>[1]
+              expect(startedBody.options.excludeCredentials).toEqual([
+                expect.objectContaining({
+                  id: firstRegistration.response.id,
+                }),
+              ])
 
-            const secondRegistration = yield* Effect.promise(() =>
-              prepareRegistrationFromOptions(page, startedBody),
-            )
-            const enrolled = yield* Effect.promise(() =>
-              postJson(
-                context,
-                `${issuer}/oauth/passkeys`,
-                {
-                  challengeId: secondRegistration.challengeId,
-                  response: secondRegistration.response,
-                },
-                { authorization: `Bearer ${token}` },
-              ),
-            )
-            expect(enrolled.status).toBe(200)
-            const listed = (yield* Effect.promise(() => enrolled.json())) as {
-              credentials: Array<{ name: string | null }>
-            }
-            expect(listed.credentials).toHaveLength(2)
-            expect(
-              listed.credentials.some((item) => item.name === "Spare key"),
-            ).toBe(true)
+              const secondRegistration = yield* Effect.promise(() =>
+                prepareRegistrationFromOptions(page, startedBody),
+              )
+              const enrolled = yield* Effect.promise(() =>
+                postJson(
+                  context,
+                  recoverySession
+                    ? `${issuer}/oauth/passkey/register-verify`
+                    : `${issuer}/oauth/passkeys`,
+                  {
+                    challengeId: secondRegistration.challengeId,
+                    response: secondRegistration.response,
+                    ...(recoverySession && { sessionBearer: recoverySession }),
+                  },
+                  recoverySession ? {} : { authorization: `Bearer ${token}` },
+                ),
+              )
+              expect(enrolled.status).toBe(recoverySession ? 302 : 200)
+              const listed = yield* authDb.listPasskeyCredentialsForUser(
+                owner.value.id,
+              )
+              expect(listed).toHaveLength(2)
+              expect(
+                listed.some(
+                  (item) =>
+                    item.name ===
+                    (recoverySession ? "USB security key" : "Spare key"),
+                ),
+              ).toBe(true)
 
-            const stored = yield* db.select().from(schema.passkeyCredential)
-            expect(stored).toHaveLength(2)
-            expect(stored.map((row) => row.passkeyCredentialId).sort()).toEqual(
-              [
-                firstRegistration.response.id,
+              const stored = yield* db.select().from(schema.passkeyCredential)
+              expect(stored).toHaveLength(2)
+              expect(
+                stored.map((row) => row.passkeyCredentialId).sort(),
+              ).toEqual(
+                [
+                  firstRegistration.response.id,
+                  secondRegistration.response.id,
+                ].sort(),
+              )
+              expect(firstRegistration.response.id).not.toBe(
                 secondRegistration.response.id,
-              ].sort(),
-            )
-            expect(firstRegistration.response.id).not.toBe(
-              secondRegistration.response.id,
-            )
+              )
 
-            yield* Effect.promise(() =>
-              cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
-                authenticatorId: firstAuthenticator.authenticatorId,
-                enabled: false,
-              }),
-            )
-            yield* Effect.promise(() => startAuthorization(page, issuer))
-            const secondAuth = yield* Effect.promise(() =>
-              prepareAuthentication(context, page, issuer),
-            )
-            const secondAuthResponse = yield* Effect.promise(() =>
-              postJson(context, `${issuer}/oauth/passkey/auth-verify`, {
-                challengeId: secondAuth.challengeId,
-                response: secondAuth.response,
-              }),
-            )
-            expect(secondAuthResponse.status).toBe(302)
-            expect(secondAuth.response.id).toBe(secondRegistration.response.id)
+              yield* Effect.promise(() =>
+                cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
+                  authenticatorId: firstAuthenticator.authenticatorId,
+                  enabled: false,
+                }),
+              )
+              yield* Effect.promise(() => startAuthorization(page, issuer))
+              const secondAuth = yield* Effect.promise(() =>
+                prepareAuthentication(context, page, issuer),
+              )
+              const secondAuthResponse = yield* Effect.promise(() =>
+                postJson(context, `${issuer}/oauth/passkey/auth-verify`, {
+                  challengeId: secondAuth.challengeId,
+                  response: secondAuth.response,
+                }),
+              )
+              expect(secondAuthResponse.status).toBe(302)
+              expect(secondAuth.response.id).toBe(
+                secondRegistration.response.id,
+              )
 
-            yield* Effect.promise(() =>
-              cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
-                authenticatorId: firstAuthenticator.authenticatorId,
-                enabled: true,
-              }),
-            )
-            yield* Effect.promise(() =>
-              cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
-                authenticatorId: secondAuthenticator.authenticatorId,
-                enabled: false,
-              }),
-            )
-            yield* Effect.promise(() => startAuthorization(page, issuer))
-            const firstAuth = yield* Effect.promise(() =>
-              prepareAuthentication(context, page, issuer),
-            )
-            const firstAuthResponse = yield* Effect.promise(() =>
-              postJson(context, `${issuer}/oauth/passkey/auth-verify`, {
-                challengeId: firstAuth.challengeId,
-                response: firstAuth.response,
-              }),
-            )
-            expect(firstAuthResponse.status).toBe(302)
-            expect(firstAuth.response.id).toBe(firstRegistration.response.id)
-          }),
-        ).pipe(Effect.provide(managementLayer)),
-      )
-    },
-    { timeout: 30_000 },
-  )
+              yield* Effect.promise(() =>
+                cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
+                  authenticatorId: firstAuthenticator.authenticatorId,
+                  enabled: true,
+                }),
+              )
+              yield* Effect.promise(() =>
+                cdp.send("WebAuthn.setAutomaticPresenceSimulation", {
+                  authenticatorId: secondAuthenticator.authenticatorId,
+                  enabled: false,
+                }),
+              )
+              yield* Effect.promise(() => startAuthorization(page, issuer))
+              const firstAuth = yield* Effect.promise(() =>
+                prepareAuthentication(context, page, issuer),
+              )
+              const firstAuthResponse = yield* Effect.promise(() =>
+                postJson(context, `${issuer}/oauth/passkey/auth-verify`, {
+                  challengeId: firstAuth.challengeId,
+                  response: firstAuth.response,
+                }),
+              )
+              expect(firstAuthResponse.status).toBe(302)
+              expect(firstAuth.response.id).toBe(firstRegistration.response.id)
+            }),
+          ).pipe(Effect.provide(managementLayer)),
+        )
+      },
+      { timeout: 30_000 },
+    )
+  }
 })
+
+import { LocalAuditLive } from "@pf/audit/local"
+import { SqliteAuditPersistenceLive } from "@pf/sqlite-operations"

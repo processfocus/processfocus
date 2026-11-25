@@ -2,6 +2,14 @@
 -- Auto-generated triggers for updated_at columns
 -- DO NOT EDIT
 
+CREATE TRIGGER IF NOT EXISTS pf_audit_event_updated_at_trigger
+AFTER UPDATE ON "pf_audit_event"
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+  UPDATE "pf_audit_event" SET updated_at = julianday('now') WHERE id = NEW.id;
+END;
+--> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_org_unit_updated_at_trigger
 AFTER UPDATE ON "pf_org_unit"
 FOR EACH ROW
@@ -16,6 +24,14 @@ FOR EACH ROW
 WHEN NEW.updated_at = OLD.updated_at
 BEGIN
   UPDATE "pf_process" SET updated_at = julianday('now') WHERE id = NEW.id;
+END;
+--> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS pf_process_visibility_updated_at_trigger
+AFTER UPDATE ON "pf_process_visibility"
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+  UPDATE "pf_process_visibility" SET updated_at = julianday('now') WHERE id = NEW.id;
 END;
 --> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_role_updated_at_trigger
@@ -114,6 +130,14 @@ BEGIN
   UPDATE "pf_scheduled_flow" SET updated_at = julianday('now') WHERE id = NEW.id;
 END;
 --> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS pf_task_deadline_updated_at_trigger
+AFTER UPDATE ON "pf_task_deadline"
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+  UPDATE "pf_task_deadline" SET updated_at = julianday('now') WHERE id = NEW.id;
+END;
+--> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_user_updated_at_trigger
 AFTER UPDATE ON "pf_user"
 FOR EACH ROW
@@ -194,14 +218,6 @@ BEGIN
   UPDATE "pf_permitted_client_role" SET updated_at = julianday('now') WHERE id = NEW.id;
 END;
 --> statement-breakpoint
-CREATE TRIGGER IF NOT EXISTS pf_permitted_client_email_updated_at_trigger
-AFTER UPDATE ON "pf_permitted_client_email"
-FOR EACH ROW
-WHEN NEW.updated_at = OLD.updated_at
-BEGIN
-  UPDATE "pf_permitted_client_email" SET updated_at = julianday('now') WHERE id = NEW.id;
-END;
---> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_invitation_updated_at_trigger
 AFTER UPDATE ON "pf_invitation"
 FOR EACH ROW
@@ -272,6 +288,14 @@ FOR EACH ROW
 WHEN NEW.updated_at = OLD.updated_at
 BEGIN
   UPDATE "pf_not_started_job" SET updated_at = julianday('now') WHERE id = NEW.id;
+END;
+--> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS pf_queue_job_lifecycle_updated_at_trigger
+AFTER UPDATE ON "pf_queue_job_lifecycle"
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+  UPDATE "pf_queue_job_lifecycle" SET updated_at = julianday('now') WHERE id = NEW.id;
 END;
 --> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_weekly_schedule_updated_at_trigger

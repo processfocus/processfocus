@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { CliError } from "../errors"
+import { type Credentials, acquireAccessToken } from "./credentials"
 import type { ExecutionSnapshot } from "./execution-subscription"
 import { graphqlRequest } from "./graphql-client"
 
@@ -15,7 +16,7 @@ const EXECUTION_SNAPSHOT_QUERY = `
 /** Use the same authorized persisted projection as execution subscriptions. */
 export const fetchExecutionSnapshot = (
   endpoint: string,
-  accessToken: string,
+  accessToken: string | Effect.Effect<string, CliError>,
   executionId: string,
 ): Effect.Effect<ExecutionSnapshot, CliError> =>
   Effect.gen(function* () {
@@ -45,3 +46,23 @@ export const fetchExecutionSnapshot = (
         }),
     ),
   )
+
+/** A renewed subscription can miss a terminal event while reconnecting. */
+export const workloadExecutionPoll = (
+  endpoint: string,
+  credentials: Credentials,
+  executionId: string,
+) =>
+  credentials.workload
+    ? {
+        fetchSnapshot: (signal: AbortSignal) =>
+          Effect.runPromise(
+            fetchExecutionSnapshot(
+              endpoint,
+              acquireAccessToken(credentials),
+              executionId,
+            ),
+            { signal },
+          ),
+      }
+    : {}

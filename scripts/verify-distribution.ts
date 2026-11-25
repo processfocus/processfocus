@@ -287,8 +287,13 @@ for (const file of files.filter((path) =>
       throw new Error(`${file} contains forbidden reference ${pattern}`)
     }
   }
-  if (content.includes('Context.Tag("./')) {
-    throw new Error(`${file} rewrote an Effect Tag identifier to a file path`)
+  if (
+    content.includes('Context.Tag("./') ||
+    content.includes('Context.Service("./')
+  ) {
+    throw new Error(
+      `${file} rewrote an Effect service identifier to a file path`,
+    )
   }
   if (file.startsWith("dist/internal/")) {
     throw new Error(`${file} vendors an unpublished host or workspace module`)

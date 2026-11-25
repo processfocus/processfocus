@@ -23,15 +23,8 @@
  * @packageDocumentation
  */
 
-import {
-  Headers,
-  type HttpApp,
-  type HttpBody,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
-import { Data, Effect, Either, Schema } from "effect"
+import { Config, Data, Effect, Result, Schema, type Scope } from "effect"
+import { Headers, type HttpBody, HttpRouter, type HttpServerError, HttpServerRequest, HttpServerResponse } from "effect/http"
 import {
   type AuthorizationState,
   type GeneratedTokens,
@@ -53,6 +46,7 @@ import type {
 import { tryProviderCallback } from "./provider/provider"
 import { getIssuerUrl, getProtocol } from "./request"
 import { errorJson, noStoreJson } from "./response"
+import { makeRouter } from "./router"
 // Internal imports for local use - using aliases to avoid conflicts with re-exports
 import {
   ClientRegistryService as ClientRegistrySvc,
@@ -62,6 +56,7 @@ import {
   TokenTtlConfig as TokenTtlCfg,
 } from "./services"
 import { Storage, type StorageService } from "./storage/storage"
+import { formValues } from "./util"
 
 // Re-export types
 export type {
@@ -114,6 +109,7 @@ export interface TypedSuccessResponder<
         refresh?: number
       }
       subject?: string
+      expiresAt?: number
     },
   ): Effect.Effect<HttpServerResponse.HttpServerResponse, HttpBody.HttpBodyError, StorageService>
 }
@@ -159,10 +155,15 @@ export function resolveIssuerClients(
       clientMap.set(client.id, client)
     }
 
-    const raw = process.env["OPENAUTH_CLIENTS"]
+    const raw = yield* Config.String("OPENAUTH_CLIENTS").pipe(
+      Config.withDefault(""),
+      Effect.mapError(() => new ResolveIssuerClientsError({
+        message: "Failed to load OPENAUTH_CLIENTS configuration",
+      })),
+    )
     if (raw) {
-      const parsed = yield* Schema.decodeUnknown(
-        Schema.parseJson(Schema.Unknown),
+      const parsed = yield* Schema.decodeUnknownEffect(
+        Schema.fromJsonString(Schema.Unknown),
       )(raw).pipe(
         Effect.mapError(
           (error) =>
@@ -222,7 +223,7 @@ export function resolveIssuerClients(
 /**
  * The return type of the `issuer` Effect - an HttpApp.
  */
-export type Issuer = HttpApp.Default<never>
+export type Issuer = Effect.Effect<HttpServerResponse.HttpServerResponse, HttpServerError.HttpServerError, HttpServerRequest.HttpServerRequest | Scope.Scope>
 
 /**
  * Helper function to normalize CORS origins.
@@ -300,6 +301,7 @@ const buildProviderOptions = <Properties>(
                     refresh: opts?.ttl?.refresh ?? ttlConfig.refresh,
                   },
                   pkce: authorization.pkce,
+                  expiresAt: opts?.expiresAt,
                 },
                 60 * 10, // 10 minute expiry for auth codes
               )
@@ -422,7 +424,7 @@ export const issuer: Effect.Effect<
     }, { generateRefreshToken: false })
 
   // Build routes
-  const jwksRoute = HttpRouter.get(
+  const jwksRoute = HttpRouter.route("GET",
     "/.well-known/jwks.json",
     handleJwks.pipe(
       cors({
@@ -432,7 +434,7 @@ export const issuer: Effect.Effect<
     ),
   )
 
-  const discoveryRoute = HttpRouter.get(
+  const discoveryRoute = HttpRouter.route("GET",
     "/.well-known/oauth-authorization-server",
     handleDiscovery.pipe(
       Effect.catchTag("@pf/openauth/MissingHostError", (e) =>
@@ -445,9 +447,9 @@ export const issuer: Effect.Effect<
     ),
   )
 
-  const authorizeRoute = HttpRouter.get("/oauth/authorize", handleAuthorize)
+  const authorizeRoute = HttpRouter.route("GET", "/oauth/authorize", handleAuthorize)
 
-  const tokenRoute = HttpRouter.post(
+  const tokenRoute = HttpRouter.route("POST",
     "/oauth/token",
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest
@@ -463,9 +465,11 @@ export const issuer: Effect.Effect<
       }
 
       const urlParams = yield* request.urlParamsBody
-      const form = new Map<string, string>()
-      for (const [key, value] of urlParams) {
-        form.set(key, value)
+      const form = formValues(urlParams)
+
+      if (form.get("grant_type") === "urn:ietf:params:oauth:grant-type:token-exchange" &&
+        [...urlParams].length !== form.size) {
+        return yield* errorJson("invalid_request", "Duplicate exchange parameters", 400)
       }
 
       const result: TokenEndpointResult = yield* handleToken(form)
@@ -553,10 +557,10 @@ export const issuer: Effect.Effect<
                 clientSecret: upstreamClientSecret,
                 params: Object.fromEntries(form) as Record<string, string>,
               }),
-          ).pipe(Effect.either)
+          ).pipe(Effect.result)
 
-          if (Either.isLeft(clientResult)) {
-            const error = clientResult.left
+          if (Result.isFailure(clientResult)) {
+            const error = clientResult.failure
             yield* Effect.logError("Provider client callback failed").pipe(
               Effect.annotateLogs({
                 message: error.message,
@@ -570,7 +574,7 @@ export const issuer: Effect.Effect<
             )
           }
 
-          const response = clientResult.right
+          const response = clientResult.success
 
           // Safely handle the response - it may or may not be an object
           const providerResult =
@@ -631,7 +635,7 @@ export const issuer: Effect.Effect<
     ),
   )
 
-  const userinfoRoute = HttpRouter.get(
+  const userinfoRoute = HttpRouter.route("GET",
     "/oauth/userinfo",
     handleUserinfo.pipe(
       Effect.catchTag("@pf/openauth/MissingHostError", (e) =>
@@ -640,16 +644,13 @@ export const issuer: Effect.Effect<
     ),
   )
 
-  const revokeRoute = HttpRouter.post(
+  const revokeRoute = HttpRouter.route("POST",
     "/oauth/revoke",
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest
 
       const urlParams = yield* request.urlParamsBody
-      const form = new Map<string, string>()
-      for (const [key, value] of urlParams) {
-        form.set(key, value)
-      }
+      const form = formValues(urlParams)
 
       return yield* handleRevoke(form)
     }).pipe(
@@ -661,14 +662,16 @@ export const issuer: Effect.Effect<
   )
 
   // Compose all routes
-  let router = HttpRouter.empty.pipe(
+  const routes = [
     jwksRoute,
     discoveryRoute,
     authorizeRoute,
     tokenRoute,
     userinfoRoute,
     revokeRoute,
-  )
+  ]
+
+  const staticRoutes = []
 
   // Mount static provider routes at /oauth/{providerName}/*
   for (const [providerName, provider] of providerRegistry.staticProviders) {
@@ -686,12 +689,14 @@ export const issuer: Effect.Effect<
     // Mount provider router at /oauth/{providerName}/*
     const providerPrefix = `/oauth/${providerName}` as `/${string}`
     const providerRouterWithOriginalPath = providerRouter.pipe(
-      HttpRouter.use((httpApp) =>
+      (httpApp) =>
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest
-          const subPath = new URL(request.url, "http://localhost").pathname
-          const originalPath = `${providerPrefix}${subPath}`
+          const url = new URL(request.url, "http://localhost")
+          const originalPath = url.pathname
+          url.pathname = url.pathname.slice(providerPrefix.length) || "/"
           const modifiedRequest = request.modify({
+            url: `${url.pathname}${url.search}`,
             headers: Headers.fromInput({
               ...request.headers,
               "x-original-path": originalPath,
@@ -719,12 +724,9 @@ export const issuer: Effect.Effect<
             ),
           )
         }),
-      ),
     )
 
-    router = router.pipe(
-      HttpRouter.mount(providerPrefix, providerRouterWithOriginalPath),
-    ) as typeof router
+    staticRoutes.push(HttpRouter.route("*", `${providerPrefix}/*`, providerRouterWithOriginalPath))
   }
 
   // Add dynamic provider resolution routes (catch-all for non-static providers)
@@ -741,17 +743,17 @@ export const issuer: Effect.Effect<
 
     // Expect path like /oauth/{provider}/...
     if (pathParts.length < 2 || pathParts[0] !== "oauth") {
-      return yield* HttpServerResponse.text("Provider not found", { status: 404 })
+      return HttpServerResponse.text("Provider not found", { status: 404 })
     }
 
     const providerName = pathParts[1]
     if (!providerName) {
-      return yield* HttpServerResponse.text("Provider not found", { status: 404 })
+      return HttpServerResponse.text("Provider not found", { status: 404 })
     }
 
     // Skip if this provider was mounted statically
     if (providerRegistry.hasProvider(providerName)) {
-      return yield* HttpServerResponse.text("Not found", { status: 404 })
+      return HttpServerResponse.text("Not found", { status: 404 })
     }
 
     // Check cache first
@@ -762,7 +764,7 @@ export const issuer: Effect.Effect<
       const resolved = yield* providerRegistry.resolveProvider(providerName)
 
       if (!resolved) {
-        return yield* HttpServerResponse.text(`Provider '${providerName}' not found`, {
+        return HttpServerResponse.text(`Provider '${providerName}' not found`, {
           status: 404,
         })
       }
@@ -831,7 +833,7 @@ export const issuer: Effect.Effect<
             )
           }),
       ),
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.gen(function* () {
           yield* Effect.logError("Dynamic provider handler error").pipe(
             Effect.annotateLogs({
@@ -861,33 +863,33 @@ export const issuer: Effect.Effect<
       errorJson("server_error", e.description, 500),
     ),
   )
-  router = router.pipe(
-    HttpRouter.get("/oauth/:provider/authorize", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.get("/oauth/:provider/callback", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/callback", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/challenge", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/verify", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/register", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/register-options", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/register-verify", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/authenticate", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/auth-options", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post("/oauth/:provider/auth-verify", dynamicProviderHandlerWithErrorHandling),
-    HttpRouter.post(
+  const allRoutes = [...routes, ...staticRoutes,
+    HttpRouter.route("GET", "/oauth/:provider/authorize", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("GET", "/oauth/:provider/callback", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/callback", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/challenge", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/verify", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/register", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/register-options", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/register-verify", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/authenticate", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/auth-options", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST", "/oauth/:provider/auth-verify", dynamicProviderHandlerWithErrorHandling),
+    HttpRouter.route("POST",
       "/oauth/:provider/registration-session-exchange",
       dynamicProviderHandlerWithErrorHandling,
     ),
-  ) as typeof router
+  ]
 
   // Apply middleware
-  return router.pipe(
-    HttpRouter.use((app) => Effect.gen(function* () {
+  return makeRouter(allRoutes).pipe(
+    (app) => Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest
       if (getProtocol(request.headers) === undefined) {
         return yield* errorJson("invalid_request", "Invalid forwarded protocol header", 400)
       }
       return yield* app
-    })),
-    HttpRouter.use(securityHeaders),
+    }),
+    securityHeaders,
   ) as unknown as Issuer
 })

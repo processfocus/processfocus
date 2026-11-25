@@ -7,6 +7,7 @@ import {
   createExecutionEventSource,
 } from "./execution-subscription"
 import { resolveGraphqlWsEndpoint } from "./graphql-client"
+import { renewingSubscription } from "./renewing-subscription"
 import type { SubscriptionTransportResponse } from "./subscription-transport"
 
 interface BuildExecutionEventSourceOptions {
@@ -25,36 +26,46 @@ export const buildExecutionEventSource = ({
   ExecutionEventSource,
   CliError
 > =>
-  subscriptionTransport.kind === "APPSYNC_EVENTS"
-    ? Effect.gen(function* () {
-        const appSyncEventsHttpHost =
-          subscriptionTransport.appSyncEventsHttpHost
-        if (!appSyncEventsHttpHost) {
-          return yield* new CliError({
-            message:
-              "GraphQL reported AppSync Events subscriptions but did not provide an AppSync host.",
-          })
-        }
-
-        const userId = parseAccessTokenUserId(credentials.accessToken)
-        if (!userId) {
-          return yield* new CliError({ message: missingUserIdMessage })
-        }
-
-        const baseUrlHost = credentials.baseUrl.replace(/^https?:\/\//, "")
-        return yield* createExecutionEventSourceImpl({
-          kind: "APPSYNC_EVENTS",
-          realtimeUrl: `wss://${baseUrlHost}/event/realtime`,
-          appSyncEventsHttpHost,
-          accessToken: credentials.accessToken,
-          userId,
+  credentials.workload
+    ? renewingSubscription(credentials.workload, (accessToken) => {
+        const { workload: _workload, ...stored } = credentials
+        return buildExecutionEventSource({
+          credentials: { ...stored, accessToken },
+          subscriptionTransport,
+          missingUserIdMessage,
+          createExecutionEventSourceImpl,
         })
       })
-    : createExecutionEventSourceImpl({
-        kind: "GRAPHQL_WS",
-        wsEndpoint: resolveGraphqlWsEndpoint(credentials.baseUrl),
-        accessToken: credentials.accessToken,
-      })
+    : subscriptionTransport.kind === "APPSYNC_EVENTS"
+      ? Effect.gen(function* () {
+          const appSyncEventsHttpHost =
+            subscriptionTransport.appSyncEventsHttpHost
+          if (!appSyncEventsHttpHost) {
+            return yield* new CliError({
+              message:
+                "GraphQL reported AppSync Events subscriptions but did not provide an AppSync host.",
+            })
+          }
+
+          const userId = parseAccessTokenUserId(credentials.accessToken)
+          if (!userId) {
+            return yield* new CliError({ message: missingUserIdMessage })
+          }
+
+          const baseUrlHost = credentials.baseUrl.replace(/^https?:\/\//, "")
+          return yield* createExecutionEventSourceImpl({
+            kind: "APPSYNC_EVENTS",
+            realtimeUrl: `wss://${baseUrlHost}/event/realtime`,
+            appSyncEventsHttpHost,
+            accessToken: credentials.accessToken,
+            userId,
+          })
+        })
+      : createExecutionEventSourceImpl({
+          kind: "GRAPHQL_WS",
+          wsEndpoint: resolveGraphqlWsEndpoint(credentials.baseUrl),
+          accessToken: credentials.accessToken,
+        })
 
 export const closeExecutionEventSource = (
   executionEventSource: ExecutionEventSource,
@@ -67,4 +78,4 @@ export const closeExecutionEventSource = (
         message: errorMessage,
         cause,
       }),
-  }).pipe(Effect.catchAll(() => Effect.void))
+  }).pipe(Effect.catch(() => Effect.void))

@@ -2,7 +2,7 @@
  * Unit tests for ClientRegistryService.
  * Tests static clients, dynamic clients, and validation rules.
  */
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 import type { IssuerClient } from "../../src/issuer"
 import {
   ClientRegistryError,
@@ -23,9 +23,9 @@ function runBuildRegistry(clients: IssuerClient[]) {
  * Helper to run buildClientRegistry and get the error.
  */
 function runBuildRegistryError(clients: IssuerClient[]) {
-  const result = Effect.runSync(Effect.either(buildClientRegistry(clients)))
-  if (Either.isLeft(result)) {
-    return result.left
+  const result = Effect.runSync(Effect.result(buildClientRegistry(clients)))
+  if (Result.isFailure(result)) {
+    return result.failure
   }
   throw new Error("Expected error but got success")
 }

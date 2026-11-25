@@ -114,7 +114,7 @@ When(
   async ({ page, scenarioState }) => {
     await page.goto("/executions?filter=all")
     await page
-      .getByRole("button", { name: /^Lifecycle recovery Without waiting/ })
+      .getByRole("button", { name: "Lifecycle recovery", exact: true })
       .first()
       .click()
     await page.waitForURL(

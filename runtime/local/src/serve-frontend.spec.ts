@@ -50,6 +50,7 @@ describe("serve-frontend launcher helpers", () => {
       NX_WORKSPACE_ROOT: "/repo",
       PF_ORG: "/org-a",
       PF_ENV: "dev",
+      PF_RUNTIME_MODE: "local",
     })
   })
 })

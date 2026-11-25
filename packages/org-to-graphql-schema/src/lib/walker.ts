@@ -1,9 +1,10 @@
 import { Data, Effect, Match } from "effect"
-import type * as AST from "effect/SchemaAST"
+import * as AST from "effect/SchemaAST"
 import {
   isNotNullLiteral,
   literalUnionGraphQLType,
   mapLiteralToGraphQLType,
+  unionMembers,
 } from "./graphql-type-utils"
 
 /**
@@ -103,11 +104,11 @@ const generateNestedTypeName = (
  */
 const mapToGraphQLType = (astTag: string): string | undefined => {
   switch (astTag) {
-    case "StringKeyword":
+    case "String":
       return "String"
-    case "NumberKeyword":
+    case "Number":
       return "Float"
-    case "BooleanKeyword":
+    case "Boolean":
       return "Boolean"
     default:
       return undefined
@@ -121,10 +122,10 @@ const mapASTToGraphQLScalar = (ast: AST.AST): string | undefined => {
 
   if (ast._tag === "Union") {
     return literalUnionGraphQLType(
-      ast.types.filter(
+      unionMembers(ast).filter(
         (member) =>
-          member._tag !== "UndefinedKeyword" &&
-          member._tag !== "VoidKeyword" &&
+          member._tag !== "Undefined" &&
+          member._tag !== "Void" &&
           isNotNullLiteral(member),
       ),
     )
@@ -144,7 +145,7 @@ export const walkAST = (
   typeName: string,
 ): Effect.Effect<GeneratedTypes, WalkError> =>
   Match.type<AST.AST>().pipe(
-    Match.tag("TypeLiteral", (typeLiteral) =>
+    Match.tag("Objects", (typeLiteral) =>
       Effect.gen(function* () {
         const fields: string[] = []
         const allAuxiliary: string[] = []
@@ -154,11 +155,8 @@ export const walkAST = (
           // Structural form elements encode display-only fields as Undefined.
           // They can cross a bundled organisation boundary without their
           // library-local annotation map, but they are still never GraphQL
-          // inputs and must not become invalid `UndefinedKeyword` fields.
-          if (
-            prop.type._tag === "UndefinedKeyword" ||
-            prop.type._tag === "VoidKeyword"
-          ) {
+          // inputs and must not become invalid `Undefined` fields.
+          if (prop.type._tag === "Undefined" || prop.type._tag === "Void") {
             continue
           }
           yield* validatePropertyKey(prop.name)
@@ -187,7 +185,7 @@ ${fields.map((f) => `  ${f}`).join("\n")}
     Match.orElse((node) =>
       Effect.fail(new UnrecognizedASTNodeError({ nodeTag: node._tag })),
     ),
-  )(ast)
+  )(AST.toEncoded(ast))
 
 /**
  * Result of processing a single property
@@ -213,7 +211,7 @@ const processProperty = (
 ): Effect.Effect<PropertyResult, WalkError> =>
   Effect.gen(function* () {
     const fieldName = yield* validatePropertyKey(prop.name)
-    const isOptional = prop.isOptional
+    const isOptional = prop.type.context?.isOptional ?? false
 
     return yield* processType(prop.type, fieldName, parentTypeName, isOptional)
   })
@@ -268,7 +266,7 @@ const processType = (
     }),
 
     // Nested struct - create a separate input type
-    Match.tag("TypeLiteral", (typeLiteral) =>
+    Match.tag("Objects", (typeLiteral) =>
       Effect.gen(function* () {
         const nestedTypeName = generateNestedTypeName(parentTypeName, fieldName)
         const result = yield* walkAST(typeLiteral, nestedTypeName)
@@ -281,22 +279,22 @@ const processType = (
       }),
     ),
 
-    // Array/list field: Schema.Array produces TupleType with rest: [Type(itemAST)]
-    Match.tag("TupleType", (tuple) => {
+    // Array/list field: Schema.Array produces Arrays with rest: [Type(itemAST)]
+    Match.tag("Arrays", (tuple) => {
       const restType = tuple.rest[0]
       if (!restType) {
         return Effect.fail(
           new UnsupportedSchemaTypeError({
             fieldName,
-            schemaType: "TupleType (empty)",
+            schemaType: "Arrays (empty)",
           }),
         )
       }
-      const itemAST = restType.type
+      const itemAST = restType
       const nullability = isOptional ? "" : "!"
 
-      // Check if item is a struct (TypeLiteral) — create nested input type
-      if (itemAST._tag === "TypeLiteral") {
+      // Check if item is a struct (Objects) — create nested input type
+      if (itemAST._tag === "Objects") {
         const nestedTypeName = generateNestedTypeName(
           parentTypeName,
           `${fieldName}Item`,
@@ -321,35 +319,23 @@ const processType = (
       return Effect.fail(
         new UnsupportedSchemaTypeError({
           fieldName,
-          schemaType: `TupleType (item: ${itemAST._tag})`,
+          schemaType: `Arrays (item: ${itemAST._tag})`,
         }),
       )
     }),
-
-    // Refinement: unwrap to base type
-    Match.tag("Refinement", (refinement) =>
-      processType(refinement.from, fieldName, parentTypeName, isOptional),
-    ),
-
-    // Transformation: use .from (input side)
-    Match.tag("Transformation", (transformation) =>
-      processType(transformation.from, fieldName, parentTypeName, isOptional),
-    ),
 
     // Union: for optional fields (String | Undefined)
     // Extract the first non-undefined type from the union
     Match.tag("Union", (union) => {
       // Find the first non-undefined/non-void type
-      const nonUndefinedTypes = union.types.filter(
+      const nonUndefinedTypes = unionMembers(union).filter(
         (t) =>
-          t._tag !== "UndefinedKeyword" &&
-          t._tag !== "VoidKeyword" &&
-          isNotNullLiteral(t),
+          t._tag !== "Undefined" && t._tag !== "Void" && isNotNullLiteral(t),
       )
       const literalGraphQLType = literalUnionGraphQLType(nonUndefinedTypes)
       if (literalGraphQLType) {
         const optional =
-          isOptional || nonUndefinedTypes.length !== union.types.length
+          isOptional || nonUndefinedTypes.length !== unionMembers(union).length
         return Effect.succeed({
           fieldDefinition: `${fieldName}: ${literalGraphQLType}${optional ? "" : "!"}`,
           auxiliary: [],
@@ -380,7 +366,7 @@ const processType = (
         nonUndefinedType,
         fieldName,
         parentTypeName,
-        isOptional || nonUndefinedTypes.length !== union.types.length,
+        isOptional || nonUndefinedTypes.length !== unionMembers(union).length,
       )
     }),
 
@@ -393,5 +379,5 @@ const processType = (
         }),
       ),
     ),
-  )(type)
+  )(AST.toEncoded(type))
 }

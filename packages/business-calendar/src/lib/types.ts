@@ -5,7 +5,7 @@ import { Schema } from "effect"
  * Matches JavaScript Date.getDay() convention.
  */
 export const DayOfWeek = Schema.Int.pipe(
-  Schema.between(0, 6),
+  Schema.check(Schema.isBetween({ minimum: 0, maximum: 6 })),
   Schema.brand("DayOfWeek"),
 )
 export type DayOfWeek = typeof DayOfWeek.Type
@@ -43,8 +43,12 @@ export const AllDays: readonly DayOfWeek[] = [
  * Time of day with hour (0-23) and minute (0-59).
  */
 export const TimeOfDay = Schema.Struct({
-  hour: Schema.Int.pipe(Schema.between(0, 23)),
-  minute: Schema.Int.pipe(Schema.between(0, 59)),
+  hour: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 0, maximum: 23 })),
+  ),
+  minute: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 0, maximum: 59 })),
+  ),
 })
 export type TimeOfDay = typeof TimeOfDay.Type
 
@@ -81,7 +85,7 @@ export type WeeklySchedule = typeof WeeklySchedule.Type
  * Month number (1-12).
  */
 export const Month = Schema.Int.pipe(
-  Schema.between(1, 12),
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 12 })),
   Schema.brand("Month"),
 )
 export type Month = typeof Month.Type
@@ -92,7 +96,7 @@ export type Month = typeof Month.Type
  * That validation happens at calculation time.
  */
 export const DayOfMonth = Schema.Int.pipe(
-  Schema.between(1, 31),
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 31 })),
   Schema.brand("DayOfMonth"),
 )
 export type DayOfMonth = typeof DayOfMonth.Type
@@ -101,7 +105,7 @@ export type DayOfMonth = typeof DayOfMonth.Type
  * Nth occurrence (1-5, where 5 means "last" in some contexts).
  */
 export const NthOccurrence = Schema.Int.pipe(
-  Schema.between(1, 5),
+  Schema.check(Schema.isBetween({ minimum: 1, maximum: 5 })),
   Schema.brand("NthOccurrence"),
 )
 export type NthOccurrence = typeof NthOccurrence.Type

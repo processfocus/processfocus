@@ -2,9 +2,7 @@
 
 import dynamic from "next/dynamic"
 
-// Disable SSR for this component because:
-// 1. useProcessesQuery uses useSyncExternalStore without getServerSnapshot
-// 2. Authentication tokens are only available client-side
+// The process catalog opens browser-local replicated collections.
 const ProcessesPageClient = dynamic(() => import("./processes-client"), {
   ssr: false,
   loading: () => (

@@ -1,18 +1,11 @@
-import {
-  Context,
-  DateTime,
-  Effect,
-  FiberRef,
-  Layer,
-  ManagedRuntime,
-} from "effect"
+import { Context, DateTime, Effect, Layer, ManagedRuntime } from "effect"
 import type { GraphQLSchema } from "graphql"
+import { CurrentPrincipal } from "@pf/auth-policy"
+import type { ProviderUserSession } from "@pf/auth-session"
 import {
   DelegationSessionService,
   InvalidDelegationSession,
-} from "@pf/auth-api"
-import { CurrentPrincipal, type UserPrincipal } from "@pf/auth-policy"
-import type { ProviderUserSession } from "@pf/auth-session"
+} from "@pf/delegation/authorization"
 import { UserDetails } from "@pf/graphql-db-operations"
 import { RequestTime } from "@pf/request-time"
 import {
@@ -28,7 +21,7 @@ import { describe, expect, it } from "bun:test"
 
 const makeContext = (expiresAt = Date.now() + 120_000): UserContext => ({
   userId: "usr-owner",
-  _requestTime: DateTime.unsafeMake(0),
+  _requestTime: DateTime.makeUnsafe(0),
   _userDetails: { id: "usr-owner", by: "owner@example.com" },
   jwt: {
     mode: "access",
@@ -54,7 +47,9 @@ const makeContext = (expiresAt = Date.now() + 120_000): UserContext => ({
   },
 })
 
-const checker = (check: DelegationSessionService["Type"]["check"]) =>
+const checker = (
+  check: Context.Service.Shape<typeof DelegationSessionService>["check"],
+) =>
   Layer.succeed(DelegationSessionService, {
     check,
     exchange: () => Effect.fail(new InvalidDelegationSession()),
@@ -92,6 +87,36 @@ const source = <A>(values: A[] = []) => {
 }
 
 describe("local delegated realtime boundary", () => {
+  it("closes an idle SSO subscription at its effective token deadline", async () => {
+    const context = makeContext(Date.now() + 120_000)
+    const jwt = context.jwt!
+    const props = jwt.properties as ProviderUserSession
+    const expiresAt = Date.now() + 30
+    const ssoContext: UserContext = {
+      ...context,
+      jwt: {
+        ...jwt,
+        properties: {
+          ...props,
+          delegation: undefined,
+          sso: {
+            provider: "google",
+            subject: "owner",
+            verifiedAt: expiresAt - 28_800_000,
+            expiresAt,
+          },
+        },
+      },
+    }
+    const events = source<string>()
+    const stream = guardRealtimeStream(events.iterator, {
+      context: ssoContext,
+      refresh: async () => ssoContext,
+      deliver: async (value) => value,
+    })
+    await expect(stream.next()).rejects.toThrow("unavailable or invalid")
+    expect(events.returned()).toBe(1)
+  })
   it("requires both explicit local capability and a live checker", async () => {
     const context = makeContext()
     await expect(
@@ -175,7 +200,6 @@ describe("local delegated realtime boundary", () => {
       "requestUploadUrl",
       "requestDownloadUrl",
       "exportListCsv",
-      "requestProviderUserPermissions",
     ]) {
       await expect(
         Effect.runPromise(
@@ -436,7 +460,7 @@ describe("realtime stream lifecycle", () => {
 })
 
 type TestDocument = { id: string; updatedAt: number; deleted: boolean }
-class TestEvents extends Context.Tag("graphql-api/test/realtime-events")<
+class TestEvents extends Context.Service<
   TestEvents,
   {
     readonly emit: (
@@ -447,24 +471,18 @@ class TestEvents extends Context.Tag("graphql-api/test/realtime-events")<
       AsyncIterable<{ documents: TestDocument[] }>
     >
   }
->() {}
+>()("graphql-api/test/realtime-events") {}
 
 it("filters concurrent deliveries in separate principal and request-time fibers", async () => {
   const document = { id: "document", updatedAt: 1, deleted: false }
   const runtime = ManagedRuntime.make(
     Layer.mergeAll(
-      Layer.succeed(RequestTime, FiberRef.unsafeMake(DateTime.unsafeMake(0))),
-      Layer.succeed(
-        UserDetails,
-        FiberRef.unsafeMake<UserContext["_userDetails"]>({
-          id: null,
-          by: "SYSTEM",
-        }),
-      ),
-      Layer.succeed(
-        CurrentPrincipal,
-        FiberRef.unsafeMake<UserPrincipal | null>(null),
-      ),
+      Layer.succeed(RequestTime, DateTime.makeUnsafe(0)),
+      Layer.succeed(UserDetails, {
+        id: null,
+        by: "SYSTEM",
+      }),
+      Layer.succeed(CurrentPrincipal, null),
       Layer.succeed(TestEvents, {
         emit: () => Effect.void,
         subscribe: () =>
@@ -475,12 +493,15 @@ it("filters concurrent deliveries in separate principal and request-time fibers"
   const subscription = makeAuthorizedStreamSubscription(
     TestEvents,
     "events",
-    (documents, principal: UserPrincipal) =>
+    (
+      documents,
+      principal: NonNullable<ReturnType<typeof buildCurrentPrincipal>>,
+    ) =>
       Effect.gen(function* () {
-        yield* Effect.yieldNow()
-        expect(yield* FiberRef.get(yield* CurrentPrincipal)).toBe(principal)
+        yield* Effect.yieldNow
+        expect(yield* Effect.succeed(yield* CurrentPrincipal)).toBe(principal)
         const time = DateTime.toEpochMillis(
-          yield* FiberRef.get(yield* RequestTime),
+          yield* Effect.succeed(yield* RequestTime),
         )
         expect(time).toBe(principal.roles[0]?.id === "/Allowed" ? 1 : 2)
         return principal.roles[0]?.id === "/Allowed" ? [...documents] : []
@@ -497,7 +518,7 @@ it("filters concurrent deliveries in separate principal and request-time fibers"
     const original = makeContext()
     return {
       ...original,
-      _requestTime: DateTime.unsafeMake(time),
+      _requestTime: DateTime.makeUnsafe(time),
       jwt: {
         ...original.jwt!,
         properties: { ...original.jwt!.properties, roles: [role] },

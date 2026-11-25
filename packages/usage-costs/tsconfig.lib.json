@@ -18,7 +18,10 @@
   ],
   "references": [
     {
-      "path": "../form-client-representation/tsconfig.lib.json"
+      "path": "../form-schema/tsconfig.lib.json"
+    },
+    {
+      "path": "../shadcn-components/tsconfig.lib.json"
     }
   ]
 }

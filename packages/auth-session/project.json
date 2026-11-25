@@ -8,6 +8,13 @@
         "commands": ["tsgo --build tsconfig.lib.json"]
       },
       "outputs": ["{projectRoot}/out-tsc/lib"]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["bun test test"]
+      }
     }
   }
 }

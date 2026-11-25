@@ -1,11 +1,12 @@
+import { ByteSize, Clock, DateTime, Effect, Option, Schema } from "effect"
 import {
   HttpIncomingMessage,
   HttpServerRequest,
   HttpServerResponse,
-} from "@effect/platform"
-import { Clock, DateTime, Effect, Option, Schema } from "effect"
+} from "effect/http"
 import { jwtVerify } from "jose"
 import { getClientId, subjects } from "@pf/auth-session"
+import { DelegationCredentialService, DelegationDatabase } from "@pf/delegation"
 import {
   type ClientRegistryService,
   type Issuer,
@@ -15,20 +16,18 @@ import {
   generateTokens,
   getIssuerUrl,
 } from "@pf/openauth"
-import { DelegationDatabase } from "./delegation-database.js"
-import { DelegationSessionService } from "./delegation-session.js"
 
 const Input = Schema.Struct({
-  secret: Schema.String.pipe(Schema.maxLength(48)),
+  secret: Schema.String.pipe(Schema.check(Schema.isMaxLength(48))),
 })
 const SessionInput = Schema.Struct({
   accessToken: Schema.String.pipe(
-    Schema.minLength(1),
-    Schema.maxLength(16_384),
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(16_384)),
   ),
 })
 const json = (body: unknown, status = 200) =>
-  HttpServerResponse.unsafeJson(body, {
+  HttpServerResponse.jsonUnsafe(body, {
     status,
     headers: {
       "cache-control": "no-store",
@@ -43,7 +42,7 @@ export const makeDelegationExchangeHandler: Effect.Effect<
   ClientRegistryService | KeyManagementService | StorageService
 > = Effect.gen(function* () {
   const frontendClientId = getClientId()
-  const service = yield* Effect.serviceOption(DelegationSessionService)
+  const service = yield* Effect.serviceOption(DelegationCredentialService)
   const database = yield* Effect.serviceOption(DelegationDatabase)
   const keys = yield* KeyManagementService
   // Bound aggregate work per issuer instance without retaining secrets or client input.
@@ -103,11 +102,17 @@ export const makeDelegationExchangeHandler: Effect.Effect<
     const { client, method } = yield* authenticateClient(new Map())
     if (client.id !== frontendClientId || method !== "client_jwt")
       return json({ error: "invalid_client" }, 401)
+    // Credential introspection only. Application admission belongs to GraphQL.
     if (sessionRequest) {
       const input = yield* request.json.pipe(
-        HttpIncomingMessage.withMaxBodySize(Option.some(20_480)),
+        Effect.provideService(
+          HttpIncomingMessage.MaxBodySize,
+          ByteSize.bytes(20_480),
+        ),
         Effect.flatMap(
-          Schema.decodeUnknown(SessionInput, { onExcessProperty: "error" }),
+          Schema.decodeUnknownEffect(SessionInput, {
+            onExcessProperty: "error",
+          }),
         ),
       )
       const signingKeys = yield* keys.allSigningKeys
@@ -158,9 +163,12 @@ export const makeDelegationExchangeHandler: Effect.Effect<
       return json({ session: session.value })
     }
     const input = yield* request.json.pipe(
-      HttpIncomingMessage.withMaxBodySize(Option.some(1024)),
+      Effect.provideService(
+        HttpIncomingMessage.MaxBodySize,
+        ByteSize.bytes(1024),
+      ),
       Effect.flatMap(
-        Schema.decodeUnknown(Input, { onExcessProperty: "error" }),
+        Schema.decodeUnknownEffect(Input, { onExcessProperty: "error" }),
       ),
     )
     const session = yield* service.value.exchange(input.secret)
@@ -184,8 +192,6 @@ export const makeDelegationExchangeHandler: Effect.Effect<
   }).pipe(
     Effect.provide(context),
     // Never report SQL errors, request bodies, verifiers or credential-bearing causes.
-    Effect.catchAll(() =>
-      Effect.succeed(json({ error: "invalid_grant" }, 400)),
-    ),
+    Effect.catch(() => Effect.succeed(json({ error: "invalid_grant" }, 400))),
   )
 })

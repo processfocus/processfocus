@@ -40,8 +40,16 @@ export const getRealtimeRecipientId = async (
     properties.orgUnitPath ?? null,
     accessTokenExpiresAt,
   ]
-  const identity =
-    "clientId" in properties
+  const identity = properties.workload
+    ? [
+        "workload",
+        "email" in properties ? properties.email : properties.clientId,
+        Object.entries(properties.workload).sort(([a], [b]) =>
+          a < b ? -1 : a > b ? 1 : 0,
+        ),
+        ...authority,
+      ]
+    : "clientId" in properties
       ? ["service", properties.clientId, ...authority]
       : !properties.delegation
         ? ["human", properties.email, ...authority]

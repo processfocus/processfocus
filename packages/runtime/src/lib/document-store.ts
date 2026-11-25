@@ -10,13 +10,11 @@ export class FileNotFoundError extends Data.TaggedError("FileNotFoundError")<{
 }> {}
 
 /**
- * Shared document-store contract used by official plugins.
+ * Canonical document-store contract used by runtime adapters and plugins.
  * The identifier is stable so workspace implementations and published plugins
  * resolve the same Effect service.
  */
-export class DocumentStoreService extends Context.Tag(
-  "@pf/document-store-service/DocumentStoreService",
-)<
+export class DocumentStoreService extends Context.Service<
   DocumentStoreService,
   {
     readonly requestUploadUrl: (opts: {
@@ -24,6 +22,8 @@ export class DocumentStoreService extends Context.Tag(
       readonly storePrefix: string
       readonly contentType?: string
       readonly filename?: string
+      /** Absolute upper bound for caller-derived upload capability (epoch ms). */
+      readonly expiresAt?: number
     }) => Effect.Effect<
       { fileId: string; uploadUrl: string; expiresAt: string },
       DocumentStoreError
@@ -38,6 +38,7 @@ export class DocumentStoreService extends Context.Tag(
       DocumentStoreError | FileNotFoundError
     >
 
+    /** Store a byte stream directly from a trusted server-side workflow. */
     readonly storeFile: (opts: {
       readonly fileId: string
       readonly storePrefix: string
@@ -46,6 +47,7 @@ export class DocumentStoreService extends Context.Tag(
       readonly filename?: string
     }) => Effect.Effect<{ fileId: string }, DocumentStoreError>
 
+    /** Read bytes for email attachments or other server-side processing. */
     readonly getFileContent: (
       fileId: string,
       storePrefix: string,
@@ -54,6 +56,7 @@ export class DocumentStoreService extends Context.Tag(
       DocumentStoreError | FileNotFoundError
     >
 
+    /** Inspect size and content type without buffering the file body. */
     readonly getFileMetadata: (
       fileId: string,
       storePrefix: string,
@@ -62,9 +65,10 @@ export class DocumentStoreService extends Context.Tag(
       DocumentStoreError | FileNotFoundError
     >
 
+    /** Clean up orphaned or cancelled uploads. */
     readonly deleteFile: (
       fileId: string,
       storePrefix: string,
     ) => Effect.Effect<void, DocumentStoreError>
   }
->() {}
+>()("@pf/document-store-service/DocumentStoreService") {}

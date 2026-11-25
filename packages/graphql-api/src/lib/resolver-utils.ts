@@ -1,28 +1,28 @@
 import {
+  Cause,
   type DateTime,
   Effect,
+  Exit,
   type ManagedRuntime,
-  Option,
-  Schema,
-  SchemaAST,
   type Tracer,
 } from "effect"
-import { ArrayFormatter, type ParseError } from "effect/ParseResult"
 import type { GraphQLFieldResolver, GraphQLResolveInfo } from "graphql"
 import {
   CurrentPrincipal,
   DelegationPrincipal,
   ProviderUserPrincipal,
+  ServiceAccountPrincipal,
   type UserPrincipal,
 } from "@pf/auth-policy"
-import type { ProviderUserSession, Session } from "@pf/auth-session"
-import { submissionSchemaSync } from "@pf/form-submission-schema"
+import type { Session } from "@pf/auth-session"
 import { UserDetails, type UserDetailsValue } from "@pf/graphql-db-operations"
-import type { ValidationError } from "@pf/graphql-schema"
+import { LookupFieldNotFoundError } from "@pf/process"
 import { RequestTime } from "@pf/request-time"
-import { hasDelegation } from "./session-guards"
+import { errorDiagnostic } from "./error-diagnostic"
+import { hasDelegation, isProviderUserSession } from "./session-guards"
 import {
-  extractErrorFromFiberFailure,
+  extractErrorFromCause,
+  isExpectedGraphQLError,
   toGraphQLError,
   toSerializableGraphQLExtensions,
 } from "./to-graphql-error"
@@ -31,20 +31,41 @@ import type { EffectFieldResolver, ResolverMap, UserContext } from "./types"
 // Re-export so existing importers of resolver-utils keep working.
 export { toSerializableGraphQLExtensions }
 
-/** Type guard to check if session is a provider user session */
-const isProviderUserSession = (
-  props: Session | undefined,
-): props is ProviderUserSession => {
-  return props !== undefined && "email" in props
+type GraphqlLogIdentity = {
+  readonly userId?: string
+  readonly rolePath?: string
+  readonly orgUnitId?: string
+  readonly orgUnitPath?: string
+}
+
+export const graphqlLogIdentity = (
+  persistedUserId: string | null,
+  session: Session | undefined,
+): GraphqlLogIdentity => {
+  // Cedar provider-user IDs and the audit "by" field can be email addresses.
+  const userId = persistedUserId ?? session?.userId
+  const switchedRole = isProviderUserSession(session)
+    ? (session.switchedRole ?? session.temporaryRoleAuthority?.role)
+    : undefined
+  const rolePath =
+    switchedRole ??
+    (session?.roles?.length === 1 ? session.roles[0] : undefined)
+  return {
+    ...(userId !== undefined && { userId }),
+    ...(rolePath !== undefined && { rolePath }),
+    ...(session?.orgUnitId !== undefined && { orgUnitId: session.orgUnitId }),
+    ...(session?.orgUnitPath !== undefined && {
+      orgUnitPath: session.orgUnitPath,
+    }),
+  }
 }
 
 /**
- * Build a ProviderUserPrincipal (or null) from the user context.
- * Returns null for service accounts or unauthenticated requests.
+ * Preserve the verified principal type, including direct machine authority.
  */
 export const buildCurrentPrincipal = (
   context: UserContext,
-): UserPrincipal | null => {
+): UserPrincipal | ServiceAccountPrincipal | null => {
   const props = context.jwt?.properties
   if (hasDelegation(props)) {
     if (!isProviderUserSession(props) || !props.delegation) return null
@@ -63,10 +84,12 @@ export const buildCurrentPrincipal = (
       orgUnitId: orgUnitPath,
     })
   }
+  if (props && "clientId" in props)
+    return new ServiceAccountPrincipal(props.clientId, props.roles ?? [])
   return null
 }
 
-/** Services the resolver executor always scopes via FiberRefs. */
+/** Services the resolver executor provides from each request context. */
 export type ResolverExecutorContext =
   | RequestTime
   | UserDetails
@@ -80,11 +103,11 @@ export type ResolverExecutorContext =
  * `R` is the environment closed over at {@link createResolverExecutor}
  * construction time. `runPromise` / `runWithFieldContext` only accept Effects
  * whose remaining requirements are satisfied by that environment (plus field
- * FiberRef services for `runWithFieldContext`).
+ * services for `runWithFieldContext`).
  */
 export interface ResolverExecutor<R = never> {
   /**
-   * Run an Effect with RequestTime, UserDetails, and CurrentPrincipal FiberRefs
+   * Run an Effect with RequestTime, UserDetails, and CurrentPrincipal services
    * from the GraphQL request context. Single runPromise boundary.
    */
   readonly runWithFieldContext: <A, E>(
@@ -94,7 +117,8 @@ export interface ResolverExecutor<R = never> {
       readonly parentSpan: Tracer.Span | undefined
       readonly requestTime: DateTime.Utc
       readonly userDetails: UserDetailsValue
-      readonly principal: UserPrincipal | null
+      readonly session?: Session | undefined
+      readonly principal: UserPrincipal | ServiceAccountPrincipal | null
       readonly logLabel?: string
       readonly signal?: AbortSignal | undefined
     },
@@ -108,7 +132,7 @@ export interface ResolverExecutor<R = never> {
   readonly wrapResolvers: (resolvers: ResolverMap) => Record<string, any>
 
   /**
-   * Run an Effect through the closed-over ManagedRuntime without field FiberRefs.
+   * Run an Effect through the closed-over ManagedRuntime without field services.
    * Used for long-lived subscription setup and per-event authorization filters.
    */
   readonly runPromise: <A, E>(
@@ -122,9 +146,8 @@ export interface ResolverExecutor<R = never> {
  * Call once at the ManagedRuntime boundary (schema / Yoga construction).
  *
  * `R` is the runtime's full provided environment (not narrowed to field
- * FiberRefs only). Callers must use a ManagedRuntime that includes
- * {@link ResolverExecutorContext} services; that is enforced at the
- * composition sites that yield those FiberRefs.
+ * services only). `runWithFieldContext` supplies the
+ * {@link ResolverExecutorContext} services from its request options.
  */
 export const createResolverExecutor = <R>(
   runtime: ManagedRuntime.ManagedRuntime<R, unknown>,
@@ -136,39 +159,57 @@ export const createResolverExecutor = <R>(
       readonly parentSpan: Tracer.Span | undefined
       readonly requestTime: DateTime.Utc
       readonly userDetails: UserDetailsValue
-      readonly principal: UserPrincipal | null
+      readonly session?: Session | undefined
+      readonly principal: UserPrincipal | ServiceAccountPrincipal | null
       readonly logLabel?: string
       readonly signal?: AbortSignal | undefined
     },
   ): Promise<A> => {
+    const identity = graphqlLogIdentity(options.userDetails.id, options.session)
     const effectWithSpan = effect.pipe(
+      Effect.tapCause((cause) =>
+        Effect.gen(function* () {
+          const span = yield* Effect.currentSpan
+          const error = extractErrorFromCause(cause)
+          const expected =
+            cause.reasons.length > 0 &&
+            cause.reasons.every(
+              (reason) =>
+                Cause.isFailReason(reason) &&
+                isExpectedGraphQLError(reason.error),
+            )
+          const logFailure = expected ? Effect.logWarning : Effect.logError
+          yield* logFailure(options.logLabel ?? "GraphQL resolver failure", {
+            field: options.spanName,
+            traceId: span.traceId,
+            spanId: span.spanId,
+            userId: identity.userId,
+            error: errorDiagnostic(error),
+            ...(error instanceof LookupFieldNotFoundError && {
+              formPath: error.formStep,
+              fieldName: error.fieldName,
+            }),
+          })
+        }),
+      ),
       Effect.withSpan(options.spanName, { parent: options.parentSpan }),
+      Effect.annotateLogs(identity),
     )
 
-    // Yield FiberRef services then scope request values. The closed-over
-    // runtime must provide ResolverExecutorContext; remaining requirements
-    // of `effect` stay in R.
-    const withFieldRefs = Effect.gen(function* () {
-      const requestTimeRef = yield* RequestTime
-      const userDetailsRef = yield* UserDetails
-      const principalRef = yield* CurrentPrincipal
-      return yield* effectWithSpan.pipe(
-        Effect.locally(requestTimeRef, options.requestTime),
-        Effect.locally(userDetailsRef, options.userDetails),
-        Effect.locally(principalRef, options.principal),
-      )
-    }) as Effect.Effect<A, E, R>
+    const withFieldRefs = effectWithSpan.pipe(
+      Effect.provideService(RequestTime, options.requestTime),
+      Effect.provideService(UserDetails, options.userDetails),
+      Effect.provideService(CurrentPrincipal, options.principal),
+    )
 
     return runtime
-      .runPromise(
+      .runPromiseExit(
         withFieldRefs,
         options.signal ? { signal: options.signal } : undefined,
       )
-      .catch((fiberFailure) => {
-        // Convert errors after Effect runtime to preserve GraphQLError extensions.
-        // Effect wraps errors in FiberFailure; extract then map via shared helper.
-        const error = extractErrorFromFiberFailure(fiberFailure)
-        console.error(options.logLabel ?? "GraphQL resolver failure", error)
+      .then((exit) => {
+        if (Exit.isSuccess(exit)) return exit.value
+        const error = extractErrorFromCause(exit.cause)
         throw toGraphQLError(error)
       })
   }
@@ -205,6 +246,7 @@ export const createResolverExecutor = <R>(
               parentSpan: context._effectParentSpan,
               requestTime: context._requestTime,
               userDetails: context._userDetails,
+              session: context.jwt?.properties,
               principal: buildCurrentPrincipal(context),
               signal: context._realtimeAbortSignal,
             },
@@ -300,142 +342,11 @@ export const createResolverExecutor = <R>(
   }
 }
 
-/**
- * Helper to check if a segment is a key object
- */
-const isKeyObject = (segment: unknown): segment is { key: PropertyKey } =>
-  typeof segment === "object" &&
-  segment !== null &&
-  "key" in segment &&
-  typeof segment.key !== "undefined"
-
-/**
- * Extracts validation errors from an Effect Schema ParseError.
- * Field path is returned in dot notation (e.g., "address.city").
- */
-export const extractValidationErrors = (
-  parseError: ParseError,
-): ValidationError[] => {
-  const formatted = ArrayFormatter.formatErrorSync(parseError)
-
-  return formatted.map((issue) => ({
-    field: issue.path
-      .map((segment) =>
-        isKeyObject(segment) ? String(segment.key) : String(segment),
-      )
-      .join("."),
-    message: issue.message,
-  }))
-}
-
-export const getSubmissionFields = (fields: Schema.Struct.Fields) =>
-  submissionSchemaSync(Schema.Struct(fields)).fields
-
-const astChildKeys = [
-  "type",
-  "types",
-  "from",
-  "to",
-  "elements",
-  "rest",
-] as const
-
-const isAst = (value: unknown): value is SchemaAST.AST =>
-  typeof value === "object" &&
-  value !== null &&
-  "_tag" in value &&
-  typeof (value as { readonly _tag?: unknown })._tag === "string"
-
-const getRawAnnotation = (
-  value: { readonly annotations?: SchemaAST.Annotations },
-  annotationId: symbol,
-): Option.Option<unknown> => {
-  const annotation = value.annotations?.[annotationId]
-  return annotation === undefined ? Option.none() : Option.some(annotation)
-}
-
-export const getSchemaAnnotationDeep = (
-  schema: Schema.Struct.Fields[string],
-  annotationId: symbol,
-): Option.Option<unknown> => {
-  const visit = (
-    ast: SchemaAST.AST,
-    seen: Set<SchemaAST.AST>,
-  ): Option.Option<unknown> => {
-    const direct = SchemaAST.getAnnotation(ast, annotationId)
-    if (Option.isSome(direct)) return direct
-    if (seen.has(ast)) return Option.none()
-    seen.add(ast)
-
-    // This walks known Effect Schema AST shapes used by form schemas. If Effect
-    // changes wrapper shapes, add traversal coverage and tests here so
-    // permission annotations cannot be hidden by an unsupported wrapper.
-    if (SchemaAST.isSuspend(ast)) {
-      const result = visit(ast.f(), seen)
-      if (Option.isSome(result)) return result
-    }
-
-    const record = ast as unknown as Record<string, unknown>
-    if (Array.isArray(record["propertySignatures"])) {
-      for (const property of record["propertySignatures"]) {
-        if (typeof property !== "object" || property === null) continue
-        const propertyRecord = property as {
-          readonly annotations?: SchemaAST.Annotations
-          readonly type?: unknown
-        }
-        const propertyAnnotation = getRawAnnotation(
-          propertyRecord,
-          annotationId,
-        )
-        if (Option.isSome(propertyAnnotation)) return propertyAnnotation
-        if (isAst(propertyRecord.type)) {
-          const result = visit(propertyRecord.type, seen)
-          if (Option.isSome(result)) return result
-        }
-      }
-    }
-
-    if (Array.isArray(record["indexSignatures"])) {
-      for (const signature of record["indexSignatures"]) {
-        if (typeof signature !== "object" || signature === null) continue
-        const signatureRecord = signature as {
-          readonly parameter?: unknown
-          readonly type?: unknown
-        }
-        for (const child of [signatureRecord.parameter, signatureRecord.type]) {
-          if (!isAst(child)) continue
-          const result = visit(child, seen)
-          if (Option.isSome(result)) return result
-        }
-      }
-    }
-
-    for (const key of astChildKeys) {
-      const child = record[key]
-      if (Array.isArray(child)) {
-        for (const item of child) {
-          if (!isAst(item)) continue
-          const result = visit(item, seen)
-          if (Option.isSome(result)) return result
-        }
-        continue
-      }
-      if (isAst(child)) {
-        const result = visit(child, seen)
-        if (Option.isSome(result)) return result
-      }
-    }
-
-    return Option.none()
-  }
-
-  return visit(
-    Schema.isPropertySignature(schema)
-      ? Schema.Struct({ field: schema }).ast
-      : schema.ast,
-    new Set(),
-  )
-}
+export {
+  extractValidationErrors,
+  getSchemaAnnotationDeep,
+  getSubmissionFields,
+} from "@pf/form-submission-schema"
 
 /**
  * Extract process path from step path.

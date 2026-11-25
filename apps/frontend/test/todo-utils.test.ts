@@ -2,13 +2,7 @@ import { JSDOM } from "jsdom"
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import {
-  assignedAtRefreshDelay,
-  computeTodoStatus,
-  formatAssignedAtExact,
-  formatAssignedAtLabel,
-  useOverdueRefresh,
-} from "../lib/todo-utils"
+import { computeTodoStatus, useOverdueRefresh } from "../lib/todo-utils"
 
 const NOW = new Date("2026-05-20T12:00:00.000Z").getTime()
 
@@ -47,114 +41,6 @@ describe("computeTodoStatus", () => {
     expect(
       computeTodoStatus("2026-05-21T12:00:00.000Z", "Correction Required"),
     ).toBe("Correction Required")
-  })
-})
-
-describe("formatAssignedAtLabel", () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  test("formats recent assignments as just now", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-20T11:59:30.000Z")).toBe(
-      "Assigned just now",
-    )
-  })
-
-  test("formats same-day assignments by elapsed hours", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-20T10:00:00.000Z")).toBe(
-      "Assigned 2 hours ago",
-    )
-  })
-
-  test("formats singular elapsed hours", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-20T11:00:00.000Z")).toBe(
-      "Assigned 1 hour ago",
-    )
-  })
-
-  test("formats same-day assignments by elapsed minutes", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-20T11:32:00.000Z")).toBe(
-      "Assigned 28 minutes ago",
-    )
-  })
-
-  test("formats singular elapsed minutes", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-20T11:59:00.000Z")).toBe(
-      "Assigned 1 minute ago",
-    )
-  })
-
-  test("formats yesterday explicitly", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-19T12:00:00.000Z")).toBe(
-      "Assigned yesterday",
-    )
-  })
-
-  test("formats assignments from earlier this week by elapsed days", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-16T12:00:00.000Z")).toBe(
-      "Assigned 4 days ago",
-    )
-  })
-
-  test("formats older assignments as a date", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(formatAssignedAtLabel("2026-05-01T12:00:00.000Z")).toBe(
-      "Assigned May 1, 2026",
-    )
-  })
-
-  test("handles invalid assigned timestamps", () => {
-    expect(formatAssignedAtLabel("not-a-date")).toBe("Assigned at unknown time")
-  })
-})
-
-describe("assignedAtRefreshDelay", () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  test("refreshes recent assignments when the minute label can change", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(assignedAtRefreshDelay("2026-05-20T11:59:30.000Z")).toBe(31_000)
-  })
-
-  test("schedules refresh to next hour boundary", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(assignedAtRefreshDelay("2026-05-20T09:59:30.000Z")).toBe(3_571_000)
-  })
-
-  test("refreshes day labels at day boundaries", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(assignedAtRefreshDelay("2026-05-19T12:00:00.000Z")).toBe(86_401_000)
-  })
-
-  test("stops refreshing when assigned date labels no longer change", () => {
-    vi.spyOn(Date, "now").mockReturnValue(NOW)
-
-    expect(assignedAtRefreshDelay("2026-05-01T12:00:00.000Z")).toBeNull()
-  })
-
-  test("does not refresh invalid assigned timestamps", () => {
-    expect(assignedAtRefreshDelay("not-a-date")).toBeNull()
   })
 })
 
@@ -252,17 +138,5 @@ describe("useOverdueRefresh", () => {
     } finally {
       harness.cleanup()
     }
-  })
-})
-
-describe("formatAssignedAtExact", () => {
-  test("formats exact assigned timestamps", () => {
-    expect(formatAssignedAtExact("2026-05-20T10:15:00")).toMatch(
-      /^Assigned May 20, 2026,/,
-    )
-  })
-
-  test("handles invalid assigned timestamps", () => {
-    expect(formatAssignedAtExact("not-a-date")).toBe("Assigned at unknown time")
   })
 })

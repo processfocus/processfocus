@@ -18,7 +18,7 @@
     "./generated/draft-process-execution-schema.json": "./generated/draft-process-execution-schema.json"
   },
   "dependencies": {
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

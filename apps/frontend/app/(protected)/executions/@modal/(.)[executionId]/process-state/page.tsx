@@ -1,6 +1,8 @@
 import { Suspense } from "react"
 import { ProcessStateModalClient } from "../../../process-state-modal-client"
 
+export const instant = false
+
 async function Content({
   params,
 }: {

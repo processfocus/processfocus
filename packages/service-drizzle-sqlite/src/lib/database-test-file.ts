@@ -16,7 +16,7 @@ const defaultMigrationsFolder = join(
  * Config for the migrations folder path.
  * Can be overridden using ConfigProvider.fromMap({ MIGRATIONS_FOLDER: "/custom/path" })
  */
-export const MigrationsFolderConfig = Config.string("MIGRATIONS_FOLDER").pipe(
+export const MigrationsFolderConfig = Config.String("MIGRATIONS_FOLDER").pipe(
   Config.withDefault(defaultMigrationsFolder),
 )
 
@@ -66,8 +66,8 @@ export const generateTempDbPath = (): string => {
  */
 export const DatabaseTestFile = (dbPath: string) => {
   // Create config provider with the database path
-  const ConfigProviderLayer = Layer.setConfigProvider(
-    ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+  const ConfigProviderLayer = ConfigProvider.layer(
+    ConfigProvider.fromUnknown({ SQLITE_DATABASE_PATH: dbPath }),
   )
 
   // Create the drizzle layer with SqliteLive, exporting both TypedSqliteDrizzle and SqlClient

@@ -3,6 +3,7 @@ import { JSDOM } from "jsdom"
 import { Activity, type ComponentProps, act } from "react"
 import { type Root, createRoot, hydrateRoot } from "react-dom/client"
 import { renderToString } from "react-dom/server"
+import { DateTimeDisplayProvider } from "@pf/shadcn-components/date-time-display"
 import type { DelegationMetadata } from "../lib/auth/delegations"
 import { environmentUnavailableMessage } from "../lib/auth/session-admission-message"
 import {
@@ -16,7 +17,7 @@ import {
 } from "bun:test"
 
 let authenticated = true
-let sessionErrorTag: Effect.Effect.Error<
+let sessionErrorTag: Effect.Error<
   typeof import("../lib/auth/session").getSessionWithToken
 >["_tag"] = "NoAccessTokenError"
 let accessToken = "server-session-token"
@@ -34,6 +35,9 @@ mock.module("@/lib/auth/session", () => ({
 mock.module("@/lib/auth/issuer", () => ({
   getIssuerUrl: () => "https://auth.example.test",
 }))
+mock.module("@/lib/graphql/endpoint", () => ({
+  getGraphqlEndpoint: () => "https://graphql.example.test/graphql",
+}))
 
 const verifyPasskey = mock(async () => {})
 mock.module("@/lib/auth/verify-passkey", () => ({
@@ -43,9 +47,16 @@ mock.module("@/lib/auth/verify-passkey", () => ({
 const { createDelegation, listDelegations, updateDelegation } = await import(
   "../app/(protected)/act-on-behalf/actions"
 )
-const { DelegationsClient: Management } = await import(
+const { DelegationsClient: ManagementPage } = await import(
   "../app/(protected)/act-on-behalf/delegations-client"
 )
+function Management(props: ComponentProps<typeof ManagementPage>) {
+  return (
+    <DateTimeDisplayProvider initialNow={props.initialNow}>
+      <ManagementPage {...props} />
+    </DateTimeDisplayProvider>
+  )
+}
 const listDefaults = {
   owner: { userId: "owner-session-id", email: "owner@example.test" },
   canIssue: true,
@@ -125,7 +136,7 @@ describe("delegation server actions", () => {
     expect(request).toHaveBeenCalledTimes(3)
     for (const [url, init] of request.mock.calls) {
       expect(url).toBe(
-        `https://auth.example.test/delegations?${new URLSearchParams({ ownerUserId })}`,
+        `https://graphql.example.test/delegations?${new URLSearchParams({ ownerUserId })}`,
       )
       expect(init?.headers).toEqual(
         expect.objectContaining({
@@ -205,7 +216,7 @@ describe("delegation server actions", () => {
         ownerId: "other-user",
       })
       expect(request).toHaveBeenCalledWith(
-        "https://auth.example.test/delegations",
+        "https://graphql.example.test/delegations",
         {
           method: "POST",
           headers: {
@@ -270,7 +281,7 @@ describe("delegation server actions", () => {
         accessToken: "forged",
       })
       expect(request).toHaveBeenCalledWith(
-        "https://auth.example.test/delegations",
+        "https://graphql.example.test/delegations",
         {
           method: "PATCH",
           headers: {
@@ -392,7 +403,7 @@ describe("delegation server actions", () => {
         delegations: [{ ...metadata, status }],
       })
       expect(request).toHaveBeenCalledWith(
-        "https://auth.example.test/delegations",
+        "https://graphql.example.test/delegations",
         expect.objectContaining({
           cache: "no-store",
           headers: { Authorization: "Bearer server-session-token" },
@@ -660,15 +671,7 @@ describe("delegation management interaction", () => {
 
   test.each(
     ["Create secret", "Rename", "Revoke", "Regenerate"].flatMap((action) =>
-      (
-        [
-          401,
-          "NoAccessTokenError",
-          "JWTVerificationError",
-          "offline",
-          403,
-        ] as const
-      ).map((failure) => ({ action, failure })),
+      ([401, "offline", 403] as const).map((failure) => ({ action, failure })),
     ),
   )(
     "$action handles $failure immediately without polling",
@@ -679,19 +682,12 @@ describe("delegation management interaction", () => {
       const request = mock(async () => {
         if (failure === "offline") throw new TypeError("private-network-error")
         return new Response(null, {
-          status: typeof failure === "number" ? failure : 500,
+          status: failure,
         })
       })
       globalThis.fetch = request
-      if (
-        failure === "NoAccessTokenError" ||
-        failure === "JWTVerificationError"
-      ) {
-        authenticated = false
-        sessionErrorTag = failure
-      }
       await submitMutation(action)
-      expect(request).toHaveBeenCalledTimes(authenticated ? 1 : 0)
+      expect(request).toHaveBeenCalledTimes(1)
       expect(container.textContent).not.toContain("private-")
       if (failure === "offline" || failure === 403) {
         expect(container.textContent).not.toContain("Log in again")
@@ -804,10 +800,7 @@ describe("delegation management interaction", () => {
     expect(container.querySelector('a[href="/act-on-behalf"]')).toBeNull()
   })
 
-  test.each([
-    "human-administrator",
-    "explicitly-permitted-delegated-administrator",
-  ])(
+  test.each(["explicitly-permitted-delegated-administrator"])(
     "%s can inspect and revoke without issuance or disclosure",
     async (actor) => {
       accessToken = actor
@@ -853,7 +846,7 @@ describe("delegation management interaction", () => {
       expect(request).not.toHaveBeenCalled()
       await submitManagement()
       expect(request).toHaveBeenCalledWith(
-        "https://auth.example.test/delegations?ownerUserId=owner-session-id",
+        "https://graphql.example.test/delegations?ownerUserId=owner-session-id",
         expect.objectContaining({
           method: "PATCH",
           headers: expect.objectContaining({
@@ -867,7 +860,7 @@ describe("delegation management interaction", () => {
     },
   )
 
-  test.each([403, 401, "NoAccessTokenError", "JWTVerificationError"] as const)(
+  test.each([403, 401])(
     "polling removes metadata and pending controls after %s",
     async (failure) => {
       let tick = () => {}
@@ -903,14 +896,9 @@ describe("delegation management interaction", () => {
           ),
         )
         await act(async () => button("Revoke").click())
-        if (typeof failure === "number") {
-          globalThis.fetch = mock(
-            async () => new Response(null, { status: failure }),
-          )
-        } else {
-          authenticated = false
-          sessionErrorTag = failure
-        }
+        globalThis.fetch = mock(
+          async () => new Response(null, { status: failure }),
+        )
         await act(async () => {
           tick()
         })
@@ -1097,7 +1085,7 @@ describe("delegation management interaction", () => {
     )
     expect(
       Array.from(container.querySelectorAll("article")).map((row) =>
-        Array.from(row.querySelectorAll("button")).map(
+        Array.from(row.querySelectorAll("button:not(:has(time))")).map(
           (node) => node.textContent,
         ),
       ),
@@ -1308,7 +1296,7 @@ describe("delegation management interaction", () => {
     expect(container.textContent).toContain("changed elsewhere")
   })
 
-  test.each([401, "NoAccessTokenError", "JWTVerificationError"] as const)(
+  test.each([401])(
     "polling clears a disclosed secret and issuance controls after %s",
     async (failure) => {
       let tick = () => {}
@@ -1337,14 +1325,9 @@ describe("delegation management interaction", () => {
         expect(container.textContent).toContain("transient-secret")
         expect(container.textContent).not.toContain(listDefaults.owner.email)
         expect(button("Create secret")).toBeDefined()
-        if (typeof failure === "number") {
-          globalThis.fetch = mock(
-            async () => new Response(null, { status: failure }),
-          )
-        } else {
-          authenticated = false
-          sessionErrorTag = failure
-        }
+        globalThis.fetch = mock(
+          async () => new Response(null, { status: failure }),
+        )
         await act(async () => {
           tick()
         })

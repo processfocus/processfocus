@@ -202,7 +202,7 @@ const acquireUseReleaseWithFailure = <A, E, R, A2, E2, R2, E3, R3>(
       if (Exit.isFailure(releaseExit)) {
         if (Exit.isFailure(useExit)) {
           return yield* Effect.failCause(
-            Cause.sequential(useExit.cause, releaseExit.cause),
+            Cause.combine(useExit.cause, releaseExit.cause),
           )
         }
         return yield* Effect.failCause(releaseExit.cause)
@@ -266,7 +266,7 @@ const closeFileAfterUse = (input: {
   readonly message: string
   readonly useExit: Exit.Exit<unknown, unknown>
 }): Effect.Effect<void, TursoDbDownloadFailure> =>
-  Exit.isInterrupted(input.useExit)
+  Exit.hasInterrupts(input.useExit)
     ? tryBoundary({
         message: input.message,
         try: () => {
@@ -466,9 +466,9 @@ export const streamDumpToPrivateFile = (input: {
   )
 
   return streamDump.pipe(
-    Effect.timeoutFail({
+    Effect.timeoutOrElse({
       duration: Duration.millis(input.timeoutMs),
-      onTimeout: () => downloadFailure("TursoDB dump request timed out"),
+      orElse: () => downloadFailure("TursoDB dump request timed out"),
     }),
   )
 }
@@ -625,7 +625,9 @@ export const validateTursoDbDownloadArtifact = (
   databasePath: string,
 ): Effect.Effect<void, CliError> =>
   validateDatabaseFile(databasePath).pipe(
-    Effect.mapErrorCause(mapDownloadFailureCauseToCliError),
+    Effect.catchCause((cause) =>
+      Effect.failCause(mapDownloadFailureCauseToCliError(cause)),
+    ),
   )
 
 const replayLogicalDump = (input: {
@@ -753,5 +755,7 @@ export const materializeTursoDbDownload = (
   input: MaterializeTursoDbDownloadInput,
 ): Effect.Effect<void, CliError> =>
   materialize(input).pipe(
-    Effect.mapErrorCause(mapDownloadFailureCauseToCliError),
+    Effect.catchCause((cause) =>
+      Effect.failCause(mapDownloadFailureCauseToCliError(cause)),
+    ),
   )

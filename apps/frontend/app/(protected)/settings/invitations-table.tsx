@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Button } from "@pf/shadcn-components"
+import { Button, DateTimeDisplay } from "@pf/shadcn-components"
 import {
   CollectionTableCard,
   type CollectionTableColumn,
@@ -25,17 +25,6 @@ const statusLabel: Record<InvitationLifecycleStatus, string> = {
   PENDING: "Pending",
   ACCEPTED: "Accepted",
   LEGACY_CLOSED: "Legacy closed",
-}
-
-const formatWhen = (value: string | null | undefined) => {
-  if (!value) {
-    return "—"
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-  return date.toLocaleString()
 }
 
 const columns: CollectionTableColumn<Invitation>[] = [
@@ -71,13 +60,50 @@ const columns: CollectionTableColumn<Invitation>[] = [
         return "Not generated"
       }
       if (linkStatus === "ACTIVE") {
-        return `Active · expires ${formatWhen(invitation.registrationLinkExpiresAt)}`
+        return (
+          <>
+            Active · expires{" "}
+            {invitation.registrationLinkExpiresAt ? (
+              <DateTimeDisplay
+                kind="timestamp"
+                value={invitation.registrationLinkExpiresAt}
+                initialMode="browser-local"
+              />
+            ) : (
+              "Unknown"
+            )}
+          </>
+        )
       }
       if (linkStatus === "EXPIRED") {
-        return `Expired · ${formatWhen(invitation.registrationLinkExpiresAt)}`
+        return (
+          <>
+            Expired ·{" "}
+            {invitation.registrationLinkExpiresAt ? (
+              <DateTimeDisplay
+                kind="timestamp"
+                value={invitation.registrationLinkExpiresAt}
+              />
+            ) : (
+              "Unknown"
+            )}
+          </>
+        )
       }
       if (linkStatus === "REVOKED") {
-        return `Revoked · ${formatWhen(invitation.registrationLinkRevokedAt)}`
+        return (
+          <>
+            Revoked ·{" "}
+            {invitation.registrationLinkRevokedAt ? (
+              <DateTimeDisplay
+                kind="timestamp"
+                value={invitation.registrationLinkRevokedAt}
+              />
+            ) : (
+              "Unknown"
+            )}
+          </>
+        )
       }
       return "—"
     },
@@ -94,21 +120,21 @@ const columns: CollectionTableColumn<Invitation>[] = [
         ]
           .filter(Boolean)
           .join(" / ")
-        const when = formatWhen(invitation.acceptedAt)
-        if (!identity && when === "—") {
-          return "Accepted"
-        }
-        return [identity || "Accepted", when !== "—" ? when : null]
-          .filter(Boolean)
-          .join(" · ")
-      }
-      if (invitation.status === "LEGACY_CLOSED") {
-        return [
-          invitation.legacyClosureReason ?? "Existing user at migration",
-          formatWhen(invitation.legacyClosedAt),
-        ]
-          .filter((part) => part && part !== "—")
-          .join(" · ")
+        return (
+          <>
+            {identity || "Accepted"}
+            {invitation.acceptedAt && (
+              <>
+                {" "}
+                ·{" "}
+                <DateTimeDisplay
+                  kind="timestamp"
+                  value={invitation.acceptedAt}
+                />
+              </>
+            )}
+          </>
+        )
       }
       return "—"
     },
@@ -126,15 +152,10 @@ export function InvitationsTable({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-            Invited Users
-          </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Pending invitations are outstanding onboarding work. Accepted and
-            legacy-closed rows are immutable history.
-          </p>
-        </div>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          Invite people to join your organisation and track whether they’ve
+          accepted.
+        </p>
 
         {status === "PENDING" ? (
           <Button asChild>
@@ -148,7 +169,6 @@ export function InvitationsTable({
           [
             "PENDING",
             "ACCEPTED",
-            "LEGACY_CLOSED",
           ] as const satisfies readonly InvitationLifecycleStatus[]
         ).map((value) => (
           <Button
@@ -176,9 +196,7 @@ export function InvitationsTable({
         emptyMessage={
           status === "PENDING"
             ? "No pending invitations"
-            : status === "ACCEPTED"
-              ? "No accepted invitations"
-              : "No legacy-closed invitations"
+            : "No accepted invitations"
         }
       />
     </div>

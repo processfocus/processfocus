@@ -46,7 +46,31 @@ export const XeroContactsResponse = Schema.Struct({
   Contacts: Schema.Array(XeroContact),
 })
 
-const XeroWireAmount = Schema.Union(Schema.Number, Schema.String)
+export const XeroAddress = Schema.Struct({
+  AddressType: Schema.Literals(["POBOX", "STREET", "DELIVERY"]),
+  AttentionTo: Schema.optional(Schema.NullOr(Schema.String)),
+  AddressLine1: Schema.optional(Schema.NullOr(Schema.String)),
+  AddressLine2: Schema.optional(Schema.NullOr(Schema.String)),
+  AddressLine3: Schema.optional(Schema.NullOr(Schema.String)),
+  AddressLine4: Schema.optional(Schema.NullOr(Schema.String)),
+  City: Schema.optional(Schema.NullOr(Schema.String)),
+  Region: Schema.optional(Schema.NullOr(Schema.String)),
+  PostalCode: Schema.optional(Schema.NullOr(Schema.String)),
+  Country: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+// A detail read must actually include Addresses; a projected contact cannot
+// establish that billing is empty. An empty array means no address slots.
+export const XeroContactDetailsResponse = Schema.Struct({
+  Contacts: Schema.Array(
+    Schema.Struct({
+      ...XeroContact.fields,
+      Addresses: Schema.Array(XeroAddress),
+    }),
+  ),
+})
+
+const XeroWireAmount = Schema.Union([Schema.Number, Schema.String])
 
 export const XeroInvoiceContactWire = Schema.Struct({
   ContactID: Schema.optional(XeroContactId),
@@ -54,6 +78,7 @@ export const XeroInvoiceContactWire = Schema.Struct({
 
 export const XeroInvoiceLineWire = Schema.Struct({
   ItemCode: Schema.optional(Schema.String),
+  Description: Schema.optional(Schema.String),
   Quantity: Schema.optional(XeroWireAmount),
   UnitAmount: Schema.optional(XeroWireAmount),
   LineAmount: Schema.optional(XeroWireAmount),

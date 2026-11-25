@@ -1,13 +1,8 @@
 import { describe, expect, test } from "vitest"
-import { FormComponentType } from "@pf/form-client-representation/types"
-import {
-  collectMetricControlUrlState,
-  keepPreviousMetricDetail,
-} from "../app/(protected)/lists/hooks/metric-control-url-state"
+import { collectMetricControlUrlState } from "../app/(protected)/lists/hooks/metric-control-url-state"
 
 const components = {
   costs: {
-    _tag: FormComponentType.MetricBreakdown,
     field: "usageCosts",
     label: "Usage costs",
     title: "Usage costs",
@@ -77,7 +72,6 @@ describe("metric control URL state", () => {
   test("ignores malformed controls without a fallback value", () => {
     const malformedComponents = {
       costs: {
-        _tag: FormComponentType.MetricBreakdown,
         field: "usageCosts",
         label: "Usage costs",
         title: "Usage costs",
@@ -103,12 +97,5 @@ describe("metric control URL state", () => {
     expect(state.values).toEqual({})
     expect(state.search).toBe("period=current-month")
     expect(state.normalized).toBe(false)
-  })
-
-  test("keeps previous metric detail available while a period refetch is pending", () => {
-    const previousDetail = { usageCosts: { total: 42 } }
-
-    expect(keepPreviousMetricDetail(previousDetail)).toBe(previousDetail)
-    expect(keepPreviousMetricDetail(undefined)).toBeUndefined()
   })
 })

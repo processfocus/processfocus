@@ -63,7 +63,9 @@ export const runExecutionList = (options: ExecutionListOptions) =>
       },
       errorMessagePrefix: "",
     })
-    const response = yield* Schema.decodeUnknown(ExecutionsData)(data).pipe(
+    const response = yield* Schema.decodeUnknownEffect(ExecutionsData)(
+      data,
+    ).pipe(
       Effect.mapError(
         (cause) =>
           new CliError({

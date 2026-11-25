@@ -1,0 +1,52 @@
+---
+title: Custom Cedar permissions
+description: Add custom Cedar policies to your Process Focus organisation.
+---
+
+Add custom Cedar policies when the default permissions don't cover what
+a user or system needs to do. Process Focus evaluates your policies
+alongside its system defaults.
+
+## Write a policy
+
+Create `cedar/custom.cedar` relative to your organisation package root.
+For example, grant the `order-reporting`
+[system identity](/docs/reference/authentication/system-identities/) read
+access to the Web orders List:
+
+```cedar
+permit (
+    principal == PF::ServiceAccount::"order-reporting",
+    action == PF::Action::"view",
+    resource == PF::List::"/web-orders"
+);
+```
+
+The policy grants access to one List. Configure the system identity
+separately so the reporting service can authenticate as `order-reporting`.
+See [Cedar policies](/docs/reference/authorisation/cedar-policies/) for
+other examples of principals, actions, and resources.
+
+## Register the policy file
+
+In the organisation module loaded by the build, attach `PoliciesConfig`
+directly to your existing `org`:
+
+```typescript
+import { PoliciesConfig } from "@pf/auth-config"
+
+new PoliciesConfig(org, "policies", {
+  policyFiles: ["cedar/custom.cedar"],
+})
+```
+
+If you already have a `PoliciesConfig`, add the path to its existing
+`policyFiles` array. Paths are relative to the organisation package root,
+not the TypeScript file. The build copies the registered Cedar files into
+the deployment artifact. Rebuild and redeploy to apply changes in a
+deployed environment.
+
+Test that the intended identity can perform the action and that it
+cannot perform actions you did not grant. In this example, check that
+`order-reporting` can read Web orders but cannot update them. See
+[Testing permissions](/docs/reference/authorisation/testing-permissions/).

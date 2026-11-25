@@ -3,16 +3,15 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { useCallback } from "react"
-import type { JsonSchemaRoot } from "@pf/form"
 import { Button } from "@pf/shadcn-components"
 import { ListItemEditForm } from "../../components/list-item-edit-form"
+import { ListItemLoadError } from "../../components/list-item-load-error"
 import { useListDeletedCallback } from "../../hooks/use-list-deleted-callback"
 import { useListItemDetail } from "../../hooks/use-list-item-detail"
 import { listDetailTitle } from "../../lib/list-detail-title"
-import { markListStale } from "../../lib/list-refresh"
 import { formatCellValue } from "../../utils"
+import { useListRefresh } from "@/app/(protected)/lists/lib/list-refresh-provider"
 
 interface ListDetailClientProps {
   listPath: string
@@ -23,9 +22,9 @@ export default function ListDetailClient({
   listPath,
   itemId,
 }: ListDetailClientProps) {
-  const router = useRouter()
+  const refreshState = useListRefresh()
   const queryClient = useQueryClient()
-  const { currentList, itemDetail, formMetadata, isLoading, error } =
+  const { currentList, itemDetail, formMetadata, isLoading, error, refetch } =
     useListItemDetail(listPath, itemId)
 
   const handleClose = useCallback(() => {
@@ -36,16 +35,14 @@ export default function ListDetailClient({
     queryClient.invalidateQueries({
       queryKey: ["listItem", listPath, itemId],
     })
-    markListStale(listPath)
-    router.refresh()
-  }, [queryClient, listPath, itemId, router])
+    refreshState.invalidate(listPath)
+  }, [queryClient, listPath, itemId, refreshState])
 
   const handleDeleted = useListDeletedCallback(listPath, itemId)
 
   const detailTitle = listDetailTitle(currentList)
   const isAnyLoading = isLoading
 
-  // Loading state
   if (isAnyLoading) {
     return (
       <div className="flex-1">
@@ -69,7 +66,7 @@ export default function ListDetailClient({
   }
 
   // List not found or no item query
-  if (!currentList?.itemQueryName) {
+  if (!error && !currentList?.itemQueryName) {
     return (
       <div className="flex-1">
         <div className="mx-auto max-w-2xl">
@@ -99,7 +96,6 @@ export default function ListDetailClient({
     )
   }
 
-  // Error state
   if (error) {
     return (
       <div className="flex-1">
@@ -111,9 +107,7 @@ export default function ListDetailClient({
                 <h1 className="text-2xl font-semibold text-rose-900 dark:text-rose-100">
                   Error Loading Item
                 </h1>
-                <p className="mt-2 text-sm text-rose-600 dark:text-rose-400">
-                  {String(error)}
-                </p>
+                <ListItemLoadError error={error} onRetry={refetch} />
               </div>
             </div>
             <Link href={`/lists${listPath}`}>
@@ -128,7 +122,7 @@ export default function ListDetailClient({
     )
   }
 
-  // Item not found
+  if (!currentList) return null
   if (!itemDetail) {
     return (
       <div className="flex-1">
@@ -174,8 +168,6 @@ export default function ListDetailClient({
           ),
         )
       : (itemDetail as Record<string, unknown> | null)
-    const jsonSchema =
-      (formMetadata.jsonSchema as JsonSchemaRoot | null) ?? null
 
     return (
       <div className="flex-1">
@@ -201,8 +193,6 @@ export default function ListDetailClient({
               updateInputTypeName={formMetadata.updateInputTypeName ?? null}
               deleteMutationName={formMetadata.deleteMutationName ?? null}
               defaultValues={defaultValues}
-              formDefinition={formMetadata.formDefinition}
-              jsonSchema={jsonSchema}
               outputFields={currentList.outputColumns.map((c) => c.field)}
               onClose={handleClose}
               onSaved={handleSaved}

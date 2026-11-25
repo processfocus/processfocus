@@ -120,7 +120,7 @@ describe("acquireDockerStepWorkDir", () => {
       ),
     )
 
-    expect(Exit.isInterrupted(exit)).toBe(true)
+    expect(Exit.hasInterrupts(exit)).toBe(true)
     expect(hostWorkDir).toBeDefined()
     expect(existsSync(hostWorkDir!)).toBe(false)
   })

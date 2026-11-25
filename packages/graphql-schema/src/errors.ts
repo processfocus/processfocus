@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Data } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Error thrown when attempting to update a deleted process state.

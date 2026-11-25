@@ -88,50 +88,38 @@ const mapToGraphQLType = (
   fieldName: string,
 ): string | undefined => {
   switch (astTag) {
-    case "StringKeyword":
-      // Use ID for id fields, String for others
+    case "String":
       return fieldName === "id" ? "ID" : "String"
-    case "NumberKeyword":
-      // NumberKeyword is always Float - Int types have identifier annotations
+    case "Number":
+      // Number is always Float - Int types have identifier annotations
       return "Float"
-    case "BooleanKeyword":
+    case "Boolean":
       return "Boolean"
-    case "UnknownKeyword":
-      // Unknown maps to JSON scalar
+    case "Unknown":
       return "JSON"
     default:
       return undefined
   }
 }
 
-/**
- * Checks if an AST node has a specific identifier annotation
- */
-const hasIdentifier = (ast: AST.AST, identifierValue: string): boolean => {
-  const identifier = AST.getJSONIdentifier(ast)
-  return identifier._tag === "Some" && identifier.value === identifierValue
-}
+const hasCheck = (
+  checks: ReadonlyArray<AST.Check<unknown>>,
+  id: string,
+): boolean =>
+  checks.some(
+    (check) =>
+      check.annotations?.representation?.id === id ||
+      (check._tag === "FilterGroup" && hasCheck(check.checks, id)),
+  )
 
-/**
- * Checks if an AST node is a DateTimeUtc branded type
- */
-const isDateTimeUtc = (ast: AST.AST): boolean => {
-  return ast._tag === "Transformation" && hasIdentifier(ast, "DateTimeUtc")
-}
+const isDateTimeUtc = (ast: AST.AST): boolean =>
+  AST.resolveAt<{ readonly id: string }>("representation")(ast)?.id ===
+  "effect/schema/DateTimeUtc"
 
-/**
- * Checks if an AST node is an Int type
- */
-const isInt = (ast: AST.AST): boolean => {
-  return ast._tag === "Refinement" && hasIdentifier(ast, "Int")
-}
+const isInt = (ast: AST.AST): boolean =>
+  ast._tag === "Number" && hasCheck(ast.checks ?? [], "effect/schema/isInt")
 
-/**
- * Checks if an AST node is a BigInt type
- */
-const isBigInt = (ast: AST.AST): boolean => {
-  return ast._tag === "Transformation" && hasIdentifier(ast, "BigInt")
-}
+const isBigInt = (ast: AST.AST): boolean => ast._tag === "BigInt"
 
 /**
  * Context passed during walking to collect nested types
@@ -149,12 +137,11 @@ export const walkCollectionSchema = (
   collectionName = "Root",
 ): Effect.Effect<CollectionTypes, WalkError> =>
   Match.type<AST.AST>().pipe(
-    Match.tag("TypeLiteral", (typeLiteral) =>
+    Match.tag("Objects", (typeLiteral) =>
       Effect.gen(function* () {
         const fields: GraphQLField[] = []
         const context: WalkContext = { nestedTypes: [], collectionName }
 
-        // Process each property signature
         for (const prop of typeLiteral.propertySignatures) {
           const fieldName = yield* validatePropertyKey(prop.name)
           const field = yield* processProperty(prop, fieldName, context)
@@ -178,7 +165,7 @@ const processProperty = (
   context: WalkContext,
 ): Effect.Effect<GraphQLField, WalkError> =>
   Effect.gen(function* () {
-    const isOptional = prop.isOptional
+    const isOptional = AST.isOptional(prop.type)
     const graphQLType = yield* determineGraphQLType(
       prop.type,
       fieldName,
@@ -193,16 +180,16 @@ const processProperty = (
   })
 
 /**
- * Check if a TypeLiteral is a Record type (has indexSignatures, no propertySignatures)
+ * Check if a Objects is a Record type (has indexSignatures, no propertySignatures)
  */
-const isRecordType = (typeLiteral: AST.TypeLiteral): boolean =>
+const isRecordType = (typeLiteral: AST.Objects): boolean =>
   typeLiteral.propertySignatures.length === 0 &&
   typeLiteral.indexSignatures.length > 0
 
 /**
- * Check if a TypeLiteral is a nested Struct type (has propertySignatures)
+ * Check if a Objects is a nested Struct type (has propertySignatures)
  */
-const isNestedStructType = (typeLiteral: AST.TypeLiteral): boolean =>
+const isNestedStructType = (typeLiteral: AST.Objects): boolean =>
   typeLiteral.propertySignatures.length > 0
 
 /**
@@ -233,6 +220,11 @@ const determineGraphQLType = (
       () => Effect.succeed("String"), // GraphQL doesn't have native BigInt, use String
     ),
 
+    Match.when(
+      (ast) => ast.encoding !== undefined,
+      (ast) => determineGraphQLType(AST.toEncoded(ast), fieldName, context),
+    ),
+
     // Primitive types
     Match.when(
       (ast) => mapToGraphQLType(ast._tag, fieldName) !== undefined,
@@ -250,8 +242,8 @@ const determineGraphQLType = (
       },
     ),
 
-    // TypeLiteral: either Record (-> JSON) or nested Struct (-> new type)
-    Match.tag("TypeLiteral", (typeLiteral) => {
+    // Objects: either Record (-> JSON) or nested Struct (-> new type)
+    Match.tag("Objects", (typeLiteral) => {
       // Record type: has indexSignatures, no propertySignatures -> JSON
       if (isRecordType(typeLiteral)) {
         return Effect.succeed("JSON")
@@ -266,7 +258,6 @@ const determineGraphQLType = (
           )
           const nestedFields: GraphQLField[] = []
 
-          // Process each property of the nested struct
           for (const prop of typeLiteral.propertySignatures) {
             const propName = yield* validatePropertyKey(prop.name)
             const nestedContext: WalkContext = {
@@ -277,7 +268,6 @@ const determineGraphQLType = (
             nestedFields.push(field)
           }
 
-          // Add the nested type to context
           context.nestedTypes.push({
             name: nestedTypeName,
             fields: nestedFields,
@@ -287,33 +277,14 @@ const determineGraphQLType = (
         })
       }
 
-      // Empty TypeLiteral - unlikely but handle gracefully
+      // Empty Objects - unlikely but handle gracefully
       return Effect.succeed("JSON")
-    }),
-
-    // Refinement: check for identifier first, otherwise unwrap to base type
-    Match.tag("Refinement", (refinement) => {
-      if (isInt(refinement)) {
-        return Effect.succeed("Int")
-      }
-      return determineGraphQLType(refinement.from, fieldName, context)
-    }),
-
-    // Transformation: check for identifier first, otherwise use input side
-    Match.tag("Transformation", (transformation) => {
-      if (isDateTimeUtc(transformation)) {
-        return Effect.succeed("DateTimeISO")
-      }
-      if (isBigInt(transformation)) {
-        return Effect.succeed("String")
-      }
-      return determineGraphQLType(transformation.from, fieldName, context)
     }),
 
     // Union: extract first non-undefined type
     Match.tag("Union", (union) => {
       const nonUndefinedType = union.types.find(
-        (t) => t._tag !== "UndefinedKeyword" && t._tag !== "VoidKeyword",
+        (t) => t._tag !== "Undefined" && t._tag !== "Void",
       )
 
       if (!nonUndefinedType) {
@@ -331,13 +302,13 @@ const determineGraphQLType = (
     // Literal: map to String in GraphQL (for string literals)
     Match.tag("Literal", () => Effect.succeed("String")),
 
-    // TupleType: arrays, extract element type
-    Match.tag("TupleType", (tuple) => {
-      // For Schema.Array, the AST is TupleType with empty elements and rest
+    // Arrays: arrays, extract element type
+    Match.tag("Arrays", (tuple) => {
+      // For Schema.Array, the AST is Arrays with empty elements and rest
       // The element type is in the rest property
       const restElement = tuple.rest[0]
       if (restElement !== undefined) {
-        const elementType = restElement.type
+        const elementType = restElement
         return Effect.gen(function* () {
           const itemType = yield* determineGraphQLType(
             elementType,
@@ -351,7 +322,6 @@ const determineGraphQLType = (
       return Effect.succeed("JSON")
     }),
 
-    // Unsupported type
     Match.orElse(() =>
       Effect.fail(
         new UnsupportedSchemaTypeError({

@@ -1,4 +1,3 @@
-import { NotFound } from "@mcrovero/effect-nextjs/Navigation"
 import { Effect } from "effect"
 import { Suspense } from "react"
 import type { ProviderUserSession } from "@pf/auth-session"
@@ -10,8 +9,12 @@ import { loadAuthorizationCedar } from "../load-cedar"
 import { loadHandbookData } from "../load-handbook"
 import { getSessionWithToken } from "@/lib/auth/session"
 import { parseAuthorizationTab } from "@/lib/authorization-tabs"
+import { NotFound } from "@/lib/effect/navigation"
 import { BasePageWithAuthorization } from "@/lib/effect/runtime"
 import { checkFeaturePermissions } from "@/lib/effect/services"
+
+// The authenticated shell can omit this page while checking the session.
+export const instant = false
 
 type AuthorizationPageProps = {
   params: Promise<{ tab?: readonly string[] }>
@@ -29,7 +32,7 @@ const denied = (
 const AuthorizationPageContent = Effect.fn("AuthorizationPageContent")(
   function* ({ params }: AuthorizationPageProps) {
     const sessionResult = yield* getSessionWithToken.pipe(
-      Effect.catchAll(() => Effect.succeed(null)),
+      Effect.catch(() => Effect.succeed(null)),
     )
     if (!sessionResult || !("email" in sessionResult)) {
       return denied

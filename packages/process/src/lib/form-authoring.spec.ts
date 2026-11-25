@@ -1,8 +1,17 @@
-import { DateTime, Effect, Layer, Schema } from "effect"
+import {
+  DateTime,
+  Effect,
+  Layer,
+  Effect as MigratedEffect,
+  Schema,
+  SchemaAST,
+  SchemaGetter,
+} from "effect"
 import {
   BooleanField,
   CalendarSlotField,
   CurrentProviderUser,
+  DateField,
   FormDefault,
   FormDescription,
   FormLabel,
@@ -12,12 +21,16 @@ import {
   ListField,
   LookupField,
   NumberFieldFrom,
+  NumberFromString,
   ProviderUserField,
+  TEXTBLOCK_CONTENT_SYMBOL,
   TableField,
   TextArea,
   TextBlock,
   TextField,
+  TextFieldFrom,
   Wrapper,
+  fieldAnnotation,
 } from "@pf/form-schema"
 import { Form, mergeFormDefaults, resolveFormFieldDefaults } from "../index"
 import { buildFlowContext } from "./flow-context"
@@ -29,7 +42,7 @@ import { describe, expect, it } from "bun:test"
 
 const context = buildFlowContext(
   "execution",
-  DateTime.unsafeMake("2026-09-16"),
+  DateTime.makeUnsafe("2026-09-16"),
   [],
 )
 const initial = { ...context, step: {} }
@@ -53,6 +66,77 @@ const evidenceTable = (rows: FormValue<readonly { readonly name: string }[]>) =>
   TableField({ name: TextField({ label: "Name" }) }, { default: rows })
 
 describe("constructor lazy Form authoring", () => {
+  it("infers decoded static-schema submissions and downstream state without display fields", async () => {
+    const { role, process } = setup()
+    const form = new Form(process, "static", {
+      role,
+      form: Schema.Struct({
+        section: Wrapper({
+          count: NumberFieldFrom(NumberFromString),
+          display: TextField({ readOnly: true }),
+        }),
+        nested: Schema.Struct({
+          name: TextField(),
+          display: TextField({ readOnly: true }),
+        }),
+        help: TextBlock("Enter a count"),
+      }),
+      onSubmit: (input) => {
+        const count: number = input.count
+        const name: string = input.nested.name
+        // @ts-expect-error encoded strings are decoded before callbacks
+        const encoded: string = input.count
+        // @ts-expect-error wrappers flatten into the submission
+        input.section
+        // @ts-expect-error read-only fields are absent from submissions
+        input.display
+        // @ts-expect-error nested read-only fields are absent from submissions
+        input.nested.display
+        // @ts-expect-error structural fields are absent from submissions
+        input.help
+        void encoded
+        return Effect.sync(() =>
+          expect({ count, name }).toEqual({ count: 12, name: "A" }),
+        )
+      },
+    })
+    const flow = process.start(form)
+    const next = new Form(flow, "after-static", {
+      role,
+      form: ({ value }) => ({
+        summary: TextField({
+          default: value((state) => {
+            const count: number = state.count
+            const name: string = state.nested.name
+            // @ts-expect-error encoded strings never enter downstream state
+            const encoded: string = state.count
+            // @ts-expect-error read-only fields never enter downstream state
+            state.nested.display
+            void encoded
+            return `${name}: ${count}`
+          }),
+        }),
+      }),
+    })
+    flow.next(next).end()
+    await Effect.runPromise(
+      form
+        .executeSubmit({ count: 12, nested: { name: "A" } })
+        .pipe(Effect.provide(emptyServices)),
+    )
+    expect(
+      await Effect.runPromise(
+        next.resolveDefaults(
+          { count: 12, nested: { name: "A" } },
+          {
+            process: completed.process,
+            step: { static: completed.step.first },
+          },
+        ),
+      ),
+    ).toEqual({ summary: "A: 12" })
+  })
+
   it("keeps static projection inert and resolves content/defaults with request-local state", async () => {
     const { role, flow } = setup()
     let calls = 0
@@ -66,7 +150,7 @@ describe("constructor lazy Form authoring", () => {
         }, fallback),
         name: TextField({
           default: value((state) => state.name.toUpperCase()),
-        }),
+        }).check(Schema.isMinLength(1)),
         evidence: evidenceTable(value((state) => state.rows)),
         display: TextArea({
           readOnly: true,
@@ -75,18 +159,21 @@ describe("constructor lazy Form authoring", () => {
         confirmed: BooleanField({ required: true }),
       }),
     })
-    const schema = form.submissionSchema()
-    const staticDefinition = await Effect.runPromise(
-      form.clientFormDefinition(),
+    const decode = Schema.decodeUnknownSync(
+      Schema.make<Schema.Codec<unknown>>(form.submissionEffectSchema.ast),
     )
+    const staticFields = form.output
     expect(calls).toBe(0)
-    expect(staticDefinition.components["link"]).toMatchObject({
-      _tag: "static",
-      field: "link",
-      content: "Open a todo",
-    })
-    expect(schema).not.toHaveProperty("properties.display")
-    expect(schema).not.toHaveProperty("properties.evidence")
+    expect(
+      fieldAnnotation(staticFields.link.ast, TEXTBLOCK_CONTENT_SYMBOL),
+    ).toBe("Open a todo")
+    const input = {
+      name: "Pat",
+      confirmed: true,
+      display: "ignored",
+      evidence: [],
+    }
+    expect(decode(input)).toEqual({ name: "Pat", confirmed: true })
     const first = { name: "one@example.com", rows: [{ name: "one" }] }
     const second = { name: "two@example.com", rows: [{ name: "two" }] }
     expect(
@@ -103,19 +190,15 @@ describe("constructor lazy Form authoring", () => {
       display: second.name,
       evidence: second.rows,
     })
-    const definition = await Effect.runPromise(
-      form.clientFormDefinitionWithState(first, completed),
-    )
-    expect(definition.components["link"]).toMatchObject({
-      _tag: "link",
-      field: "link",
-      url: "mailto:one@example.com",
+    const presentation = form.resolvePresentation(first, completed)
+    expect(presentation["link"]).toMatchObject({
+      href: "mailto:one@example.com",
     })
-    expect(definition.components["link"]?.label).toBeUndefined()
-    expect(form.submissionSchema()).toEqual(schema)
-    expect(await Effect.runPromise(form.clientFormDefinition())).toEqual(
-      staticDefinition,
-    )
+    expect(presentation["link"]?.label).toBeUndefined()
+    expect(decode(input)).toEqual({ name: "Pat", confirmed: true })
+    expect(
+      fieldAnnotation(form.output.link.ast, TEXTBLOCK_CONTENT_SYMBOL),
+    ).toBe("Open a todo")
   })
 
   it("preserves wrappers, nested optional transformations, list defaults and shared table helpers", async () => {
@@ -135,13 +218,10 @@ describe("constructor lazy Form authoring", () => {
           { name: TextField({ label: value((state) => state.name) }) },
           { default: value((state) => state.rows) },
         ),
-        count: Schema.optionalWith(
-          NumberFieldFrom(Schema.NumberFromString, {
-            default: value((state) => state.name),
-          }),
-          { default: () => 5 },
-        ),
-        annotated: Schema.optional(Schema.String).annotations({
+        count: NumberFieldFrom(NumberFromString, {
+          default: value((state) => state.name),
+        }).pipe(Schema.withDecodingDefaultType(MigratedEffect.sync(() => 5))),
+        annotated: Schema.optional(Schema.String).annotate({
           [FormDefault]: value((state) => state.name),
           [FormLabel]: value((state) => state.name),
         }),
@@ -181,12 +261,9 @@ describe("constructor lazy Form authoring", () => {
     const form = new Form(flow, "optional-request-default", {
       role,
       form: ({ value }) => ({
-        count: Schema.optionalWith(
-          NumberFieldFrom(Schema.NumberFromString, {
-            default: value((state) => state.name || undefined),
-          }),
-          { default: () => 5 },
-        ),
+        count: NumberFieldFrom(NumberFromString, {
+          default: value((state) => state.name || undefined),
+        }).pipe(Schema.withDecodingDefaultType(MigratedEffect.sync(() => 5))),
       }),
     })
     for (const name of ["12", "7", "", "12"]) {
@@ -206,6 +283,69 @@ describe("constructor lazy Form authoring", () => {
     }
   })
 
+  it("preserves wrapper submission fields when resolving request bindings", async () => {
+    const { role, flow } = setup()
+    const form = new Form(flow, "bound-wrapper", {
+      role,
+      form: Schema.Struct({
+        group: Wrapper({ name: TextField({ default: "fresh" }) }),
+      }),
+      bindings: (state) => ({ group: { label: state.name } }),
+    })
+    for (const name of ["First", "Second"]) {
+      expect(
+        await Effect.runPromise(
+          form.resolveOriginalValues({ name }, completed),
+        ),
+      ).toEqual({ name })
+      expect(
+        await Effect.runPromise(form.resolveOriginalValues({}, completed)),
+      ).toEqual({ name: "fresh" })
+      expect(
+        form.resolvePresentation({ name, rows: [] }, completed),
+      ).toMatchObject({ group: { label: name } })
+    }
+  })
+
+  it("separates encoded business defaults from placeholders and encodes stored originals once", async () => {
+    const { role, flow } = setup()
+    const schema = Schema.Struct({
+      name: TextFieldFrom(
+        Schema.String.pipe(
+          Schema.decodeTo(Schema.String, {
+            decode: SchemaGetter.transform((value) => `${value}!`),
+            encode: SchemaGetter.transform((value) => value.slice(0, -1)),
+          }),
+        ),
+        { default: "fresh" },
+      ),
+      count: Schema.optional(NumberFieldFrom(NumberFromString)),
+      date: Schema.optional(DateField()),
+    })
+    const form = new Form(flow, "originals", { role, form: schema })
+    const defaults = await Effect.runPromise(
+      form.resolveOriginalValues({}, completed),
+    )
+    expect(defaults).toEqual({ name: "fresh" })
+    expect(Schema.decodeUnknownSync(schema)(defaults).name).toBe("fresh!")
+    const stored = {
+      name: "saved!",
+      count: 12,
+      date: "2026-10-20T00:00:00.000Z",
+    }
+    const originals = await Effect.runPromise(
+      form.resolveOriginalValues(stored, completed),
+    )
+    expect(originals).toEqual({ name: "saved", count: "12", date: stored.date })
+    const decoded = Schema.decodeUnknownSync(schema)(originals)
+    expect(decoded.name).toBe(stored.name)
+    expect(decoded.count).toBe(stored.count)
+    expect(decoded.date && DateTime.formatIso(decoded.date)).toBe(stored.date)
+    expect(
+      await Effect.runPromise(form.resolveOriginalValues({}, completed)),
+    ).toEqual(defaults)
+  })
+
   it("infers optional submitted containers and exposes only editable rule values", async () => {
     const { role, flow } = setup()
     const children = {
@@ -220,26 +360,6 @@ describe("constructor lazy Form authoring", () => {
         nested: Schema.optional(Schema.Struct(children)),
         list: Schema.optional(ListField(children)),
       }),
-    }).rules((value, rule) => {
-      type Targets = Parameters<ReturnType<typeof rule.when>["effects"]>[0]
-      const invalid: Targets = {
-        leaf: {
-          // @ts-expect-error read-only fields cannot become required inputs
-          required: true,
-        },
-      }
-      void invalid
-      // @ts-expect-error optional read-only leaves are not rule values
-      value.leaf
-      // @ts-expect-error nested read-only leaves are not rule values
-      value.nested.display
-      return [
-        rule.when(value.nested.edit.blank()).effects({
-          nested: { edit: { required: true }, display: { hidden: true } },
-          leaf: { hidden: true },
-          list: { required: true },
-        }),
-      ]
     })
     const next = flow.next(form)
     const after = new Form(next, "after", {
@@ -261,10 +381,12 @@ describe("constructor lazy Form authoring", () => {
       }),
     })
     next.next(after).end()
-    expect(form.submissionSchema()).not.toHaveProperty("properties.leaf")
     expect(
-      (await Effect.runPromise(form.clientFormDefinition())).components,
-    ).toHaveProperty("nested")
+      Schema.decodeUnknownSync(
+        Schema.make<Schema.Codec<unknown>>(form.submissionEffectSchema.ast),
+      )({ leaf: "ignored" }),
+    ).toEqual({})
+    expect(form.output).toHaveProperty("nested")
   })
 
   it("infers the actual forEach item, completed steps, rule targets and aggregated output", async () => {
@@ -284,9 +406,7 @@ describe("constructor lazy Form authoring", () => {
           default: value((_state, _ctx, item) => item.name),
         }),
       }),
-    }).rules((value, rule) => [
-      rule.when(value.answer.blank()).effects({ answer: { required: true } }),
-    ])
+    })
     const after = new Form(flow.next(perItem), "after", {
       role,
       form: ({ value }) => ({
@@ -322,27 +442,23 @@ describe("constructor lazy Form authoring", () => {
           return state.name
         }, "Static name")
         return {
-          name: Schema.optionalWith(TextField({ default: name, label: name }), {
-            default: () => "intrinsic",
-          }),
+          name: TextField({ default: name, label: name }).pipe(
+            Schema.withDecodingDefaultType(
+              MigratedEffect.sync(() => "intrinsic"),
+            ),
+          ),
           nested: Schema.Struct({
-            name: Schema.optionalWith(
-              TextField({ default: name, label: name }),
-              {
-                default: () => "nested intrinsic",
-              },
+            name: TextField({ default: name, label: name }).pipe(
+              Schema.withDecodingDefaultType(
+                MigratedEffect.sync(() => "nested intrinsic"),
+              ),
             ),
           }),
         }
       },
     })
-    const staticDefinition = await Effect.runPromise(
-      form.clientFormDefinition(),
-    )
     expect(calls).toBe(0)
-    expect(staticDefinition.components["name"]).toMatchObject({
-      label: "Static name",
-    })
+    expect(fieldAnnotation(form.output.name.ast, FormLabel)).toBe("Static name")
     const state = { name: "Resolved name", rows: [] }
     const fields = form.getFieldsWithState(state, completed)
     expect(calls).toBe(1)
@@ -369,16 +485,10 @@ describe("constructor lazy Form authoring", () => {
       name: "Resolved name",
       nested: { name: "Resolved name" },
     })
-    expect(
-      await Effect.runPromise(
-        form.clientFormDefinitionWithState(state, completed),
-      ),
-    ).toMatchObject({
-      components: { name: { label: "Resolved name" } },
+    expect(form.resolvePresentation(state, completed)).toMatchObject({
+      name: { label: "Resolved name" },
     })
-    expect(await Effect.runPromise(form.clientFormDefinition())).toEqual(
-      staticDefinition,
-    )
+    expect(fieldAnnotation(form.output.name.ast, FormLabel)).toBe("Static name")
   })
 
   it("preserves transformed nested Struct fields for typed rules and field reuse", async () => {
@@ -387,35 +497,43 @@ describe("constructor lazy Form authoring", () => {
       role,
       form: ({ value }) => ({
         staticNested: Schema.Struct({
-          name: Schema.optionalWith(TextField(), {
-            default: () => "static intrinsic",
-          }),
+          name: TextField().pipe(
+            Schema.withDecodingDefaultType(
+              MigratedEffect.sync(() => "static intrinsic"),
+            ),
+          ),
         }),
         dynamicNested: Schema.Struct({
-          name: Schema.optionalWith(
-            TextField({ default: value((state) => state.name) }),
-            {
-              default: () => "dynamic intrinsic",
-            },
+          name: TextField({ default: value((state) => state.name) }).pipe(
+            Schema.withDecodingDefaultType(
+              MigratedEffect.sync(() => "dynamic intrinsic"),
+            ),
           ),
-          count: Schema.optionalWith(Schema.NumberFromString, {
-            default: () => 5,
-          }),
-          renamed: Schema.optionalWith(TextField(), {
-            default: () => "renamed intrinsic",
-          })
-            .pipe(Schema.fromKey("wire_name"))
-            .annotations({ [FormLabel]: value((state) => state.name) }),
-        }),
+          count: NumberFromString.pipe(
+            Schema.withDecodingDefaultType(MigratedEffect.sync(() => 5)),
+          ),
+          renamed: TextField()
+            .pipe(
+              Schema.withDecodingDefaultType(
+                MigratedEffect.sync(() => "renamed intrinsic"),
+              ),
+            )
+
+            .annotate({ [FormLabel]: value((state) => state.name) }),
+        }).pipe(
+          Schema.encodeKeys({ renamed: "wire_name" }),
+          Schema.encodeTo(
+            Schema.Struct({
+              name: Schema.optional(Schema.String),
+              count: Schema.optional(Schema.String),
+              wire_name: Schema.optional(
+                TextField({ label: value((state) => state.name) }),
+              ),
+            }),
+          ),
+        ),
       }),
-    }).rules((value, rule) => [
-      rule
-        .when(value.staticNested.name.blank())
-        .effects({ staticNested: { name: { required: true } } }),
-      rule
-        .when(value.dynamicNested.name.blank())
-        .effects({ dynamicNested: { name: { required: true } } }),
-    ])
+    })
     expect(
       Schema.decodeUnknownSync(Schema.Struct(form.output.staticNested.fields))(
         {},
@@ -425,7 +543,7 @@ describe("constructor lazy Form authoring", () => {
       { name: "Resolved", rows: [] },
       completed,
     )
-    const reused = Schema.Struct(fields.dynamicNested.fields)
+    const reused = fields.dynamicNested
     expect(Schema.decodeUnknownSync(reused)({})).toEqual({
       name: "dynamic intrinsic",
       count: 5,
@@ -445,27 +563,14 @@ describe("constructor lazy Form authoring", () => {
         renamed: "Renamed",
       }),
     ).toEqual({ name: "Edited", count: "12", wire_name: "Renamed" })
-    expect(fields.dynamicNested.fields.renamed.ast).toMatchObject({
-      to: { annotations: { [FormLabel]: "Resolved" } },
-    })
-    const definition = await Effect.runPromise(
-      form.clientFormDefinitionWithState(
-        { name: "Resolved", rows: [] },
-        completed,
-      ),
-    )
-    expect(definition.rules).toMatchObject([
-      {
-        effects: [
-          { target: ["staticNested", "name"], state: { required: true } },
-        ],
-      },
-      {
-        effects: [
-          { target: ["dynamicNested", "name"], state: { required: true } },
-        ],
-      },
-    ])
+
+    const encoded = SchemaAST.toEncoded(reused.ast)
+    if (!SchemaAST.isObjects(encoded))
+      throw new Error("Expected encoded struct")
+    const wireName = encoded.propertySignatures.find(
+      (property) => property.name === "wire_name",
+    )!
+    expect(fieldAnnotation(wireName.type, FormLabel)).toBe("Resolved")
   })
 
   it("does not discover query factories during metadata resolution and retains override precedence", async () => {
@@ -500,7 +605,7 @@ describe("constructor lazy Form authoring", () => {
       }),
     })
     const one = { name: "one", rows: [] }
-    await Effect.runPromise(form.clientFormDefinition())
+    form.resolvePresentation(one, completed)
     await Effect.runPromise(form.resolveDefaults(one, completed))
     expect(bindings).toBe(0)
     const lookup = form.executeLookupWithState(
@@ -607,14 +712,16 @@ describe("constructor lazy Form authoring", () => {
     const { role, process } = setup()
     const fields = {
       nested: Schema.Struct({
-        name: Schema.optionalWith(TextField(), { default: () => "Nested" }),
-      }).annotations({
+        name: TextField().pipe(
+          Schema.withDecodingDefaultType(MigratedEffect.sync(() => "Nested")),
+        ),
+      }).annotate({
         [FormLabel]: "Nested label",
         [FormDescription]: "Nested description",
       }),
       wrapper: Wrapper({
         flat: TextField(),
-      }).annotations({
+      }).annotate({
         [FormLabel]: "Wrapper label",
         [FormDescription]: "Wrapper description",
       }),
@@ -623,15 +730,12 @@ describe("constructor lazy Form authoring", () => {
       role,
       form: () => fields,
     })
-    const definition = await Effect.runPromise(inline.clientFormDefinition())
-    expect(definition.components).toMatchObject({
+    expect(inline.resolvePresentation({}, initial)).toMatchObject({
       nested: {
-        _tag: "fieldset",
         label: "Nested label",
         description: "Nested description",
       },
       wrapper: {
-        _tag: "fieldset",
         label: "Wrapper label",
         description: "Wrapper description",
       },
@@ -655,7 +759,7 @@ describe("constructor lazy Form authoring", () => {
         new Form(process, "bad-classification", {
           role,
           form: ({ value }) => ({
-            name: TextField().annotations({
+            name: TextField().annotate({
               [FormReadOnly]: value(() => true),
             }),
           }),
@@ -678,8 +782,8 @@ const rejectedTypes = () => {
       required: BooleanField({ required: value(() => true) }),
       // @ts-expect-error value-bearing fields cannot be structural content
       content: content(() => TextField({ readOnly: true })),
-      transformed: NumberFieldFrom(Schema.NumberFromString, {
-        // @ts-expect-error a transformed field default uses its encoded input
+      // @ts-expect-error a transformed field default uses its encoded input
+      transformed: NumberFieldFrom(NumberFromString, {
         default: value(() => 12),
       }),
       // @ts-expect-error query results preserve the lookup contract

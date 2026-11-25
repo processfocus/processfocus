@@ -14,26 +14,23 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
-    "@pf/business-calendar": "workspace:*",
-    "@pf/business-metrics": "workspace:*",
     "@pf/db-info": "workspace:*",
-    "@pf/document-store-service": "workspace:*",
     "@pf/graphql-db-operations": "workspace:*",
     "@pf/graphql-schema": "workspace:*",
     "@pf/process": "workspace:*",
-    "@pf/queue-service": "workspace:*",
+    "@pf/process-execution": "workspace:*",
+    "@pf/public-completion": "workspace:*",
     "@pf/request-time": "workspace:*",
     "@pf/todo-summary": "workspace:*",
     "@processfocus/runtime": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
     "@pf/drizzle-sqlite": "workspace:*",
     "@pf/org-to-db": "workspace:*",
     "@pf/service-drizzle-sqlite": "workspace:*",
     "@pf/sqlite-operations": "workspace:*",
-    "@types/bun": "^1.4.2"
+    "@types/bun": "^1.4.5"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

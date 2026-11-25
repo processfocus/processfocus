@@ -141,7 +141,6 @@ async function handoff(request: Request): Promise<Response> {
   if (!refreshToken && !accessToken) {
     return redirectToLogin(request, port, state)
   }
-  if (!refreshToken) return fail("expired")
 
   const authClient = getAuthClient()
   // The issuer rechecks live delegated authority before exporting CLI access.
@@ -153,6 +152,7 @@ async function handoff(request: Request): Promise<Response> {
   // Preserve the proxy's ordinary expired-cookie recovery, without requesting
   // CLI scope. Even a recovered delegated session must still confirm export.
   if (!verified || verified.err) {
+    if (!refreshToken) return fail("expired")
     const recovered = await authClient.refresh(refreshToken).catch(() => null)
     if (!recovered || recovered.err || !recovered.tokens) return fail("expired")
     if (
@@ -185,6 +185,7 @@ async function handoff(request: Request): Promise<Response> {
     )
   }
   if (!verified || verified.err) return fail("failed")
+  if (!refreshToken) return fail("expired")
   if (!accessToken) return fail("expired")
   if (!(await acceptVerifiedSession(verified.subject.properties, accessToken)))
     return fail("failed")

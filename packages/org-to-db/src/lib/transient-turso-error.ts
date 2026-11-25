@@ -78,7 +78,7 @@ export const isTransientTursoServerError = (error: unknown): boolean => {
 
 const TRANSIENT_TURSO_SERVER_ERROR_RETRY_SCHEDULE = Schedule.addDelay(
   Schedule.recurs(1),
-  () => Duration.millis(250),
+  () => Effect.succeed(Duration.millis(250)),
 )
 
 export const retryTransientTursoServerError = <A, E, R>(

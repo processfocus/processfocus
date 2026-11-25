@@ -1,10 +1,10 @@
-# About
+# @pf/auth-session
 
-Shared type of what details of a user are available in the JWT token.
+Shared session schemas for Provider Users and service accounts, used by the
+authentication server, frontend, and backend services.
 
-Used by both the `auth-api` package and the frontend.
+This package gives those consumers a common vocabulary for identity, roles, and
+credential provenance. It also supplies issuer/audience helpers and realtime
+recipient identity.
 
-Also includes shared issuer/client/audience helpers used by backend services.
-
-Frontend runtime issuer resolution lives in `apps/frontend/lib/auth/issuer.ts`
-and prefers `FRONTEND_JWT_TOKEN`.
+See [`@pf/auth-api`](../auth-api/README.md) for how sessions are issued.

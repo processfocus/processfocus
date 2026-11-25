@@ -58,6 +58,18 @@
       "path": "./fixtures/external-plugins/xero"
     },
     {
+      "path": "./packages/audit"
+    },
+    {
+      "path": "./packages/delegation"
+    },
+    {
+      "path": "./packages/identity-management"
+    },
+    {
+      "path": "./packages/public-completion"
+    },
+    {
       "path": "./packages/auth-api"
     },
     {
@@ -85,9 +97,6 @@
       "path": "./packages/db-info"
     },
     {
-      "path": "./packages/document-store-service"
-    },
-    {
       "path": "./packages/drizzle-postgres"
     },
     {
@@ -98,12 +107,6 @@
     },
     {
       "path": "./packages/form"
-    },
-    {
-      "path": "./packages/form-client-representation"
-    },
-    {
-      "path": "./packages/form-rule"
     },
     {
       "path": "./packages/form-schema"
@@ -163,10 +166,16 @@
       "path": "./packages/process"
     },
     {
+      "path": "./packages/process-execution"
+    },
+    {
       "path": "./packages/process-test-runner"
     },
     {
-      "path": "./packages/queue-service"
+      "path": "./packages/project-accounting"
+    },
+    {
+      "path": "./packages/realtime-client"
     },
     {
       "path": "./packages/request-time"

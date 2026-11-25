@@ -1,40 +1,41 @@
 import { expect, it } from "@effect/vitest"
 import {
+  InvalidQueueNameError,
+  QueueService,
+  StaleJobClaimError,
+} from "@processfocus/runtime"
+import {
   Clock,
   DateTime,
   Duration,
   Effect,
-  Either,
-  FiberRef,
   Layer,
   Option,
+  Result,
 } from "effect"
+import { TestClock } from "effect/testing"
 import { UserDetails, type UserDetailsValue } from "@pf/graphql-db-operations"
 import { PostgresQueueServiceLive } from "@pf/postgres-queue-service"
-import {
-  InvalidQueueNameError,
-  QueueService,
-  StaleJobClaimError,
-} from "@pf/queue-service"
 import { RequestTime } from "@pf/request-time"
 import { PostgresTest } from "@pf/service-drizzle-postgres/test"
+import { batchQueueCases } from "../../runtime/test/batch-contract"
 
 const RequestTimeLive = Layer.succeed(
   RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+  DateTime.makeUnsafe(Date.now()),
 )
 
-const UserDetailsLive = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "TEST_USER",
-    id: "usr-test",
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsLive = Layer.succeed(UserDetails, {
+  by: "TEST_USER",
+  id: "usr-test",
+} as UserDetailsValue)
 
 // Provide a real Clock because @effect/vitest uses TestClock by default,
 // which starts at epoch 0 and breaks DateTime.now comparisons
-const RealClockLive = Layer.setClock(Clock.make())
+const RealClockLive = Layer.succeed(
+  Clock.Clock,
+  Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+)
 
 const QueueTest = PostgresQueueServiceLive.pipe(
   Layer.provideMerge(
@@ -57,6 +58,10 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
   //
   // PostgreSQL statement_timeout is set to 5 seconds in the test container
   // to prevent tests from hanging on locks (see postgres-alpine-container.ts)
+
+  for (const { name, run } of batchQueueCases) {
+    it.effect(name, () => run)
+  }
 
   it.effect("enqueue - should enqueue a job and return job ID", () =>
     Effect.gen(function* () {
@@ -314,11 +319,11 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     Effect.gen(function* () {
       const queue = yield* QueueService
 
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         queue.acknowledge("non-existent-id", "non-existent-receipt"),
       )
 
-      expect(result._tag).toBe("Left")
+      expect(result._tag).toBe("Failure")
     }),
   )
 
@@ -389,11 +394,12 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
       Effect.gen(function* () {
         const queue = yield* QueueService
         const queueName = `stale-claim-queue-${Date.now()}`
+        yield* TestClock.setTime(Date.now())
         yield* queue.enqueue(queueName, { task: "test" }, { retryLimit: 10 })
 
         const stale = yield* queue.rawClaim(queueName, Duration.millis(1))
         expect(Option.isSome(stale)).toBe(true)
-        yield* Effect.sleep(Duration.millis(10))
+        yield* TestClock.adjust(Duration.millis(10))
         const current = yield* queue.rawClaim(queueName, Duration.millis(100))
         expect(Option.isSome(current)).toBe(true)
         if (Option.isNone(stale) || Option.isNone(current)) return
@@ -415,10 +421,11 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
         ]
 
         for (const operation of operations) {
-          const result = yield* Effect.either(operation)
-          Either.match(result, {
-            onLeft: (error) => expect(error).toBeInstanceOf(StaleJobClaimError),
-            onRight: () => {
+          const result = yield* Effect.result(operation)
+          Result.match(result, {
+            onFailure: (error) =>
+              expect(error).toBeInstanceOf(StaleJobClaimError),
+            onSuccess: () => {
               throw new Error("Expected stale queue operation to fail")
             },
           })
@@ -429,7 +436,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
           })
         }
 
-        yield* Effect.sleep(Duration.millis(150))
+        yield* TestClock.adjust(Duration.millis(150))
         const reclaimed = yield* queue.rawClaim(queueName, Duration.seconds(1))
         expect(Option.isSome(reclaimed)).toBe(true)
         if (Option.isSome(reclaimed)) {
@@ -438,7 +445,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
             reclaimed.value.receipt,
           )
         }
-      }),
+      }).pipe(Effect.provide(TestClock.layer())),
   )
 
   it.effect(
@@ -472,7 +479,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     Effect.gen(function* () {
       const queue = yield* QueueService
 
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         queue.extendVisibility(
           "non-existent-id",
           "non-existent-receipt",
@@ -480,7 +487,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
         ),
       )
 
-      expect(result._tag).toBe("Left")
+      expect(result._tag).toBe("Failure")
     }),
   )
 
@@ -619,14 +626,14 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     () =>
       Effect.gen(function* () {
         const queue = yield* QueueService
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           queue.enqueue("invalid queue", { task: "test" }),
         )
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
-          expect(result.left.message).toContain("invalid characters")
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
+          expect(result.failure.message).toContain("invalid characters")
         }
       }),
   )
@@ -636,13 +643,13 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     () =>
       Effect.gen(function* () {
         const queue = yield* QueueService
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           queue.enqueue("invalid@queue", { task: "test" }),
         )
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
         }
       }),
   )
@@ -652,12 +659,12 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     () =>
       Effect.gen(function* () {
         const queue = yield* QueueService
-        const result = yield* Effect.either(queue.enqueue("", { task: "test" }))
+        const result = yield* Effect.result(queue.enqueue("", { task: "test" }))
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
-          expect(result.left.message).toContain("cannot be empty")
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
+          expect(result.failure.message).toContain("cannot be empty")
         }
       }),
   )
@@ -668,14 +675,14 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
       Effect.gen(function* () {
         const queue = yield* QueueService
         const longName = "a".repeat(81)
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           queue.enqueue(longName, { task: "test" }),
         )
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
-          expect(result.left.message).toContain("exceeds maximum length")
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
+          expect(result.failure.message).toContain("exceeds maximum length")
         }
       }),
   )
@@ -685,7 +692,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     () =>
       Effect.gen(function* () {
         const queue = yield* QueueService
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           queue.enqueueWithDelay(
             "invalid queue",
             { task: "test" },
@@ -693,9 +700,9 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
           ),
         )
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
         }
       }),
   )
@@ -705,11 +712,11 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     () =>
       Effect.gen(function* () {
         const queue = yield* QueueService
-        const result = yield* Effect.either(queue.rawClaim("invalid@queue"))
+        const result = yield* Effect.result(queue.rawClaim("invalid@queue"))
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
         }
       }),
   )
@@ -737,11 +744,11 @@ it.layer(TestLayer, { timeout: "60 seconds" })("PostgresQueueService", (it) => {
     () =>
       Effect.gen(function* () {
         const queue = yield* QueueService
-        const result = yield* Effect.either(queue.getStats("invalid queue"))
+        const result = yield* Effect.result(queue.getStats("invalid queue"))
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(InvalidQueueNameError)
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(InvalidQueueNameError)
         }
       }),
   )

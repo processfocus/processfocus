@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest"
-import { Cause, DateTime, Effect, Exit, FiberRef, Layer } from "effect"
+import { Cause, DateTime, Effect, Exit, Layer } from "effect"
 import * as schema from "@pf/drizzle-postgres"
 import {
   DraftProcessExecutionQueries,
@@ -15,17 +15,14 @@ import { PostgresTest } from "./postgres-test"
 // Provide a fixed timestamp for tests
 const RequestTimeTest = Layer.succeed(
   RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+  DateTime.makeUnsafe(Date.now()),
 )
 
 // Provide test user details
-const UserDetailsTest = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "TEST_USER",
-    id: "usr-test",
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsTest = Layer.succeed(UserDetails, {
+  by: "TEST_USER",
+  id: "usr-test",
+} as UserDetailsValue)
 
 const TestLayer = Layer.provideMerge(
   Layer.mergeAll(
@@ -83,7 +80,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
             id: "usr-test",
             provider: "test",
             sub: "draft-owner",
-            lastLoggedIn: DateTime.unsafeMake(Date.now()),
+            createdAt: DateTime.makeUnsafe(Date.now()),
           })
           .onConflictDoNothing()
 
@@ -178,7 +175,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
             id: "usr-test",
             provider: "test",
             sub: "draft-owner",
-            lastLoggedIn: DateTime.unsafeMake(Date.now()),
+            createdAt: DateTime.makeUnsafe(Date.now()),
           })
           .onConflictDoNothing()
 

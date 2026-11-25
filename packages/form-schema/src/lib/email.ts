@@ -23,27 +23,29 @@ import { type FieldOptions, applyFieldAnnotations } from "./form-schema"
  * ```
  */
 export const Email = Schema.Trim.pipe(
-  Schema.filter(
-    (s) =>
-      isEmail(s, {
-        require_tld: false,
-        allow_utf8_local_part: true,
-        allow_ip_domain: true,
-      }),
-    { message: () => "must be a valid email address" },
+  Schema.check(
+    Schema.makeFilter(
+      (s) =>
+        isEmail(s, {
+          require_tld: false,
+          allow_utf8_local_part: true,
+          allow_ip_domain: true,
+        }),
+      { message: "must be a valid email address" },
+    ),
   ),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "Email",
     title: "Email address",
     description: "A valid email address",
-    jsonSchema: { format: "email" },
+    format: "email",
     [FormEmailInput]: true,
   }),
 )
 
 export const EmailField = (
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never> =>
+): Schema.Codec<string, string, never, never> =>
   applyFieldAnnotations(Email, {
     autoComplete: options?.autoComplete ?? "email",
     ...options,

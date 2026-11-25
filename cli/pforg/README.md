@@ -1,75 +1,85 @@
 # pforg
 
-`pforg` is the Process Focus organisation-runtime CLI. It authenticates a
-Provider User against one organisation Environment's Dashboard.
+`pforg` works with Processes, Todos, records and Invitations in a Process Focus
+organisation. It uses your Dashboard permissions.
 
-`pfcli` remains the Console hosting CLI and uses a separate login and
-credentials file.
+Use [pfcli](../pfcli/README.md) for building organisations and managing cloud
+hosting. The two tools have separate logins.
 
-## Authentication
+## Log in
 
-Log in by supplying the organisation Dashboard base URL explicitly:
+Supply the organisation Dashboard URL:
 
 ```bash
 pforg auth login https://environment.project.app.processfocus.com
-pforg auth login http://localhost:3000
-```
-
-The command opens `<base-url>/cli-auth` in the default browser and stores the
-result in `~/.config/pforg/credentials.json`. Set `PFORG_CREDENTIALS_PATH` to
-use a different credentials file.
-
-Check the current session without printing its access token:
-
-```bash
 pforg auth status
 ```
 
-Missing and expired credentials exit with status 1 and ask the user to log in
-again.
+For local development, use the local Dashboard URL instead. Credentials are
+stored in `~/.config/pforg/credentials.json`; `PFORG_CREDENTIALS_PATH` selects a
+different file.
 
-## Start a Process
-
-Start a Process by its path. The command derives the organisation-generated
-GraphQL mutation name and prints the immediate start payload as JSON:
-
-```bash
-pforg process start engineering/bug-report
-pforg process start engineering/bug-report --input '{"field":"value"}'
-```
-
-`--input` must be a JSON object. The command exits after GraphQL returns; it
-does not wait for a Todo or for the Process Execution to finish.
-
-## Processes
-
-List the Processes the logged-in Provider User can start. Success is always a
-JSON array on stdout, including `[]` when there are no matching Processes.
+## Processes and work
 
 ```bash
 pforg processes list
-pforg processes list --page 2 --limit 25
-pforg processes list --process-path /finance/purchase-request --status Active
-```
-
-## Todos
-
-List the Todos the logged-in Provider User can complete. Success is always a
-JSON array on stdout, including `[]` when there are no matching Todos.
-
-```bash
+pforg process start /finance/purchase-request --input '{"amount":100}'
 pforg todos list
-pforg todos list --page 2 --limit 25
-pforg todos list --process-path /finance/purchase-request --status Active
+pforg executions list
 ```
 
-## Process Executions
+Use a Process path and input fields defined by your organisation. Starting a
+Process returns immediately after the start request; it does not wait for the
+execution to finish.
 
-List the Process Executions the logged-in Provider User can view. Success is
-always a JSON array on stdout, including `[]` when there are no matches.
+After fixing the cause of a failed execution, use
+`pforg executions restart <execution-id>` to retry its work.
+
+## Lists and records
+
+Discover the operations and fields available to you before reading or changing
+records:
 
 ```bash
-pforg executions list
-pforg executions list --page 2 --limit 25
-pforg executions list --process-path /finance/purchase-request --status Running
+pforg lists list
+pforg lists describe /contacts
+pforg records list /contacts
+pforg records get /contacts <record-id>
+pforg records create /contacts --input '{"name":"Alex"}'
+pforg records update /contacts <record-id> --input-file ./changes.json
 ```
+
+Create and update accept one JSON object from `--input`, `--input-file` or
+`--input-stdin`. Available operations and validation belong to the organisation's
+List definition. After a lost response to a write, check the record before retrying.
+
+## Invitations and passkeys
+
+Administrators can create Invitations with explicit role paths:
+
+```bash
+pforg invitation create --email person@example.com --role "/Employee"
+pforg invitation list
+```
+
+For passkey registration, add `--registration-link` when creating an Invitation,
+or use `invitation registration-link` for an existing pending Invitation.
+Links are secret, single-use credentials; deliver them privately. The command
+does not send email. Account bootstrap and recovery are available through `pfcli`.
+
+Use `pforg passkeys list` to see your own registered passkeys.
+
+## Output and help
+
+Data commands return JSON. Process, Todo, execution and record browsing is
+paginated; use `--page` and `--limit` to continue. Invitation listing retrieves
+all pages. Failed commands exit nonzero and report errors on stderr.
+
+```bash
+pforg --help
+pforg records create --help
+pforg --completions bash
+```
+
+The package includes a generated [command reference](dist/command-reference.md)
+and [Usage spec](dist/pforg.usage.kdl), created during the build.

@@ -55,9 +55,7 @@ export interface KeyManagementServiceInterface {
 /**
  * Effect service tag for key management.
  */
-export class KeyManagementService extends Context.Tag(
-  "@pf/openauth/KeyManagementService",
-)<KeyManagementService, KeyManagementServiceInterface>() {}
+export class KeyManagementService extends Context.Service<KeyManagementService, KeyManagementServiceInterface>()("@pf/openauth/KeyManagementService") {}
 
 /**
  * Live implementation of KeyManagementService.

@@ -1,7 +1,11 @@
 import { Effect } from "effect"
+import { DateTimeDisplayProvider } from "@pf/shadcn-components/date-time-display"
 import { listPasskeys } from "./actions"
 import { PasskeysClient } from "./passkeys-client"
 import { BasePage } from "@/lib/effect/runtime"
+
+// The authenticated layout can omit this page while checking the session.
+export const instant = false
 
 const Passkeys = BasePage.build(() =>
   Effect.gen(function* () {
@@ -18,12 +22,14 @@ const Passkeys = BasePage.build(() =>
         {result.kind !== "success" ? (
           <p role="alert">{result.message}</p>
         ) : (
-          <PasskeysClient
-            key={result.account.userId}
-            organisationName={result.organisation.name}
-            account={result.account}
-            initialCredentials={result.credentials}
-          />
+          <DateTimeDisplayProvider initialNow={Date.now()}>
+            <PasskeysClient
+              key={result.account.userId}
+              organisationName={result.organisation.name}
+              account={result.account}
+              initialCredentials={result.credentials}
+            />
+          </DateTimeDisplayProvider>
         )}
       </div>
     )

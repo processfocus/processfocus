@@ -30,6 +30,7 @@ function Wrapper({ children }: { children: ReactNode }) {
   return children
 }
 
+mock.module("server-only", () => ({}))
 mock.module("@/lib/auth/session", () => ({
   getSessionWithTokenAndExpiry: async () => ({
     ...current,

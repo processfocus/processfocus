@@ -1,10 +1,22 @@
-import type { SqlError } from "@effect/sql/SqlError"
-import { type SQL, and, eq, gt, inArray, isNotNull, or, sql } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import {
+  type SQL,
+  and,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  notExists,
+  or,
+  sql,
+} from "drizzle-orm"
+import { alias } from "drizzle-orm/pg-core"
+import { DateTime, Effect, Layer } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import * as schema from "@pf/drizzle-postgres"
 import {
   ProcessCollectionQueries,
   type ProcessCollectionRow,
+  type ProcessMetadataRow,
   ProcessQueries,
   type PullCheckpoint,
 } from "@pf/graphql-db-operations"
@@ -98,6 +110,46 @@ export const PostgresProcessCollectionQueriesLive = Layer.effect(
   Effect.gen(function* () {
     const db = yield* TypedPostgresDrizzle
 
+    const startStep = alias(schema.step, "start_step")
+    const startStepId = db
+      .select({ id: startStep.id })
+      .from(startStep)
+      .where(
+        and(
+          eq(startStep.processId, schema.process.id),
+          eq(startStep._deleted, false),
+          notExists(
+            db
+              .select({ id: schema.flow.id })
+              .from(schema.flow)
+              .where(
+                and(
+                  eq(schema.flow.targetStepId, startStep.id),
+                  eq(schema.flow._deleted, false),
+                ),
+              ),
+          ),
+        ),
+      )
+      .limit(1)
+
+    const metadataFields = {
+      id: schema.process.id,
+      name: schema.process.name,
+      path: schema.process.path,
+      purpose: schema.process.purpose,
+      updatedAt:
+        sql<number>`EXTRACT(EPOCH FROM ${schema.process.updatedAt}) * 1000`.as(
+          "updated_at_millis",
+        ),
+      deleted: schema.process._deleted,
+      orgUnitId: schema.orgUnit.id,
+      orgUnitName: schema.orgUnit.name,
+      orgUnitLevel: schema.orgUnit.orgUnitLevel,
+      startStepPath: schema.step.path,
+      formFieldCount: schema.step.formFields,
+    }
+
     /**
      * Builds and executes the process query.
      * @param whereClause - The WHERE clause to apply (checkpoint filter or id filter)
@@ -147,20 +199,7 @@ export const PostgresProcessCollectionQueriesLive = Layer.effect(
         const baseQuery = db
           .with(durationStats)
           .select({
-            id: schema.process.id,
-            name: schema.process.name,
-            path: schema.process.path,
-            purpose: schema.process.purpose,
-            updatedAt:
-              sql<number>`EXTRACT(EPOCH FROM ${schema.process.updatedAt}) * 1000`.as(
-                "updated_at_millis",
-              ),
-            deleted: schema.process._deleted,
-            orgUnitId: schema.orgUnit.id,
-            orgUnitName: schema.orgUnit.name,
-            orgUnitLevel: schema.orgUnit.orgUnitLevel,
-            startStepPath: schema.step.path,
-            formFieldCount: schema.step.formFields,
+            ...metadataFields,
             activeInstances: schema.processItsActiveProcesses.activeProcesses,
             minDurationMs: durationStats.minDurationMs,
             maxDurationMs: durationStats.maxDurationMs,
@@ -170,11 +209,11 @@ export const PostgresProcessCollectionQueriesLive = Layer.effect(
             schema.orgUnit,
             eq(schema.process.orgUnitId, schema.orgUnit.id),
           )
-          .innerJoin(
+          .leftJoin(
             schema.processItsStartStep,
             eq(schema.process.id, schema.processItsStartStep.id),
           )
-          .innerJoin(
+          .leftJoin(
             schema.step,
             eq(schema.processItsStartStep.startStep, schema.step.id),
           )
@@ -187,7 +226,7 @@ export const PostgresProcessCollectionQueriesLive = Layer.effect(
             eq(schema.process.id, durationStats.processId),
           )
           .where(whereClause)
-          .orderBy(schema.process.updatedAt, schema.process.id)
+          .orderBy(sql`updated_at_millis`, schema.process.id)
 
         const query = limit !== undefined ? baseQuery.limit(limit) : baseQuery
         const rows = yield* query
@@ -206,7 +245,7 @@ export const PostgresProcessCollectionQueriesLive = Layer.effect(
               name: row.orgUnitName,
               orgUnitLevel: row.orgUnitLevel,
             },
-            startStepPath: row.startStepPath,
+            startStepPath: row.startStepPath ?? "",
             formFieldCount: row.formFieldCount ?? 0,
             activeInstances: row.activeInstances ?? 0,
             minDurationMs: row.minDurationMs,
@@ -237,10 +276,93 @@ export const PostgresProcessCollectionQueriesLive = Layer.effect(
     }
 
     return {
+      advanceProcessRevision: (id) =>
+        Effect.gen(function* () {
+          // Shared with import allocation; held until the caller commits so
+          // later writers read the committed head, never an in-flight revision.
+          yield* db
+            .select({
+              lock: sql`pg_advisory_xact_lock(hashtext('pf_process.replication_revision'))`,
+            })
+            .from(sql`(SELECT 1) AS revision_lock`)
+          const rows = yield* db
+            .select({
+              latest: sql<number>`CAST(EXTRACT(EPOCH FROM MAX(${schema.process.updatedAt})) * 1000 AS BIGINT)`,
+            })
+            .from(schema.process)
+          yield* db
+            .update(schema.process)
+            .set({
+              updatedAt: DateTime.makeUnsafe(Number(rows[0]?.latest ?? 0) + 1),
+            })
+            .where(eq(schema.process.id, id))
+        }),
+      observeProcesses: (scope, ids) =>
+        ids.length === 0
+          ? Effect.void
+          : db
+              .insert(schema.processVisibility)
+              .values(
+                ids.map((processId) => ({
+                  processId,
+                  replicationScope: scope,
+                })),
+              )
+              .onConflictDoNothing()
+              .pipe(Effect.asVoid),
+      getObservedProcessIds: (scope, ids) =>
+        ids.length === 0
+          ? Effect.succeed([])
+          : db
+              .select({ id: schema.processVisibility.processId })
+              .from(schema.processVisibility)
+              .where(
+                and(
+                  eq(schema.processVisibility.replicationScope, scope),
+                  inArray(schema.processVisibility.processId, [...ids]),
+                  eq(schema.processVisibility._deleted, sql`false`),
+                ),
+              )
+              .pipe(Effect.map((rows) => rows.map((row) => row.id))),
       pullProcess: (
         checkpoint: PullCheckpoint | null | undefined,
         limit: number,
       ) => queryProcesses(buildCheckpointFilter(checkpoint), limit),
+
+      getProcessMetadata: (ids: string[]) =>
+        ids.length === 0
+          ? Effect.succeed([])
+          : db
+              .select(metadataFields)
+              .from(schema.process)
+              .innerJoin(
+                schema.orgUnit,
+                eq(schema.process.orgUnitId, schema.orgUnit.id),
+              )
+              .leftJoin(schema.step, eq(schema.step.id, startStepId))
+              .where(inArray(schema.process.id, ids))
+              .orderBy(sql`updated_at_millis`, schema.process.id)
+              .pipe(
+                Effect.map((rows) =>
+                  rows.map(
+                    (row): ProcessMetadataRow => ({
+                      id: row.id,
+                      name: row.name,
+                      path: row.path,
+                      purpose: row.purpose,
+                      updatedAt: row.updatedAt,
+                      deleted: row.deleted,
+                      orgUnit: {
+                        id: row.orgUnitId,
+                        name: row.orgUnitName,
+                        orgUnitLevel: row.orgUnitLevel,
+                      },
+                      startStepPath: row.startStepPath ?? "",
+                      formFieldCount: row.formFieldCount ?? 0,
+                    }),
+                  ),
+                ),
+              ),
 
       getProcesses: (ids: string[]) =>
         ids.length === 0

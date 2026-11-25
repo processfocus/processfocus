@@ -1,14 +1,14 @@
-import { Headers, HttpClient, HttpClientRequest } from "@effect/platform"
 import {
   Clock,
   type Context,
   Effect,
-  Either,
   Layer,
   Option,
   Redacted,
+  Result,
   Schema,
 } from "effect"
+import { Headers, HttpClient, HttpClientRequest } from "effect/http"
 import { CurrentStepJobContext } from "@pf/process"
 import {
   type XeroInvoiceError,
@@ -30,7 +30,12 @@ import {
   makeXeroAccessCache,
   refreshAfterMsFromExpiresIn,
 } from "../xero-token"
-import { XeroConnectionsResponse, XeroTokenResponse } from "../xero-wire"
+import {
+  XeroAddress,
+  XeroConnectionsResponse,
+  XeroContactDetailsResponse,
+  XeroTokenResponse,
+} from "../xero-wire"
 import type {
   ConformanceHarness,
   ObservableInvoice,
@@ -41,7 +46,7 @@ const TOKEN_URL = "https://identity.xero.com/connect/token"
 const CONNECTIONS_URL = "https://api.xero.com/connections"
 const ACCOUNTING_URL = "https://api.xero.com/api.xro/2.0"
 
-const Amount = Schema.Union(Schema.Number, Schema.String)
+const Amount = Schema.Union([Schema.Number, Schema.String])
 
 const ObservationInvoice = Schema.Struct({
   InvoiceID: Schema.String,
@@ -57,6 +62,7 @@ const ObservationInvoice = Schema.Struct({
   Contact: Schema.optional(
     Schema.Struct({
       ContactID: Schema.optional(Schema.String),
+      Addresses: Schema.optional(Schema.Array(XeroAddress)),
     }),
   ),
   LineItems: Schema.optional(
@@ -131,17 +137,17 @@ const execute = (
   })
 
 const decodeJson = <A, I>(
-  schema: Schema.Schema<A, I>,
+  schema: Schema.Codec<A, I>,
   bodyText: string,
   message: string,
 ): Effect.Effect<A, XeroInvoiceError> =>
-  Schema.decodeUnknown(Schema.parseJson(schema))(bodyText).pipe(
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(bodyText).pipe(
     Effect.mapError(() => xeroMalformedResponseError(message)),
   )
 
 const fetchAccess = (
   httpClient: HttpClient.HttpClient,
-  config: Context.Tag.Service<typeof XeroInvoiceConfig>,
+  config: Context.Service.Shape<typeof XeroInvoiceConfig>,
 ): Effect.Effect<XeroAccess, XeroInvoiceError> =>
   Effect.gen(function* () {
     const tokenResult = yield* execute(
@@ -229,10 +235,23 @@ const toObservable = (
 const xeroWhereEquals = (field: string, value: string): string =>
   `${field}=="${value.replaceAll('"', '""')}"`
 
+interface LiveConformanceHarness extends ConformanceHarness {
+  readonly readContactAddresses: (
+    contactId: string,
+  ) => Effect.Effect<readonly (typeof XeroAddress.Type)[], XeroInvoiceError>
+  readonly setContactAddresses: (
+    contactId: string,
+    addresses: readonly (typeof XeroAddress.Type)[],
+  ) => Effect.Effect<void, XeroInvoiceError>
+  readonly readInvoiceAddresses: (
+    invoiceId: string,
+  ) => Effect.Effect<readonly (typeof XeroAddress.Type)[], XeroInvoiceError>
+}
+
 export const makeLiveConformanceHarness = (
   requestedUrls: string[],
 ): Effect.Effect<
-  ConformanceHarness,
+  LiveConformanceHarness,
   XeroInvoiceError,
   HttpClient.HttpClient | XeroInvoiceConfig
 > =>
@@ -250,22 +269,27 @@ export const makeLiveConformanceHarness = (
       ),
     )
 
-    const readInvoices = (path: string) =>
+    const requestJson = <A, I>(
+      schema: Schema.Codec<A, I>,
+      path: string,
+      body?: unknown,
+    ) =>
       Effect.gen(function* () {
+        const request = (access: XeroAccess) =>
+          body === undefined
+            ? accountingGet(access, path)
+            : accountingGet(access, path).pipe(
+                HttpClientRequest.setMethod("POST"),
+                HttpClientRequest.bodyJsonUnsafe(body),
+              )
         const firstAccess = yield* accessCache.get()
-        const first = yield* execute(
-          httpClient,
-          accountingGet(firstAccess, path),
-        )
+        const first = yield* execute(httpClient, request(firstAccess))
         const result =
           first.status === 401
             ? yield* Effect.gen(function* () {
                 yield* accessCache.invalidate()
                 const secondAccess = yield* accessCache.get()
-                return yield* execute(
-                  httpClient,
-                  accountingGet(secondAccess, path),
-                )
+                return yield* execute(httpClient, request(secondAccess))
               })
             : first
         if (result.status < 200 || result.status >= 300) {
@@ -277,15 +301,47 @@ export const makeLiveConformanceHarness = (
           )
         }
         return yield* decodeJson(
-          ObservationInvoices,
+          schema,
           result.bodyText,
           "Malformed Xero invoice response",
         )
       })
 
+    const readInvoices = (path: string) =>
+      requestJson(ObservationInvoices, path)
+
     return {
       kind: "live" as const,
       prepare: () => Effect.void,
+      readContactAddresses: (contactId) =>
+        requestJson(XeroContactDetailsResponse, `/Contacts/${contactId}`).pipe(
+          Effect.flatMap((response) =>
+            response.Contacts.length === 1 &&
+            response.Contacts[0]?.ContactID === contactId
+              ? Effect.succeed(response.Contacts[0].Addresses)
+              : Effect.fail(
+                  xeroMalformedResponseError("Unexpected conformance contact"),
+                ),
+          ),
+        ),
+      setContactAddresses: (contactId, addresses) =>
+        requestJson(XeroContactDetailsResponse, "/Contacts", {
+          Contacts: [{ ContactID: contactId, Addresses: addresses }],
+        }).pipe(Effect.asVoid),
+      readInvoiceAddresses: (invoiceId) =>
+        readInvoices(`/Invoices/${invoiceId}`).pipe(
+          Effect.flatMap((response) =>
+            response.Invoices.length === 1 &&
+            response.Invoices[0]?.InvoiceID === invoiceId &&
+            response.Invoices[0].Contact?.Addresses !== undefined
+              ? Effect.succeed(response.Invoices[0].Contact.Addresses)
+              : Effect.fail(
+                  xeroMalformedResponseError(
+                    "Missing conformance invoice contact addresses",
+                  ),
+                ),
+          ),
+        ),
       issue: (input, todoId) =>
         Effect.gen(function* () {
           const result = yield* Effect.gen(function* () {
@@ -297,10 +353,10 @@ export const makeLiveConformanceHarness = (
               todoId,
               stepPath: "/Create Xero Invoice",
             }),
-            Effect.either,
+            Effect.result,
           )
-          return yield* Either.match(result, {
-            onLeft: (error) =>
+          return yield* Result.match(result, {
+            onFailure: (error) =>
               Effect.succeed({
                 kind: "failed" as const,
                 failed: {
@@ -310,7 +366,7 @@ export const makeLiveConformanceHarness = (
                   message: error.message,
                 },
               } satisfies ScenarioObservation),
-            onRight: (issued) =>
+            onSuccess: (issued) =>
               Effect.gen(function* () {
                 const decoded = yield* readInvoices(
                   `/Invoices/${issued.invoiceId}`,
@@ -333,6 +389,7 @@ export const makeLiveConformanceHarness = (
                     invoiceId: `${issued.invoiceId}`,
                     invoiceNumber: `${issued.invoiceNumber}`,
                     invoice: toObservable(invoice),
+                    lines: issued.lines,
                   },
                 } satisfies ScenarioObservation
               }),

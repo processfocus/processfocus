@@ -1,8 +1,8 @@
 import "server-only"
-import { Tracer as OtelTracer, Resource } from "@effect/opentelemetry"
-import { Next } from "@mcrovero/effect-nextjs"
-import { Effect, FiberRef, Layer } from "effect"
+import { OtelTracer, Resource } from "@effect/opentelemetry"
+import { Effect, Layer } from "effect"
 import { connection } from "next/server"
+import { makePageRuntime } from "./page-runtime"
 import { LoggerLive } from "./run-effect"
 import { AccessToken, AccessTokenLive } from "./services/access-token"
 import { CedarAuthorizationLayer } from "./services/authorization"
@@ -34,8 +34,6 @@ const otelRegistration = process.env["AWS_LAMBDA_FUNCTION_NAME"]
  *
  * OtelTracer.layerGlobal picks up the global TracerProvider and configures the
  * Effect fiber tracer so that Effect.withSpan creates real OTEL spans.
- *
- * Pattern from: https://github.com/mcrovero/effect-nextjs#opentelemetry
  */
 const layerTracer = OtelTracer.layerGlobal.pipe(
   Layer.provide(Resource.layer({ serviceName: SERVICE_NAME })),
@@ -45,11 +43,10 @@ const layerTracer = OtelTracer.layerGlobal.pipe(
  * Application-wide Effect runtime layer.
  * This combines all service layers needed by the application.
  *
- * Note: All layers must be stateless as per @mcrovero/effect-nextjs requirements.
- * For stateful layers, use globalValue with ManagedRuntime.
+ * Layers are acquired and released within each page invocation.
  */
 export const AppLive = Layer.mergeAll(
-  AccessTokenLive, // Provides FiberRef for access token
+  AccessTokenLive, // Provides request-local service for access token
   GraphQLServiceLive, // Depends on AccessToken at runtime
   FormValidationServiceLive,
   LoggerLive,
@@ -63,9 +60,8 @@ export const AppLive = Layer.mergeAll(
  * Pages using this layer should handle errors gracefully.
  */
 export const AppWithAuthorizationLive: Layer.Layer<
-  | Layer.Layer.Success<typeof AppLive>
-  | Layer.Layer.Success<typeof CedarAuthorizationLayer>,
-  Layer.Layer.Error<typeof CedarAuthorizationLayer>
+  Layer.Success<typeof AppLive> | Layer.Success<typeof CedarAuthorizationLayer>,
+  Layer.Error<typeof CedarAuthorizationLayer>
 > = Layer.mergeAll(AppLive, CedarAuthorizationLayer)
 
 /**
@@ -80,7 +76,7 @@ const AppWithAuthorizationLiveWithTracer = AppWithAuthorizationLive.pipe(
 
 /**
  * Wrapper that retrieves the access token from session cookies and sets it
- * in the AccessToken FiberRef before running the page effect.
+ * in the AccessToken request-local service before running the page effect.
  *
  * This follows the same pattern as RequestTime/UserDetails in the backend GraphQL API.
  *
@@ -94,16 +90,16 @@ const withAccessToken = <A, E, R>(
       Effect.tapError((error) =>
         Effect.logError("Failed to get session with token", error),
       ),
-      Effect.catchAll(() => Effect.succeed(null)),
+      Effect.catch(() => Effect.succeed(null)),
     )
-    const accessTokenRef = yield* AccessToken
-
-    yield* FiberRef.set(accessTokenRef, { token: session?.accessToken ?? null })
-
-    return yield* pageEffect
+    return yield* pageEffect.pipe(
+      Effect.provideService(AccessToken, {
+        token: session?.accessToken ?? null,
+      }),
+    )
   })
 
-const nextBasePage = Next.make("BasePage", AppLiveWithTracer)
+const nextBasePage = makePageRuntime("BasePage", AppLiveWithTracer)
 
 /**
  * Base page runtime for server-side pages with automatic authentication.
@@ -114,7 +110,7 @@ export const BasePage = {
   build: <Args extends unknown[], A>(
     pageEffect: (
       ...args: Args
-    ) => Effect.Effect<A, never, Layer.Layer.Success<typeof AppLive>>,
+    ) => Effect.Effect<A, never, Layer.Success<typeof AppLive>>,
   ) => {
     const wrappedEffect = (...args: Args) =>
       withAccessToken(pageEffect(...args))
@@ -128,7 +124,7 @@ export const BasePage = {
   },
 }
 
-const nextBasePageWithAuth = Next.make(
+const nextBasePageWithAuth = makePageRuntime(
   "BasePageWithAuth",
   AppWithAuthorizationLiveWithTracer,
 )
@@ -146,7 +142,7 @@ export const BasePageWithAuthorization = {
     ) => Effect.Effect<
       A,
       never,
-      Layer.Layer.Success<typeof AppWithAuthorizationLive>
+      Layer.Success<typeof AppWithAuthorizationLive>
     >,
   ) => {
     const wrappedEffect = (...args: Args) =>
@@ -165,4 +161,4 @@ export const BasePageWithAuthorization = {
  * Base layout runtime for layouts.
  * Layouts can use the same runtime infrastructure as pages.
  */
-export const BaseLayout = Next.make("BaseLayout", AppLiveWithTracer)
+export const BaseLayout = makePageRuntime("BaseLayout", AppLiveWithTracer)

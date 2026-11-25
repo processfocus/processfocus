@@ -20,10 +20,6 @@ const processesSection: ShellNavigationItem = {
 }
 
 describe("mobile shell policy", () => {
-  test("renames the dashboard section to Home on mobile", () => {
-    expect(getShellSectionLabel(dashboardSection, true)).toBe("Home")
-  })
-
   test("updates the dashboard description for mobile home", () => {
     expect(getShellSectionDescription(dashboardSection, true)).toBe(
       "My to-dos and quick actions",

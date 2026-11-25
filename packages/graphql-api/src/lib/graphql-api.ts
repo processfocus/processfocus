@@ -1,23 +1,30 @@
-import type { PlatformError } from "@effect/platform/Error"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { NodeFileSystem } from "@effect/platform-node"
-import type { SqlClient } from "@effect/sql"
-import type { SqlError } from "@effect/sql/SqlError"
 import { useEngine } from "@envelop/core"
 import { type ExecutionArgs, normalizedExecutor } from "@graphql-tools/executor"
 import { mergeTypeDefs } from "@graphql-tools/merge"
-import type {
-  ExecutionResult,
-  MaybeAsyncIterable,
-  MaybePromise,
-} from "@graphql-tools/utils"
+import type { ExecutionResult, MaybeAsyncIterable } from "@graphql-tools/utils"
 import {
   createRemoteJwksSigningKeyProvider,
   extractFromConnectionParams,
   extractFromHeader,
   useJWT,
 } from "@graphql-yoga/plugin-jwt"
-import type { QueueService } from "@processfocus/runtime"
-import { Context, DateTime, Effect, Layer, type ManagedRuntime } from "effect"
+import type { DocumentStoreService, QueueService } from "@processfocus/runtime"
+import type { MaybePromise } from "@whatwg-node/promise-helpers"
+import {
+  Context,
+  DateTime,
+  Effect,
+  Formatter,
+  Layer,
+  type ManagedRuntime,
+  Option,
+} from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
+import type { PlatformError } from "effect/PlatformError"
+import type { SqlClient } from "effect/sql"
+import type { SqlError } from "effect/sql/SqlError"
 import {
   type DocumentNode,
   GraphQLError,
@@ -31,19 +38,25 @@ import {
 } from "graphql"
 import { DateTimeISOResolver, JSONResolver } from "graphql-scalars"
 import {
+  Logger,
   type YogaInitialContext,
   type YogaServerInstance,
   createSchema,
   createYoga,
 } from "graphql-yoga"
+import { createRemoteJWKSet } from "jose"
+import type { Audit } from "@pf/audit"
 import type { AuthorizationService, CurrentPrincipal } from "@pf/auth-policy"
-import type { DocumentStoreService } from "@pf/document-store-service"
+import { encodeWorkloadAudit } from "@pf/auth-session"
+import { DelegationIdentityFacts } from "@pf/delegation"
+import { makeDelegationManagementHandler } from "@pf/delegation/authorization"
 import type {
   DraftProcessExecutionQueries,
   FileOperations,
   FlowExecutionOperations,
   FlowQueries,
   OrgQueries,
+  ProcessCollectionQueries,
   ProcessExecutionOperations,
   ProcessQueries,
   ProviderUserQueries,
@@ -61,6 +74,7 @@ import type { RequestTime } from "@pf/request-time"
 import type { TodoSummaryComputation } from "@pf/todo-summary"
 import { AuthConfig, GRAPHQL_AUDIENCE } from "./auth-config"
 import { transformSchemaWithAuthDirective } from "./auth-directive-plugin"
+import { AWS_PROOF_HEADER, verifyAwsRoleProof } from "./aws-role-proof"
 import { recordDashboardActivity } from "./dashboard-activity"
 import {
   RealtimeEvent,
@@ -76,6 +90,7 @@ import type { ProcessEvents } from "./process-events"
 import {
   createResolverExecutor,
   deepMerge,
+  graphqlLogIdentity,
   toSerializableGraphQLExtensions,
 } from "./resolver-utils"
 import type { DraftProcessExecutionCollectionOps } from "./rxdb/draft-process-execution"
@@ -89,6 +104,7 @@ import {
   isServiceAccountSession,
 } from "./session-guards"
 import { systemSchema } from "./system-resolvers"
+import { isExpectedGraphQLError } from "./to-graphql-error"
 import type { TodoEvents } from "./todo-events"
 import type {
   JWTPayload,
@@ -257,9 +273,10 @@ const hasRequest = (obj: unknown): obj is { req: Request } =>
 /**
  * Configuration for the dynamic schema path
  */
-export class DynamicSchemaConfig extends Context.Tag(
-  "@pf/graphql-api/DynamicSchemaConfig",
-)<DynamicSchemaConfig, { readonly schemaPath: string }>() {}
+export class DynamicSchemaConfig extends Context.Service<
+  DynamicSchemaConfig,
+  { readonly schemaPath: string }
+>()("@pf/graphql-api/DynamicSchemaConfig") {}
 
 export const securityHeadersPlugin = {
   onResponse: ({ response }: { response: Response }) => {
@@ -298,15 +315,14 @@ const scalarsSchema = Effect.succeed({
   },
 })
 
-export class AppSchemaBuilder extends Context.Tag(
-  "@pf/graphql-api/AppSchemaBuilder",
-)<
+export class AppSchemaBuilder extends Context.Service<
   AppSchemaBuilder,
   {
     toSchema: Effect.Effect<
       YogaSchema,
       MissingGeneratedSchemaError | SqlError | PlatformError,
       | OrgQueries
+      | ProcessCollectionQueries
       | ProcessQueries
       | ProviderUserQueries
       | ProcessExecutionOperations
@@ -323,7 +339,7 @@ export class AppSchemaBuilder extends Context.Tag(
       | WorkflowQueries
     >
   }
->() {}
+>()("@pf/graphql-api/AppSchemaBuilder") {}
 
 export const AppSchemaBuilderLive = Layer.effect(
   AppSchemaBuilder,
@@ -393,20 +409,20 @@ export const AppSchemaBuilderLive = Layer.effect(
   }),
 )
 
-export class Yoga extends Context.Tag("@pf/graphql-api/Yoga")<
+export class Yoga extends Context.Service<
   Yoga,
   YogaServerInstance<ServerContext, UserContext>
->() {}
+>()("@pf/graphql-api/Yoga") {}
 
 // Runtime used during resolver execution - includes event services for real-time updates.
 // Closed over once via createResolverExecutor at schema/Yoga construction; never
 // passed as a parameter into reusable wrap/auth helpers.
-export class ResolverRuntime extends Context.Tag(
-  "@pf/graphql-api/ResolverRuntime",
-)<
+export class ResolverRuntime extends Context.Service<
   ResolverRuntime,
   ManagedRuntime.ManagedRuntime<
     | OrgQueries
+    | Audit
+    | ProcessCollectionQueries
     | ProcessQueries
     | ProviderUserQueries
     | ProcessExecutionOperations
@@ -438,7 +454,7 @@ export class ResolverRuntime extends Context.Tag(
     | TodoSummaryComputation,
     unknown
   >
->() {}
+>()("@pf/graphql-api/ResolverRuntime") {}
 
 export const YogaLive = Layer.effect(
   Yoga,
@@ -447,6 +463,21 @@ export const YogaLive = Layer.effect(
     const baseSchema = yield* builder.toSchema
     const runtime = yield* ResolverRuntime
     const authConfig = yield* AuthConfig
+    const awsRequests = new WeakMap<Request, JWTPayload>()
+    let awsVerifications = 0
+    const delegationManagement = yield* Effect.promise(() =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          const db = yield* Effect.serviceOption(DelegationIdentityFacts)
+          if (Option.isNone(db)) return undefined
+          return yield* makeDelegationManagementHandler({
+            issuerUrls: authConfig.issuerUrls,
+            audience: GRAPHQL_AUDIENCE,
+            jwks: createRemoteJWKSet(new URL(authConfig.jwksUri)),
+          }).pipe(Effect.provideService(DelegationIdentityFacts, db.value))
+        }),
+      ),
+    )
     const executor = createResolverExecutor(runtime)
 
     // Compose @auth with each root resolver as one Effect (single runPromise).
@@ -506,7 +537,7 @@ export const YogaLive = Layer.effect(
       },
       extendContext: true,
       reject: {
-        missingToken: true,
+        missingToken: false,
         invalidToken: true,
       },
     })
@@ -562,10 +593,16 @@ export const YogaLive = Layer.effect(
                   rootValue,
                   contextValue,
                 })
-                if (result.errors?.length)
+                const deliveryError = result.errors?.[0]
+                if (deliveryError) {
+                  // Retain the safe discriminator, never resolver details or IDs.
+                  const code =
+                    sanitizeGraphQLError(deliveryError).extensions["code"]
                   throw new GraphQLError(
                     "Subscription authorization or delivery failed",
+                    { extensions: typeof code === "string" ? { code } : {} },
                   )
+                }
                 return sanitizeExecutionResult(result)
               },
             })
@@ -617,8 +654,38 @@ export const YogaLive = Layer.effect(
       return runtime.runPromise(executeGraphql)
     }
 
+    const logScope = process.env["AWS_LAMBDA_FUNCTION_NAME"]
+      ? new AsyncLocalStorage<{
+          identity?: ReturnType<typeof graphqlLogIdentity>
+        }>()
+      : undefined
     const yoga = createYoga<ServerContext, UserContext>({
       schema,
+      logging: logScope
+        ? new Logger({
+            level: "info",
+            writers: [
+              {
+                write(level, attributes, message) {
+                  const expectedError =
+                    level === "error" &&
+                    attributes &&
+                    "err" in attributes &&
+                    isExpectedGraphQLError(attributes["err"])
+                  // Keep request fields at the root for CloudWatch Logs Insights.
+                  const line = Formatter.formatJson({
+                    ...attributes,
+                    level: expectedError ? "WARN" : level.toUpperCase(),
+                    message: message ?? "",
+                    timestamp: DateTime.formatIso(DateTime.nowUnsafe()),
+                    annotations: logScope.getStore()?.identity ?? {},
+                  })
+                  process.stdout.write(`${line}\n`)
+                },
+              },
+            ],
+          })
+        : undefined,
       cors: {
         origin: "*",
         credentials: true,
@@ -642,6 +709,75 @@ export const YogaLive = Layer.effect(
         },
       },
       plugins: [
+        ...(logScope
+          ? [
+              {
+                instrumentation: {
+                  // Yoga captures the logger before it builds authenticated context.
+                  request: (
+                    _payload: unknown,
+                    wrapped: () => Promise<void> | void,
+                  ) => logScope.run({}, wrapped),
+                },
+              },
+            ]
+          : []),
+        {
+          onRequest: async ({ request, endResponse }) => {
+            if (!request.headers.has(AWS_PROOF_HEADER)) return
+            if (awsVerifications >= 8) {
+              endResponse(
+                Response.json(
+                  { error: "authentication_busy" },
+                  { status: 429 },
+                ),
+              )
+              return
+            }
+            awsVerifications++
+            try {
+              awsRequests.set(
+                request,
+                await runtime.runPromise(
+                  verifyAwsRoleProof(request, authConfig.issuerUrl),
+                ),
+              )
+            } catch {
+              endResponse(
+                Response.json(
+                  { error: "unauthenticated" },
+                  { status: 401, headers: { "cache-control": "no-store" } },
+                ),
+              )
+            } finally {
+              awsVerifications--
+            }
+          },
+        },
+        {
+          onRequest: async ({ request, endResponse }) => {
+            if (new URL(request.url).pathname !== "/delegations") return
+            if (!delegationManagement) {
+              endResponse(
+                Response.json(
+                  { error: "delegation_unavailable" },
+                  { status: 503, headers: { "cache-control": "no-store" } },
+                ),
+              )
+              return
+            }
+            const response = await runtime.runPromise(
+              delegationManagement.pipe(
+                Effect.provideService(
+                  HttpServerRequest.HttpServerRequest,
+                  HttpServerRequest.fromWeb(request),
+                ),
+                Effect.scoped,
+              ),
+            )
+            endResponse(HttpServerResponse.toWeb(response))
+          },
+        },
         jwtPlugin,
         // Plugin to set up user context fields after JWT plugin has run
         {
@@ -655,15 +791,25 @@ export const YogaLive = Layer.effect(
             const jwtContext = context["jwt"] as
               | { payload: JWTPayload }
               | undefined
-            const jwt = await runtime
-              .runPromise(acceptVerifiedGraphqlJwt(jwtContext?.payload))
-              .catch(() => {
-                throw new GraphQLError(
-                  "Delegated access is unavailable or invalid",
-                  {
-                    extensions: { code: "UNAUTHENTICATED" },
-                  },
-                )
+            const awsIdentity =
+              context["request"] instanceof Request
+                ? awsRequests.get(context["request"])
+                : undefined
+            const jwt =
+              awsIdentity ??
+              (await runtime
+                .runPromise(acceptVerifiedGraphqlJwt(jwtContext?.payload))
+                .catch(() => {
+                  throw new GraphQLError(
+                    "Session authority is unavailable or invalid",
+                    {
+                      extensions: { code: "UNAUTHENTICATED" },
+                    },
+                  )
+                }))
+            if (!jwt)
+              throw new GraphQLError("Unauthenticated", {
+                extensions: { code: "UNAUTHENTICATED", http: { status: 401 } },
               })
             const props = jwt?.properties
             assertGraphqlSessionBinding(context, props)
@@ -677,7 +823,7 @@ export const YogaLive = Layer.effect(
 
             // Capture request time here so each request gets its own timestamp
             // (not at server startup which would be shared across all requests)
-            const requestTime = DateTime.unsafeNow()
+            const requestTime = DateTime.nowUnsafe()
             const persistedUserId =
               isProviderUser ||
               (isServiceAccountSession(props) &&
@@ -685,6 +831,10 @@ export const YogaLive = Layer.effect(
                 userId.startsWith("usr-"))
                 ? (userId ?? null)
                 : null
+
+            const requestLog = logScope?.getStore()
+            if (requestLog)
+              requestLog.identity = graphqlLogIdentity(persistedUserId, props)
 
             extendContext({
               jwt,
@@ -701,7 +851,10 @@ export const YogaLive = Layer.effect(
                         generationId: props.delegation.generationId,
                         name: props.delegation.name,
                       })
-                    : (email ?? userId ?? "SYSTEM"),
+                    : ((props && encodeWorkloadAudit(props)) ??
+                      email ??
+                      userId ??
+                      "SYSTEM"),
                 id: persistedUserId,
               },
             })

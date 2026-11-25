@@ -21,6 +21,9 @@ export const TODO_EVENT_QUEUE = "todo-event"
  */
 export const PROCESS_EVENT_QUEUE = "process-event"
 
+/** Storage queue for import invalidations, separate from flow-dispatch envelopes. */
+export const PROCESS_IMPORT_OUTBOX_QUEUE = "process-import-outbox"
+
 /**
  * Queue name for execution-event jobs.
  * These jobs fetch execution data and publish events after execution changes.

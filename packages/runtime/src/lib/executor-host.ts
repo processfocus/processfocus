@@ -51,9 +51,7 @@ export class ExecutorError extends Data.TaggedError("ExecutorError")<{
  * Host capability implemented by platform adapters such as local Docker or
  * AWS CodeBuild. Organisation-owned plugins consume only this contract.
  */
-export class ExecutorHost extends Context.Tag(
-  "@processfocus/runtime/ExecutorHost",
-)<
+export class ExecutorHost extends Context.Service<
   ExecutorHost,
   {
     readonly run: (
@@ -61,4 +59,4 @@ export class ExecutorHost extends Context.Tag(
       jobContext: ExecutorJobContext,
     ) => Effect.Effect<ExecutorResult, ExecutorError>
   }
->() {}
+>()("@processfocus/runtime/ExecutorHost") {}

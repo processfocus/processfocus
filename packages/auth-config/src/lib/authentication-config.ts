@@ -1,4 +1,10 @@
 import { Construct, type IConstruct } from "constructs"
+import { Schema } from "effect"
+import {
+  type AwsRoleBinding,
+  AwsRoleBindingSchema,
+  awsRoleBindingIdentityKey,
+} from "./aws-role-binding"
 import type {
   AppleOAuthProviderConfig,
   CognitoOAuthProviderConfig,
@@ -11,6 +17,7 @@ import type {
   SecretClientConfig,
   SlackOAuthProviderConfig,
 } from "./provider-types"
+import type { WorkloadClientConfig } from "./workload-trust"
 
 interface ProviderEntry {
   readonly name: OAuthProviderName
@@ -49,13 +56,12 @@ export type SecretClientsConfig = Record<string, SecretClientConfig>
 
 export interface AuthenticationConfigProps {
   /**
-   * Show **Log in with a secret** on the anonymous login page.
+   * Whether to offer "Log in with a secret" for delegated access.
    *
-   * The login page has no identified principal whose Cedar token-management
-   * permissions it can evaluate, so this is a presentation choice only. Cedar
-   * independently authorizes token listing, issuance, management, redemption,
-   * and delegated work. Hiding the control does not disable authentication or
-   * revoke an existing credential.
+   * This controls the visibility of the login option, not permission to create
+   * or use delegated credentials. Those permissions are governed by Cedar
+   * policies. Setting this to false hides the option but does not prevent
+   * secret-based authentication or revoke existing credentials.
    *
    * @default false
    */
@@ -97,8 +103,6 @@ export interface AuthenticationConfigProps {
    * ```typescript
    * {
    *   rpName: "My App",
-   *   rpID: "example.com",
-   *   origin: "https://example.com"
    * }
    * ```
    */
@@ -119,6 +123,10 @@ export interface AuthenticationConfigProps {
    * ```
    */
   secretClients?: SecretClientsConfig
+  /** Secretless M2M identities. A client must select exactly one authentication method. */
+  workloadClients?: Record<string, WorkloadClientConfig>
+  /** Direct GraphQL authentication; each binding also declares its service account. */
+  awsRoleBindings?: readonly AwsRoleBinding[]
 }
 
 /**
@@ -141,6 +149,8 @@ export class AuthenticationConfig extends Construct {
   readonly isAuthenticationConfig: true = true
   private readonly _inviteOnly: boolean
   readonly delegatedAccess: boolean
+  readonly workloadClients: Readonly<Record<string, WorkloadClientConfig>>
+  readonly awsRoleBindings: readonly AwsRoleBinding[]
   private readonly _identityProviders: ProviderEntry[] = []
   private readonly _passkey: PasskeyProviderConfig | undefined
   private readonly _secretClients: SecretClientEntry[] = []
@@ -152,8 +162,49 @@ export class AuthenticationConfig extends Construct {
   ) {
     super(scope, id)
 
+    this.awsRoleBindings = Schema.decodeUnknownSync(
+      Schema.Array(AwsRoleBindingSchema),
+    )(props?.awsRoleBindings ?? [])
+    const identities = new Set<string>()
+    const bindingIds = new Set<string>()
+    for (const binding of this.awsRoleBindings) {
+      const identity = awsRoleBindingIdentityKey(binding)
+      if (
+        identities.has(identity) ||
+        bindingIds.has(binding.id) ||
+        binding.serviceAccountId.startsWith("project-workload-") ||
+        props?.workloadClients?.[binding.serviceAccountId] ||
+        (props?.secretClients?.[binding.serviceAccountId] &&
+          props.secretClients[binding.serviceAccountId]?.audience !==
+            "graphql-api")
+      ) {
+        throw new Error("Invalid or ambiguous AWS role binding")
+      }
+      identities.add(identity)
+      bindingIds.add(binding.id)
+    }
+
+    for (const clientId of [
+      ...Object.keys(props?.workloadClients ?? {}),
+      ...Object.keys(props?.secretClients ?? {}),
+    ]) {
+      if (clientId.startsWith("project-workload-")) {
+        throw new Error(
+          "project-workload- client identifiers are reserved for runtime-managed project identities",
+        )
+      }
+    }
+
     this._inviteOnly = props?.inviteOnly ?? true
     this.delegatedAccess = props?.delegatedAccess ?? false
+    this.workloadClients = props?.workloadClients ?? {}
+    for (const clientId of Object.keys(this.workloadClients)) {
+      if (props?.secretClients?.[clientId]) {
+        throw new Error(
+          "A machine client must select exactly one authentication method",
+        )
+      }
+    }
 
     if (props?.identityProviders) {
       for (const [name, config] of Object.entries(props.identityProviders)) {

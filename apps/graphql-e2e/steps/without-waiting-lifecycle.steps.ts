@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto"
 import { readFile, writeFile } from "node:fs/promises"
 import { stripVTControlCharacters } from "node:util"
 import { When } from "@cucumber/cucumber"
+import { Schema } from "effect"
+import { decodeJwt } from "jose"
 import {
   runAuthenticate,
   runAuthenticateAsProviderUser,
@@ -13,6 +15,7 @@ import {
   restartLocalRuntime,
   setStarterModeRevoked,
 } from "../support/hooks"
+import { providerUser } from "../support/provider-user"
 import { sleep } from "../support/sleep"
 import type { TestWorld } from "../support/world"
 import {
@@ -100,25 +103,22 @@ const participant = async (
   const sa = await runAuthenticate()
   assert.ok(sa.access_token)
   world.accessToken = sa.access_token
-  await runAuthenticateAsProviderUser("ci@example.com")
+  const userFixture = await providerUser("ci@example.com")
+  const user = Schema.decodeUnknownSync(
+    Schema.Struct({ userId: Schema.String }),
+  )(decodeJwt(await userFixture.credentials())["properties"])
   const data = await world.executeGraphQL<{
     allRoles: { items: { id: string; path: string }[] }
-    allUsers: { items: { id: string; providerUserEmail: string }[] }
-  }>(
-    `query { allRoles(limit:100) { items { id path } } allUsers(limit:100) { items { id providerUserEmail } } }`,
-  )
-  const user = data.allUsers.items.find(
-    (u) => u.providerUserEmail === "ci@example.com",
-  )
-  assert.ok(user)
+  }>(`query { allRoles(limit:100) { items { id path } } }`)
   const detail = await world.executeGraphQL<{
     userDetail: { providerUser: { id: string } }
   }>(`query($id:ID!) { userDetail(userId:$id) { providerUser { id } } }`, {
-    id: user.id,
+    id: user.userId,
   })
   const wanted = [
     ...(canRestart ? ["/Employee", "/hr/HR"] : ["/Employee"]),
     ...additionalRoles,
+    "/GraphQLE2ECI",
   ]
   const update = await world.executeGraphQL<{
     updateProviderUser: { __typename: string }
@@ -137,7 +137,8 @@ const participant = async (
     update.updateProviderUser.__typename,
     "UpdateProviderUserSuccess",
   )
-  const human = await runAuthenticate("email:ci@example.com")
+  await userFixture.context.clearCookies()
+  const human = await runAuthenticateAsProviderUser("ci@example.com")
   assert.ok(human.access_token)
   world.accessToken = human.access_token
 }

@@ -16,7 +16,7 @@ const record = (value: unknown): Record<string, unknown> => {
 Given(
   /^I use the disposable (onboarding|exact-process|hierarchy|broad) browser account (with|without|with restart but without) Administrator permission$/,
   async (
-    { authenticateAsProviderUser, context, baseURL },
+    { authenticateAsProviderUser, context, baseURL, restoreProviderRoles },
     grant: string,
     mode: string,
   ) => {
@@ -71,12 +71,25 @@ Given(
       .find((item) => item["providerUserEmail"] === email)
     assert.ok(user)
     const detail = await query(
-      `query($id: ID!) { userDetail(userId: $id) { providerUser { id } } }`,
+      `query($id: ID!) { userDetail(userId: $id) { providerUser { id roleIds } } }`,
       { id: user["id"] },
     )
     const providerUserId = record(record(detail["userDetail"])["providerUser"])[
       "id"
     ]
+    const originalRoles = record(record(detail["userDetail"])["providerUser"])[
+      "roleIds"
+    ]
+    assert.ok(Array.isArray(originalRoles))
+    restoreProviderRoles.push(async () => {
+      const restored = await query(
+        `mutation($id: ID!, $input: UpdateProviderUserInput!) { updateProviderUser(providerUserId: $id, input: $input) { __typename } }`,
+        { id: providerUserId, input: { roleIds: originalRoles } },
+      )
+      expect(record(restored["updateProviderUser"])["__typename"]).toBe(
+        "UpdateProviderUserSuccess",
+      )
+    })
     const wanted =
       mode === "with"
         ? [
@@ -175,8 +188,9 @@ Then(
         exact: true,
       })
       .first()
-    await expect(cardHeading.getByRole("button")).toHaveCount(0)
     const badge = cardHeading.getByText("Without waiting", { exact: true })
+    await expect(badge).not.toHaveRole("button")
+    await expect(badge.locator("button")).toHaveCount(0)
     await expect(badge).toHaveAttribute(
       "title",
       "Skip scheduled waits for this process run. Tasks and automated actions still run normally.",
@@ -187,9 +201,8 @@ Then(
     )
     const id = scenarioState.get("withoutWaitingExecution")
     assert.equal(typeof id, "string")
-    await page
-      .getByRole("button", { name: /^Onboard a new employee Without waiting/ })
-      .first()
+    await cardHeading
+      .getByRole("button", { name: "Onboard a new employee", exact: true })
       .click()
     await expect(
       page.getByRole("heading", {
@@ -221,23 +234,18 @@ Then(
   },
 )
 
-When("I save and reopen the onboarding draft", async ({ page }) => {
-  const saved = page.waitForResponse(
-    (response) =>
-      response.request().postData()?.includes("pushDraftProcessExecution") ===
-      true,
-  )
-  await page.getByRole("button", { name: "Save draft", exact: true }).click()
-  expect(record(await (await saved).json())["errors"]).toBeUndefined()
-  await page.goto("/processes")
-  await page
-    .getByRole("link", { name: "Continue", exact: true })
-    .first()
-    .click()
-  await expect(
-    page.getByRole("button", { name: "Submit", exact: true }),
-  ).toBeVisible()
-})
+When(
+  "I reopen the onboarding start form with my saved values",
+  async ({ page }) => {
+    await page.reload()
+    await expect(page.locator('input[name="first_name"]')).toHaveValue(
+      "Browser",
+    )
+    await expect(page.locator('input[name="last_name"]')).toHaveValue(
+      "Without Waiting",
+    )
+  },
+)
 
 When(
   "I complete this onboarding execution in the browser",
@@ -302,7 +310,7 @@ When(
       )
       await expect(
         page.getByRole("button", { name: "Done", exact: true }),
-      ).toBeVisible()
+      ).toBeVisible({ timeout: 30_000 })
       if (name === "Formal performance review")
         await page.getByRole("checkbox").check()
       const response = page.waitForResponse(

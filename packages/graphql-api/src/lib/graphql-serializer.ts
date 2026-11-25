@@ -33,17 +33,14 @@ const serializeValue = (
   value: unknown,
 ): Effect.Effect<unknown, SerializationError> =>
   Effect.gen(function* () {
-    // Handle null/undefined - return null
     if (value == null) {
       return null
     }
 
-    // Unwrap NonNull wrapper and recurse
     if (isNonNullType(type)) {
       return yield* serializeValue(schema, type.ofType, value)
     }
 
-    // Handle List types - map over array and recurse on each element
     if (isListType(type)) {
       if (!Array.isArray(value)) {
         return yield* new SerializationError({
@@ -56,15 +53,12 @@ const serializeValue = (
       )
     }
 
-    // Get the named type (unwrap any remaining wrappers)
     const namedType = getNamedType(type)
 
-    // Handle Scalar types - call the scalar's serialize method
     if (isScalarType(namedType)) {
       return namedType.serialize(value)
     }
 
-    // Handle Object types - recursively serialize each field
     if (isObjectType(namedType)) {
       const fields = namedType.getFields()
       const result: Record<string, unknown> = {}

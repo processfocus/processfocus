@@ -133,4 +133,52 @@ describe("RegisterPasskeyClient", () => {
     expect(container.textContent).toContain("Sign out to continue")
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  test.each([
+    ["InvalidStateError", undefined, "This passkey is already registered"],
+    [
+      "WebAuthnError",
+      "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED",
+      "This passkey is already registered",
+    ],
+    ["NotAllowedError", undefined, "Registration was cancelled"],
+  ])(
+    "handles %s without verifying a new credential",
+    async (name, code, message) => {
+      const error = Object.assign(new Error("Authenticator response"), {
+        name,
+        code,
+      })
+      startRegistration.mockRejectedValueOnce(error)
+      const fetchMock = mock((input: RequestInfo | URL) => {
+        if (String(input).endsWith("registration-session")) {
+          return Promise.resolve(
+            Response.json({
+              email: "invitee@example.com",
+              expiresAt: new Date(Date.now() + 600_000).toISOString(),
+            }),
+          )
+        }
+        return Promise.resolve(
+          Response.json({ challengeId: "challenge", options: {} }),
+        )
+      })
+      globalThis.fetch = fetchMock as typeof fetch
+      await act(async () =>
+        root.render(<RegisterPasskeyClient isSignedIn={false} />),
+      )
+      await act(async () => container.querySelector("button")?.click())
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        message,
+      )
+      expect(container.querySelector('a[href="/login"]')?.textContent).toBe(
+        "Back to sign in",
+      )
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).endsWith("register-verify"),
+        ),
+      ).toBe(false)
+    },
+  )
 })

@@ -34,7 +34,7 @@ export const isTransientSqliteError = (error: unknown): boolean =>
 
 const TRANSIENT_SQLITE_RETRY_SCHEDULE = Schedule.addDelay(
   Schedule.recurs(3),
-  () => Duration.millis(100),
+  () => Effect.succeed(Duration.millis(100)),
 )
 
 export const retryTransientSqliteError = <A, E, R>(

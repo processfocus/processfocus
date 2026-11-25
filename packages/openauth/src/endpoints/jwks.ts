@@ -3,8 +3,9 @@
  * GET /.well-known/jwks.json
  * @packageDocumentation
  */
-import { HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import { HttpServerResponse } from "effect/http"
 import type { JWK } from "jose"
 import { json } from "../response"
 import { KeyManagementService } from "../services/key-management"

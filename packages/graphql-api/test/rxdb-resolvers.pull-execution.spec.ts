@@ -1,7 +1,7 @@
+import type { Context } from "effect"
 /// <reference types="bun" />
 
-import { FileSystem } from "@effect/platform"
-import { Effect, Layer } from "effect"
+import { Effect, FileSystem, Layer } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
 import { ResolverRuntime } from "../src/lib/graphql-api"
 import { ExecutionCollectionOps } from "../src/lib/rxdb/execution"
@@ -146,18 +146,17 @@ describe("rxdbSchema pullExecution", () => {
               deleted: false,
               steps: [],
             }),
-        } as unknown as ExecutionCollectionOps["Type"]),
+        } as unknown as Context.Service.Shape<typeof ExecutionCollectionOps>),
         Layer.succeed(AuthorizationService, {
           canIssueDelegationSecret: () => Effect.succeed(false),
           canListDelegationTokens: () => Effect.succeed(false),
           canManageDelegation: () => Effect.succeed(false),
           canLogin: () => Effect.succeed(false),
+          policyVersion: Effect.succeed("test-policy"),
           canCompleteStep: () => Effect.succeed(false),
-          canCompleteTodo: () => Effect.succeed(false),
+          canViewEmbeddedForm: () => Effect.succeed(false),
           canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-          canCompletePublicTodo: () => Effect.succeed(false),
           canRequestRole: () => Effect.succeed(false),
-          canRequestProviderUserPermissions: () => Effect.succeed(false),
           canActOnBehalfOf: () => Effect.succeed(false),
           canViewExecution: (_principal, resource) =>
             Effect.succeed(!resource.uid.id.includes("unauthorized")),
@@ -182,9 +181,7 @@ describe("rxdbSchema pullExecution", () => {
           const schema = yield* rxdbSchema
           const resolver = (schema.resolvers?.Query?.["pullExecution"] ??
             (() =>
-              Effect.dieMessage(
-                "Missing pullExecution resolver",
-              ))) as unknown as (
+              Effect.die("Missing pullExecution resolver"))) as unknown as (
             parent: unknown,
             args: {
               limit: number

@@ -1,17 +1,18 @@
 import "server-only"
 
+import { Schema } from "effect"
 import { getFrontendJwt } from "@pf/auth-session"
 import type { CalendarSlotItem, FieldError, LookupSuggestion } from "@pf/form"
+import { FormRequestData } from "@pf/form-schema"
 import { createServerGraphqlClient } from "@/lib/graphql/server-client"
 import {
   getPublicTodoGraphqlErrors,
   isPublicTodoLinkError,
 } from "@/lib/public-todo-graphql-errors"
-import {
-  type PublicTodoCompletionResult,
-  type PublicTodoFormMetadata,
-  type PublicTodoResult,
-  parsePublicTodoFormDefinition,
+import type {
+  PublicTodoCompletionResult,
+  PublicTodoFormMetadata,
+  PublicTodoResult,
 } from "@/lib/public-todo-model"
 
 export { isPublicTodoLinkError }
@@ -28,9 +29,8 @@ const PUBLIC_TODO_QUERY = `
         processName
         publicFormTitle
         publicFormDescription
-        formDefinition
         defaultValues
-        jsonSchema
+        requestData
       }
     }
   }
@@ -47,10 +47,11 @@ const COMPLETE_PUBLIC_TODO_MUTATION = `
 `
 
 const PUBLIC_TODO_LOOKUP_QUERY = `
-  query PublicTodoLookupSuggestions($token: String!, $field: String!, $filter: String, $limit: Int) {
-    publicTodoLookupSuggestions(token: $token, field: $field, filter: $filter, limit: $limit) {
+  query PublicTodoLookupSuggestions($token: String!, $field: String!, $filter: String, $limit: Int, $selectedValue: String) {
+    publicTodoLookupSuggestions(token: $token, field: $field, filter: $filter, limit: $limit, selectedValue: $selectedValue) {
       value
       label
+      searchText
     }
   }
 `
@@ -83,11 +84,8 @@ export class PublicTodoConfigurationError extends Error {
 
 type PublicTodoWireResult = Omit<PublicTodoResult, "formMetadata"> & {
   readonly formMetadata:
-    | (Omit<
-        PublicTodoFormMetadata,
-        "formDefinition" | "formDefinitionStatus"
-      > & {
-        readonly formDefinition: unknown
+    | (Omit<PublicTodoFormMetadata, "requestData"> & {
+        readonly requestData: unknown
       })
     | null
 }
@@ -124,7 +122,9 @@ export async function fetchPublicTodo(
     ...todo,
     formMetadata: {
       ...todo.formMetadata,
-      ...parsePublicTodoFormDefinition(todo.formMetadata.formDefinition),
+      requestData: Schema.decodeUnknownSync(FormRequestData)(
+        todo.formMetadata.requestData,
+      ),
     },
   }
 }
@@ -146,11 +146,12 @@ export async function publicTodoLookupSuggestions(
   field: string,
   filter: string | null,
   limit: number | null,
+  selectedValue?: string,
 ): Promise<LookupSuggestion[]> {
   const client = getPublicTodoClient()
   const data = await client.request<{
     publicTodoLookupSuggestions: LookupSuggestion[]
-  }>(PUBLIC_TODO_LOOKUP_QUERY, { token, field, filter, limit })
+  }>(PUBLIC_TODO_LOOKUP_QUERY, { token, field, filter, limit, selectedValue })
 
   return data.publicTodoLookupSuggestions
 }

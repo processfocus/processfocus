@@ -1,5 +1,5 @@
-import { SqlClient } from "@effect/sql"
 import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
 import { DatabaseTest } from "../src/lib/database-test"
 import { describe, expect, it } from "bun:test"
 
@@ -14,7 +14,7 @@ describe("delegation migration triggers", () => {
           VALUES ('org', 'Organisation', 'root', '/')
         `
         yield* sql`
-          INSERT INTO pf_user (id, provider, sub, last_logged_in)
+          INSERT INTO pf_user (id, provider, sub, created_at)
           VALUES ('user', 'google', 'subject', 1)
         `
         yield* sql`

@@ -1,15 +1,15 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
 
 import { eq, sql } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
+import type { UserDetailsValue } from "@pf/graphql-db-operations"
 import {
   DraftProcessExecutionQueries,
   ExecutionQueries,
   ProcessCollectionQueries,
   TodoQueries,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import {
   DatabaseTest,
@@ -22,20 +22,17 @@ import { SqliteTodoQueriesLive } from "../src/lib/todo-queries"
 import { describe, expect, it } from "bun:test"
 
 const userId = "usr-checkpoint"
-const timestamp = DateTime.unsafeMake("2040-01-01T00:00:00.000Z")
+const timestamp = DateTime.makeUnsafe("2040-01-01T00:00:00.000Z")
 const checkpointTimestamp = sql`julianday('2026-07-23T00:00:00.107Z')`
 const replicationHeadTimestamp = sql`julianday('2026-07-24T00:00:00.000Z')`
 const completionTimestamp = sql`julianday('2026-07-25T00:00:00.000Z')`
 const incrementalStartMillis = Date.parse("2026-07-23T12:00:00.000Z")
 const replicationHeadMillis = Date.parse("2026-07-24T00:00:00.000Z")
 const completionMillis = Date.parse("2026-07-25T00:00:00.000Z")
-const UserDetailsTest = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "checkpoint@example.com",
-    id: userId,
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsTest = Layer.succeed(UserDetails, {
+  by: "checkpoint@example.com",
+  id: userId,
+} as UserDetailsValue)
 const TestLayer = Layer.provideMerge(
   Layer.mergeAll(
     SqliteDraftProcessExecutionQueriesLive,
@@ -46,7 +43,7 @@ const TestLayer = Layer.provideMerge(
   ),
   DatabaseTest,
 )
-type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+type TestRequirements = Layer.Success<typeof TestLayer>
 const runTest = <A, E>(test: Effect.Effect<A, E, TestRequirements>) =>
   Effect.runPromise(Effect.provide(test, TestLayer))
 
@@ -56,7 +53,7 @@ const seedCollections = Effect.gen(function* () {
     id: userId,
     provider: "test",
     sub: "checkpoint",
-    lastLoggedIn: timestamp,
+    createdAt: timestamp,
   })
   yield* db.insert(schema.orgUnit).values({
     id: "ou-checkpoint",
@@ -377,7 +374,7 @@ it("includes old Running executions and pages past them without syncing old term
         .update(schema.processExecution)
         .set({
           finishedAt: timestamp,
-          updatedAt: DateTime.unsafeMake("2026-09-03T00:00:00Z"),
+          updatedAt: DateTime.makeUnsafe("2026-09-03T00:00:00Z"),
         })
         .where(eq(schema.processExecution.id, "pex-checkpoint-a"))
       const completion = yield* executions.pullExecution(

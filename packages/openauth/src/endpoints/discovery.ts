@@ -3,8 +3,9 @@
  * GET /.well-known/oauth-authorization-server
  * @packageDocumentation
  */
-import { HttpServerRequest, HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { getIssuerUrl } from "../request"
 import { json } from "../response"
 import { ProviderRegistryService } from "../services/provider-registry"
@@ -28,6 +29,9 @@ export interface DiscoveryResponse {
    * omitted, self-registration is hidden (invite-only / Registration Link).
    */
   readonly passkey_open_registration?: boolean
+  /** Public bootstrap capabilities of the currently resolvable providers. */
+  readonly verified_human_identity_supported: boolean
+  readonly passkey_registration_supported: boolean
 }
 
 /**
@@ -57,6 +61,9 @@ export const handleDiscovery: Effect.Effect<
 
   // Get all providers (static + dynamic)
   const allProviders = yield* providerRegistry.listProviders
+  const resolvedProviders = yield* Effect.forEach(allProviders, (name) =>
+    providerRegistry.resolveProvider(name),
+  )
   const passkeyOpenRegistration = allProviders.includes("passkey")
     ? yield* providerRegistry.isPasskeyOpenRegistration
     : false
@@ -80,6 +87,12 @@ export const handleDiscovery: Effect.Effect<
     ],
     providers_supported: [...allProviders],
     passkey_open_registration: passkeyOpenRegistration,
+    verified_human_identity_supported: resolvedProviders.some(
+      (provider) => provider?.supportsVerifiedHumanIdentity === true,
+    ),
+    passkey_registration_supported: resolvedProviders.some(
+      (provider) => provider?.type === "passkey",
+    ),
   }
 
   return yield* json(response).pipe(

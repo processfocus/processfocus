@@ -13,6 +13,7 @@ export interface CedarReloadNotifier {
   readonly onCedarReloaded: () => void
 }
 
-export class CedarReloadNotifierService extends Context.Tag(
-  "@pf/auth-local-cedar/CedarReloadNotifierService",
-)<CedarReloadNotifierService, CedarReloadNotifier>() {}
+export class CedarReloadNotifierService extends Context.Service<
+  CedarReloadNotifierService,
+  CedarReloadNotifier
+>()("@pf/auth-local-cedar/CedarReloadNotifierService") {}

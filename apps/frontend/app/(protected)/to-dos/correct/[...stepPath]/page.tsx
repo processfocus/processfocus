@@ -1,8 +1,10 @@
-import { NotFound } from "@mcrovero/effect-nextjs/Navigation"
 import { Effect } from "effect"
 import Link from "next/link"
 import { PublicCompletionCorrectionForm } from "../../components/public-completion-correction-form"
+import { NotFound } from "@/lib/effect/navigation"
 import { BasePage } from "@/lib/effect/runtime"
+
+export const instant = false
 
 const CorrectPublicCompletionPage = Effect.fn("CorrectPublicCompletionPage")(
   function* ({

@@ -1,5 +1,8 @@
-import { Schema as ES } from "effect"
 import { Form, type OrgUnit, Process, type Role } from "@pf/process"
+import {
+  coordinateResponseForm,
+  reportIncidentForm,
+} from "./incident-response-forms"
 
 export class IncidentResponse extends Process {
   constructor(
@@ -13,22 +16,26 @@ export class IncidentResponse extends Process {
       purpose: "Coordinate cross team incident resolution",
     })
 
-    // Steps
     const report_incident = new Form(this, "Report incident", {
       name: "Report incident details",
-      form: () => ({
-        incident: ES.String,
-      }),
+      form: reportIncidentForm,
+      browser: {
+        entrypoint: "src/incident-response-forms.ts",
+        exportName: "reportIncidentForm",
+      },
       role: employeeRole,
     })
 
     const coordinate_response = new Form(this, "Coordinate response", {
       name: "Coordinate incident response",
-      form: () => ({}),
+      form: coordinateResponseForm,
+      browser: {
+        entrypoint: "src/incident-response-forms.ts",
+        exportName: "coordinateResponseForm",
+      },
       role: managerRole,
     })
 
-    // Flow
     this.start(report_incident).end(coordinate_response)
   }
 }

@@ -1,0 +1,59 @@
+---
+title: Forms
+description: Collect and validate information with authored forms and business rules.
+---
+
+Use a **Form** to collect information in a
+[process step](/docs/concepts/steps/) or to create and edit records in a
+[List](/docs/concepts/lists/).
+
+Employees can fill in forms, and anonymous users can submit forms such
+as website enquiries. A process can also collect information from a
+specific external recipient through a unique link.
+
+## Fields and values
+
+Fields define what values a form accepts and whether they are required,
+optional, or read-only. An optional field can be left blank; its
+definition still belongs to the form. Text, links, and containers can
+help people fill in the form without collecting values themselves.
+
+## Validation
+
+Forms are partly validated when being filled in to make the data entry
+process more pleasant.
+
+On submission, the server validates the entire form and re-evaluates
+its rules rather than trusting the browser's field state.
+
+## Submitted forms
+
+A submitted form becomes part of the process state. For every process
+execution all submitted state is part of the single process state of
+that execution, and can be referenced in subsequent steps.
+
+## Form rules
+
+A **Form Rule** derives field behaviour from the current input. Rules can hide
+fields, disable editing, or make an optional field required.
+
+For example, a form could ask whether an order needs delivery and require a
+delivery address only when the answer is yes. The rule belongs to that form
+and is checked when the form is submitted.
+
+- A hidden field is not submitted. The browser may keep its draft value
+  so it can restore what the person typed if the field reappears.
+- A disabled field keeps its original or default value. The server
+  ignores submitted edits to it.
+
+## Embedded forms
+
+[Embedded forms](/docs/reference/process-steps/embedded-forms/) let
+visitors start a process from an external site, for example by
+submitting a support ticket or enquiry.
+
+## Public page forms
+
+[Public page forms](/docs/reference/process-steps/public-page-forms/)
+let visitors start a process from a public page or let a recipient
+complete an existing step using a unique link.

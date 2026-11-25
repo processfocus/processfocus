@@ -1,6 +1,9 @@
 import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+import { Result, Schema } from "effect"
+import { isForm, isOrganisation } from "../packages/process/src/lib/brands"
 
 const fixture = resolve("fixtures/external-authoring")
 const pfcli = resolve("cli/pfcli/src/main.ts")
@@ -75,3 +78,31 @@ run(["bun", "run", "build"])
 run(["bun", "run", "validate"])
 run(["bun", "run", "cross-copy"])
 run(["bun", pfcli, "build", ".", "--output", "pfcli-dist"])
+
+run(["bun", "src/exercise-artifact.mjs", "pfcli-dist"])
+
+// The server schema is interpreted by the host, not the consumer's Effect copy.
+const artifact: unknown = await import(
+  pathToFileURL(join(directory, "pfcli-dist/org.js")).href
+)
+if (
+  typeof artifact !== "object" ||
+  artifact === null ||
+  !("org" in artifact) ||
+  !isOrganisation(artifact.org)
+)
+  throw new Error("Missing packaged organisation")
+const form = artifact.org.node
+  .findAll()
+  .find((node) => node.node.path === "Operations/Plugin/Submit")
+if (!isForm(form)) throw new Error("Missing packaged plugin form")
+const serverCodec = Schema.make(form.submissionEffectSchema.ast)
+const decoded = Schema.decodeUnknownSync(serverCodec)({
+  summary: "  Packaged plugin  ",
+})
+if (JSON.stringify(decoded) !== JSON.stringify({ summary: "Packaged plugin" }))
+  throw new Error("Host failed to decode the packaged server schema")
+if (
+  !Result.isFailure(Schema.decodeUnknownResult(serverCodec)({ summary: "x" }))
+)
+  throw new Error("Host accepted invalid packaged plugin input")

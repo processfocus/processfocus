@@ -12,7 +12,7 @@ it("checks Demo stateful approval and read-only calculator contracts", async () 
   const schema = await buildFormContractSchema(org)
   const context = buildFlowContext(
     "demo-contract",
-    DateTime.unsafeMake("2026-04-01"),
+    DateTime.makeUnsafe("2026-04-01"),
     [],
   )
   const approval = contractFormAt(

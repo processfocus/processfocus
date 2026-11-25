@@ -170,9 +170,8 @@ describe("frontend manifest store", () => {
               mutationName: "startEnrolment",
               inputTypeName: "SchoolEnrolmentSubmitEnquiry",
               totalFields: 2,
-              formDefinition: null,
-              defaultValues: null,
-              jsonSchema: null,
+              formPath: "/school/enrolment/Submit enquiry",
+              lookups: [],
               sites: ["https://school.example.com"],
               thankYou: "Thanks",
             },
@@ -218,9 +217,8 @@ describe("frontend manifest store", () => {
             mutationName: "startEnrolment",
             inputTypeName: "SchoolEnrolmentSubmitEnquiry",
             totalFields: 2,
-            formDefinition: null,
-            defaultValues: null,
-            jsonSchema: null,
+            formPath: "/school/enrolment/Submit enquiry",
+            lookups: [],
             sites: ["https://school.example.com"],
             thankYou: "Thanks",
           },
@@ -440,54 +438,6 @@ describe("frontend manifest store", () => {
     expect(resolveFrontendManifestDocsDirectoryPath()).toBe(
       join(orgPath, "dist/docs"),
     )
-  })
-
-  test("falls back to resolving PF_ORG relative to process.cwd()", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "frontend-manifest-"))
-    mkdirSync(join(tempDir, "apps/frontend"), { recursive: true })
-    mkdirSync(join(tempDir, "orgs/test-org/dist"), { recursive: true })
-    process.chdir(join(tempDir, "apps/frontend"))
-    process.env["PF_ORG"] = "orgs/test-org"
-    delete process.env["NX_WORKSPACE_ROOT"]
-
-    writeFileSync(
-      join(tempDir, "orgs/test-org/dist/frontend-manifest.json"),
-      JSON.stringify({
-        version: ORGANISATION_FRONTEND_MANIFEST_VERSION,
-        embed: {
-          entries: [],
-        },
-        plugins: {
-          analytics: [],
-          formComponents: [],
-        },
-      }),
-      "utf8",
-    )
-
-    const { getFrontendManifest } = await import(
-      "../lib/frontend-manifest-store"
-    )
-
-    expect(getFrontendManifest()).toEqual({
-      version: ORGANISATION_FRONTEND_MANIFEST_VERSION,
-      organisation: {
-        name: "Process Focus",
-      },
-      appIcons: {
-        metadata: [],
-        manifest: [],
-      },
-      publicFormBranding: null,
-      embed: {
-        entries: [],
-      },
-      processes: emptyProcesses,
-      plugins: {
-        analytics: [],
-        formComponents: [],
-      },
-    })
   })
 
   test("reuses the cached manifest on subsequent reads", async () => {

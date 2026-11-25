@@ -1,33 +1,20 @@
 # DockerStep
 
-`@processfocus/plugin-docker` provides the `DockerStep` authoring API. Import
-the provider-neutral `ExecutorHost` and `FileResolutionHost` contracts from
-`@processfocus/runtime` when implementing a runtime adapter.
+`@processfocus/plugin-docker` provides container-backed process steps.
+The organisation defines the step; a runtime executor launches the container
+and handles input, output and files.
 
-## Runtime contract
+## Availability
 
-The organisation-bundled Docker plugin resolves typed step input and delegates
-execution and file handoff to those host contracts before the host launches the
-container.
+In Process Focus cloud hosting, Docker steps are reserved for the Cloud Backend.
+Customer projects containing `DockerStep` cannot be deployed. The plugin is
+also available for runtime adapter development.
 
-The container then receives:
+## Container integration
 
-- `PF_INPUT_URL`
-- `PF_RESULT_URL`
-- `PF_STEP_INPUT_PATH`
-- `PF_STEP_OUTPUT_PATH`
+The shared [runner](assets/pf-docker-step-runner.mjs) handles input download and
+result upload around the image's command. Step images should reuse it and the
+[URL helper](assets/pf-fetch-url.mjs), which supports local files and HTTPS.
 
-The generic runner in `assets/pf-docker-step-runner.mjs`:
-
-- downloads `input.json`
-- runs the image command
-- forwards stdout/stderr unchanged
-- reads `output.json` on success
-- writes a terminal result envelope to `PF_RESULT_URL`
-
-Step-specific images can wrap this runner when they need extra behavior,
-but the asset itself stays generic to the DockerStep contract.
-
-The fetch helper in [assets/pf-fetch-url.mjs](assets/pf-fetch-url.mjs) supports both `https://` and `file://` URLs so the same image contract works in AWS and local runtime.
-
-These files are generic DockerStep assets. Step-specific images, such as `deploy-project`, should copy them from `plugins/docker/assets` instead of defining local copies.
+Runtime adapters use the `ExecutorHost` and `FileResolutionHost` contracts from
+`@processfocus/runtime`.

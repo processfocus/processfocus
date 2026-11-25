@@ -7,6 +7,11 @@ export {
   type ValidationError,
 } from "@pf/graphql-schema"
 export {
+  anonymousPage,
+  anonymousPageLookup,
+  submitAnonymousPage,
+} from "./lib/anonymous-page.js"
+export {
   AuthConfig,
   type AuthConfigData,
   AuthConfigLive,
@@ -31,6 +36,13 @@ export {
 } from "./lib/dashboard-activity"
 export { LocalDelegatedRealtime } from "./lib/delegated-realtime"
 export {
+  DeploymentProbe,
+  DeploymentProbeError,
+  DeploymentProbeIdentity,
+  DeploymentProbeReceipt,
+  DeploymentProbeRequest,
+} from "./lib/deployment-probe.js"
+export {
   type DraftProcessChangeEvent,
   DraftProcessEvents,
   type DraftProcessExecutionEventDocument,
@@ -42,17 +54,6 @@ export {
   type ExecutionEventDocument,
   ExecutionEvents,
 } from "./lib/execution-events.js"
-export {
-  hasPendingSystemStartRestartDispatch,
-  restartFailedSystemStartExecution,
-  systemStartRestartDispatchId,
-  systemStartRestartLogicalJobId,
-} from "./lib/execution-restart.js"
-export {
-  type FormMetadataProjection,
-  type OmitFormMetadataFieldsInput,
-  omitFormMetadataFields,
-} from "./lib/form-metadata-projection.js"
 export {
   AppSchemaBuilder,
   AppSchemaBuilderLive,
@@ -79,12 +80,6 @@ export {
   ProcessEvents,
 } from "./lib/process-events.js"
 export {
-  completeStep,
-  recoverPendingExternalCompletionEnqueues,
-  startProcess,
-  startProcessExecution,
-} from "./lib/process-operations.js"
-export {
   DraftProcessExecutionCollectionOps,
   DraftProcessExecutionCollectionOpsLive,
 } from "./lib/rxdb/draft-process-execution.js"
@@ -96,6 +91,7 @@ export {
   ProcessCollectionOps,
   ProcessCollectionOpsLive,
 } from "./lib/rxdb/process.js"
+export { withProcessReplicationScope } from "./lib/rxdb/process-visibility"
 export { makePushResolver } from "./lib/rxdb/resolver-makers.js"
 export {
   filterAuthorizedDrafts,

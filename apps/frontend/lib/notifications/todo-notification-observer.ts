@@ -112,7 +112,6 @@ export function createTodoNotificationObserver(
         requireInteraction: false, // Auto-dismiss after typical notification duration
       })
 
-      // Handle click: focus app and open todo form
       notification.onclick = () => {
         notification.close()
         if (todo.stepPath) {
@@ -146,9 +145,7 @@ export function createTodoNotificationObserver(
       notifiedTodoIds: [],
     }
 
-    // First update: establish baseline
     if (!state.baselineEstablished) {
-      // Mark all current todos as seen - this is the baseline
       for (const todo of todos) {
         state.seenTodoIds.add(todo.id)
       }
@@ -157,10 +154,8 @@ export function createTodoNotificationObserver(
       return result
     }
 
-    // Subsequent updates: detect new todos
     for (const todo of todos) {
       if (!state.seenTodoIds.has(todo.id)) {
-        // This is a brand-new todo - dispatch notification
         const dispatched = dispatchNotification(todo)
         state.seenTodoIds.add(todo.id)
         if (dispatched) {

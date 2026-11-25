@@ -1,0 +1,23 @@
+{
+  "name": "@pf/project-accounting",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    "./admission": "./src/admission.ts",
+    "./projection-collections": "./src/lib/projection-collections.ts",
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@pf/auth-policy": "workspace:*",
+    "effect": "4.1.4"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

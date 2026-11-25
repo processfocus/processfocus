@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 import { and, eq } from "drizzle-orm"
 import { DateTime, Effect, type Layer, Option } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   AuthenticationDatabase,
   type CreateProviderUserInput,
@@ -49,7 +49,7 @@ const createProviderUser = (
     })
   })
 
-type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+type TestRequirements = Layer.Success<typeof TestLayer>
 
 const runTest = <A, E>(
   test: Effect.Effect<A, E, TestRequirements>,
@@ -164,7 +164,7 @@ describe("SQLite passkey authentication database", () => {
           publicKey: "owner-public-key",
           counter: 0,
         })
-        const collision = yield* Effect.either(
+        const collision = yield* Effect.result(
           authDb.createPasskeyCredential({
             userId: contender.id,
             credentialId: "credential-collision",
@@ -173,7 +173,7 @@ describe("SQLite passkey authentication database", () => {
           }),
         )
 
-        expect(collision._tag).toBe("Left")
+        expect(collision._tag).toBe("Failure")
         const found = yield* authDb.findPasskeyCredentialById(
           "credential-collision",
         )
@@ -201,7 +201,7 @@ describe("SQLite passkey authentication database", () => {
           counter: 0,
         })
 
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           sqlClient.withTransaction(
             Effect.gen(function* () {
               const providerUser = yield* createProviderUser(orgUnitId, {
@@ -218,7 +218,7 @@ describe("SQLite passkey authentication database", () => {
           ),
         )
 
-        expect(result._tag).toBe("Left")
+        expect(result._tag).toBe("Failure")
         const rolledBackUsers = yield* db
           .select()
           .from(schema.user)
@@ -336,17 +336,21 @@ describe("SQLite passkey authentication database", () => {
           counter: 7,
         })
 
-        yield* authDb.updateLastLoggedIn(
-          owner.id,
-          DateTime.unsafeMake("2026-01-01T00:00:00.000Z"),
-        )
+        yield* (yield* TypedSqliteDrizzle).insert(schema.auditEvent).values({
+          auditKind: "login",
+          occurredAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+          auditDetails: {
+            actorUserId: owner.id,
+            authenticationMethod: "oauth",
+          },
+        })
         expect(
           (yield* authDb.listPasskeyCredentialsForUser(owner.id)).every(
             (item) => item.lastUsedAt === null,
           ),
         ).toBe(true)
 
-        const usedAt = DateTime.unsafeMake("2026-04-05T06:07:00.000Z")
+        const usedAt = DateTime.makeUnsafe("2026-04-05T06:07:00.000Z")
         expect(
           yield* authDb.advancePasskeyCredentialCounter(
             "credential-used",

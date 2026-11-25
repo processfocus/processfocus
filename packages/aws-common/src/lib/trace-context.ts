@@ -1,4 +1,4 @@
-import * as OtelTracer from "@effect/opentelemetry/Tracer"
+import * as OtelTracer from "@effect/opentelemetry/OtelTracer"
 import {
   type Context,
   ROOT_CONTEXT,
@@ -45,7 +45,7 @@ export const captureTraceContext: Effect.Effect<TraceCarrier | undefined> =
           }
         : undefined
     }),
-    Effect.catchAll(() => Effect.succeed(undefined)),
+    Effect.catch(() => Effect.succeed(undefined)),
   )
 
 export const withTraceContext =

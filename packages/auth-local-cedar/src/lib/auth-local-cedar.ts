@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type {
   CedarValueJson,
   EntityJson,
@@ -9,24 +10,30 @@ import {
   statefulIsAuthorized,
 } from "@cedar-policy/cedar-wasm/nodejs"
 import {
+  Context,
   DateTime,
   Effect,
-  Either,
   Equal,
   Layer,
   Option,
   Ref,
+  Result,
   Stream,
 } from "effect"
 import {
+  ActivePolicyRevision,
   AuthorizationError,
   AuthorizationService,
+  type CompletionContext,
+  type CronStartContext,
+  DeploymentExecutionAccess,
   type ExecutionResource,
   type FileResource,
   type FormFieldResource,
   type GraphQLFieldResource,
   type ListResource,
   PolicyParseError,
+  PolicyRevisionPublisher,
   type PublicLinkPrincipalType,
   type Resource,
   type RoleEntity,
@@ -34,7 +41,6 @@ import {
   SchemaParseError,
   type ServiceAccountPrincipalType,
   type StepResource,
-  type TodoResource,
   type UserPrincipal,
 } from "@pf/auth-policy"
 import { getRequestTime } from "@pf/request-time"
@@ -63,7 +69,7 @@ const formatLocalTimeAsUtc = (zoned: DateTime.Zoned): string => {
   const parts = DateTime.toParts(zoned)
   const pad2 = (n: number) => String(n).padStart(2, "0")
   const pad3 = (n: number) => String(n).padStart(3, "0")
-  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hours)}:${pad2(parts.minutes)}:${pad2(parts.seconds)}.${pad3(parts.millis)}Z`
+  return `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}.${pad3(parts.millisecond)}Z`
 }
 
 /**
@@ -93,14 +99,25 @@ const buildRequestContext = (
     ) {
       return cache.context
     }
-    const zoned = DateTime.unsafeMakeZoned(requestTime, {
+    const zoned = DateTime.makeZonedUnsafe(requestTime, {
       timeZone: systemTimezone,
     })
     const context: CedarContext = {
       requestTime: {
         __extn: { fn: "datetime", arg: formatLocalTimeAsUtc(zoned) },
       },
+      weekday: DateTime.format(zoned, {
+        weekday: "long",
+        locale: "en-US",
+      }).toLowerCase(),
       nodeEnv: process.env["NODE_ENV"] ?? "development",
+      runtimeMode:
+        process.env["PF_RUNTIME_MODE"] === "local" ||
+        process.env["PF_RUNTIME_MODE"] === "deployed"
+          ? process.env["PF_RUNTIME_MODE"]
+          : "unknown",
+      stage: process.env["PF_STAGE"] ?? "",
+      environment: process.env["PF_ENV"] ?? "",
     }
     yield* Ref.set(cacheRef, { requestTime, context })
     return context
@@ -248,11 +265,20 @@ const formFieldOrgUnitEntity = (resource: FormFieldResource): EntityJson => ({
  */
 const executionResourceToEntity = (
   resource: ExecutionResource,
+  deploymentProjectGranted = false,
 ): EntityJson => ({
   uid: resource.uid,
   attrs: {
+    ...(deploymentProjectGranted ? { deploymentProjectGranted: true } : {}),
     ...(resource.startedBy
       ? { startedBy: { __entity: resource.startedBy } }
+      : {}),
+    ...(resource.startedByServiceAccount
+      ? {
+          startedByServiceAccount: {
+            __entity: resource.startedByServiceAccount,
+          },
+        }
       : {}),
     ...(resource.startedByRole
       ? { startedByRole: { __entity: resource.startedByRole } }
@@ -301,56 +327,10 @@ const publicLinkPrincipalToEntity = (
 ): EntityJson => ({
   uid: principal.uid,
   attrs: {
-    todo: { __entity: principal.todo },
+    todoId: principal.todoId,
   },
   parents: [],
 })
-
-const todoResourceToEntity = (resource: TodoResource): EntityJson => ({
-  uid: resource.uid,
-  attrs: {
-    ...(resource.step ? { step: { __entity: resource.step } } : {}),
-    ...(resource.role ? { role: { __entity: resource.role } } : {}),
-    ...(resource.assignedTo
-      ? { assignedTo: { __entity: resource.assignedTo } }
-      : {}),
-  },
-  parents: [
-    ...(resource.step ? [resource.step] : []),
-    ...(resource.process ? [resource.process] : []),
-  ],
-})
-
-const todoStepEntity = (resource: TodoResource): EntityJson | null =>
-  resource.step && resource.process
-    ? {
-        uid: resource.step,
-        attrs: {
-          ...(resource.role ? { role: { __entity: resource.role } } : {}),
-          startsProcess: false,
-          embedded: false,
-        },
-        parents: [resource.process],
-      }
-    : null
-
-const todoProcessEntity = (resource: TodoResource): EntityJson | null =>
-  resource.process
-    ? {
-        uid: resource.process,
-        attrs: {},
-        parents: resource.orgUnit ? [resource.orgUnit] : [],
-      }
-    : null
-
-const todoOrgUnitEntity = (resource: TodoResource): EntityJson | null =>
-  resource.orgUnit
-    ? {
-        uid: resource.orgUnit,
-        attrs: { name: resource.orgUnit.id },
-        parents: [],
-      }
-    : null
 
 /**
  * Convert GraphQLFieldResource to Cedar entity format.
@@ -360,7 +340,10 @@ const graphqlFieldResourceToEntity = (
   resource: GraphQLFieldResource,
 ): EntityJson => ({
   uid: resource.uid,
-  attrs: resource.tag ? { tag: resource.tag } : {},
+  attrs: {
+    ...(resource.tag ? { tag: resource.tag } : {}),
+    ...(resource.step ? { step: { __entity: resource.step.uid } } : {}),
+  },
   parents: [],
 })
 
@@ -389,6 +372,16 @@ const fileResourceToEntity = (resource: FileResource): EntityJson => ({
   attrs: {
     owner: { __entity: resource.owner },
     documentStore: resource.documentStore,
+    ...(resource.owner.id.startsWith("service-account:")
+      ? {
+          serviceAccountOwner: {
+            __entity: {
+              type: "PF::ServiceAccount",
+              id: resource.owner.id.slice("service-account:".length),
+            },
+          },
+        }
+      : {}),
   },
   parents: [resource.orgUnit],
 })
@@ -467,7 +460,6 @@ const parsePolicies = (
   Effect.gen(function* () {
     const policySetId = `${POLICY_SET_ID_BASE}-${crypto.randomUUID()}`
     // Cedar expects either a single string or Policy[] with pre-parsed policies
-    // We concatenate all policy strings for simplicity
     const combinedPolicies = policiesText.join("\n\n")
     const policyParseResult = preparsePolicySet(policySetId, {
       staticPolicies: combinedPolicies,
@@ -487,8 +479,7 @@ const parsePolicies = (
  * Pre-parses policy and schema files once, then uses stateful authorization.
  * Supports hot reload when PolicyWatcherService is available.
  */
-export const LocalCedarAuthorizationLive = Layer.scoped(
-  AuthorizationService,
+export const LocalCedarAuthorizationLive = Layer.effectContext(
   Effect.gen(function* () {
     const config = yield* LocalCedarConfig
 
@@ -498,10 +489,8 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
       context: null,
     })
 
-    // Pre-parse and cache the policy set
     const initialPolicySetId = yield* parsePolicies(config.policiesText)
 
-    // Pre-parse and cache the schema
     const schemaParseResult = preparseSchema(SCHEMA_NAME, config.schemaText)
     if (schemaParseResult.type === "failure") {
       return yield* new SchemaParseError({
@@ -511,8 +500,15 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
 
     // Store current policy set ID in a Ref for potential hot reload
     const policySetIdRef = yield* Ref.make(initialPolicySetId)
+    const fingerprint = (policies: readonly string[]) =>
+      createHash("sha256")
+        .update(JSON.stringify([config.schemaText, policies]))
+        .digest("hex")
+    const policyVersionRef = yield* Ref.make(fingerprint(config.policiesText))
+    const publisher = yield* Effect.serviceOption(PolicyRevisionPublisher)
+    if (Option.isSome(publisher))
+      yield* publisher.value.publish(yield* Ref.get(policyVersionRef))
 
-    // Check if PolicyWatcherService is available for hot reload
     const watcherOption = yield* Effect.serviceOption(PolicyWatcherService)
     const notifierOption = yield* Effect.serviceOption(
       CedarReloadNotifierService,
@@ -528,15 +524,17 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
             Effect.gen(function* () {
               const newPolicies = yield* watcher.currentPolicies
 
-              // Try to parse new policies
-              const parseResult = yield* Effect.either(
+              const parseResult = yield* Effect.result(
                 parsePolicies(newPolicies),
               )
 
-              yield* Either.match(parseResult, {
-                onRight: (policySetId) =>
+              yield* Result.match(parseResult, {
+                onSuccess: (policySetId) =>
                   Effect.gen(function* () {
+                    if (Option.isSome(publisher))
+                      yield* publisher.value.publish(fingerprint(newPolicies))
                     yield* Ref.set(policySetIdRef, policySetId)
+                    yield* Ref.set(policyVersionRef, fingerprint(newPolicies))
                     yield* Effect.log("Cedar policies hot-swapped")
 
                     // Notify listeners of successful reload (non-blocking)
@@ -544,15 +542,21 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
                       yield* Effect.sync(() =>
                         notifierOption.value.onCedarReloaded(),
                       ).pipe(
-                        Effect.catchAllCause((cause) =>
+                        Effect.catchCause((cause) =>
                           Effect.logWarning(
                             "onCedarReloaded callback failed",
                           ).pipe(Effect.annotateLogs({ cause })),
                         ),
                       )
                     }
-                  }),
-                onLeft: (error) =>
+                  }).pipe(
+                    Effect.catchTag("PolicyRevisionUnavailable", () =>
+                      Effect.logWarning(
+                        "Policy revision publication failed, keeping previous Cedar policies",
+                      ),
+                    ),
+                  ),
+                onFailure: (error) =>
                   Effect.logWarning(
                     `Failed to parse reloaded Cedar policies, keeping previous: ${error.errors.join(", ")}`,
                   ),
@@ -564,7 +568,66 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
       )
     }
 
-    return {
+    const authorizeStep = (
+      principal:
+        | UserPrincipal
+        | ServiceAccountPrincipalType
+        | PublicLinkPrincipalType,
+      resource: StepResource,
+      action: "complete" | "viewEmbeddedForm" | "publicCompletionCorrection",
+      trusted?: CompletionContext | CronStartContext,
+    ) =>
+      Effect.gen(function* () {
+        const policySetId = yield* Ref.get(policySetIdRef)
+        const requestTime = yield* getRequestTime()
+        const context = yield* buildRequestContext(
+          requestTime,
+          requestContextCacheRef,
+        )
+        const todo = trusted && "todoId" in trusted ? trusted : undefined
+        const principalEntity =
+          "todoId" in principal
+            ? publicLinkPrincipalToEntity(principal)
+            : isServiceAccountPrincipal(principal)
+              ? serviceAccountPrincipalToEntity(principal)
+              : principalToEntity(principal)
+        return yield* executeAuthorizationCheck(
+          {
+            principal: principal.uid,
+            action: { type: "PF::Action", id: action },
+            resource: resource.uid,
+            context: {
+              ...context,
+              ...(trusted && "cronStart" in trusted
+                ? { cronStart: trusted.cronStart }
+                : {}),
+              ...(todo ? { todoId: todo.todoId } : {}),
+              ...(todo?.assignedToProviderUserEmail
+                ? {
+                    assignedTo: {
+                      __entity: {
+                        type: "PF::ProviderUser",
+                        id: todo.assignedToProviderUserEmail,
+                      },
+                    },
+                  }
+                : {}),
+            },
+            preparsedPolicySetId: policySetId,
+            preparsedSchemaName: SCHEMA_NAME,
+            entities: [
+              principalEntity,
+              stepResourceToEntity(resource),
+              stepProcessEntity(resource),
+            ],
+          },
+          action,
+          principal,
+        )
+      })
+
+    const authorization = AuthorizationService.of({
+      policyVersion: Ref.get(policyVersionRef),
       canIssueDelegationSecret: (principal, owner, trusted) =>
         Effect.gen(function* () {
           const policySetId = yield* Ref.get(policySetIdRef)
@@ -737,134 +800,18 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
           return yield* executeAuthorizationCheck(call, "login", principal)
         }),
 
-      canCompleteStep: (principal, resource) =>
-        Effect.gen(function* () {
-          const policySetId = yield* Ref.get(policySetIdRef)
-          const requestTime = yield* getRequestTime()
-          const context = yield* buildRequestContext(
-            requestTime,
-            requestContextCacheRef,
-          )
-          const principalEntity = isServiceAccountPrincipal(principal)
-            ? serviceAccountPrincipalToEntity(principal)
-            : principalToEntity(principal)
-          const entities: EntityJson[] = [
-            principalEntity,
-            stepResourceToEntity(resource),
-            // Include Process entity with OrgUnit parent to enable:
-            // resource in PF::OrgUnit::"finance" on Steps
-            stepProcessEntity(resource),
-          ]
+      canCompleteStep: (principal, resource, context) =>
+        authorizeStep(principal, resource, "complete", context),
+      canViewEmbeddedForm: (principal, resource) =>
+        authorizeStep(principal, resource, "viewEmbeddedForm"),
 
-          const call: StatefulAuthorizationCall = {
-            principal: principal.uid,
-            action: { type: "PF::Action", id: "complete" },
-            resource: resource.uid,
-            context,
-            preparsedPolicySetId: policySetId,
-            preparsedSchemaName: SCHEMA_NAME,
-            entities,
-          }
-
-          return yield* executeAuthorizationCheck(call, "complete", principal)
-        }),
-
-      canCompleteTodo: (principal, resource) =>
-        Effect.gen(function* () {
-          const policySetId = yield* Ref.get(policySetIdRef)
-          const requestTime = yield* getRequestTime()
-          const context = yield* buildRequestContext(
-            requestTime,
-            requestContextCacheRef,
-          )
-          const principalEntity = isServiceAccountPrincipal(principal)
-            ? serviceAccountPrincipalToEntity(principal)
-            : principalToEntity(principal)
-          const optionalEntities = [
-            todoStepEntity(resource),
-            todoProcessEntity(resource),
-            todoOrgUnitEntity(resource),
-          ].filter((entity): entity is EntityJson => entity !== null)
-          const entities: EntityJson[] = [
-            principalEntity,
-            todoResourceToEntity(resource),
-            ...optionalEntities,
-          ]
-
-          const call: StatefulAuthorizationCall = {
-            principal: principal.uid,
-            action: { type: "PF::Action", id: "complete" },
-            resource: resource.uid,
-            context,
-            preparsedPolicySetId: policySetId,
-            preparsedSchemaName: SCHEMA_NAME,
-            entities,
-          }
-
-          return yield* executeAuthorizationCheck(call, "complete", principal)
-        }),
-
-      canCorrectPublicCompletionTodo: (principal, resource) =>
-        Effect.gen(function* () {
-          const policySetId = yield* Ref.get(policySetIdRef)
-          const requestTime = yield* getRequestTime()
-          const context = yield* buildRequestContext(
-            requestTime,
-            requestContextCacheRef,
-          )
-          const optionalEntities = [
-            todoStepEntity(resource),
-            todoProcessEntity(resource),
-            todoOrgUnitEntity(resource),
-          ].filter((entity): entity is EntityJson => entity !== null)
-          const entities: EntityJson[] = [
-            principalToEntity(principal),
-            todoResourceToEntity(resource),
-            ...optionalEntities,
-          ]
-
-          const call: StatefulAuthorizationCall = {
-            principal: principal.uid,
-            action: { type: "PF::Action", id: "publicCompletionCorrection" },
-            resource: resource.uid,
-            context,
-            preparsedPolicySetId: policySetId,
-            preparsedSchemaName: SCHEMA_NAME,
-            entities,
-          }
-
-          return yield* executeAuthorizationCheck(
-            call,
-            "publicCompletionCorrection",
-            principal,
-          )
-        }),
-
-      canCompletePublicTodo: (principal, resource) =>
-        Effect.gen(function* () {
-          const policySetId = yield* Ref.get(policySetIdRef)
-          const requestTime = yield* getRequestTime()
-          const context = yield* buildRequestContext(
-            requestTime,
-            requestContextCacheRef,
-          )
-          const entities: EntityJson[] = [
-            publicLinkPrincipalToEntity(principal),
-            todoResourceToEntity(resource),
-          ]
-
-          const call: StatefulAuthorizationCall = {
-            principal: principal.uid,
-            action: { type: "PF::Action", id: "complete" },
-            resource: resource.uid,
-            context,
-            preparsedPolicySetId: policySetId,
-            preparsedSchemaName: SCHEMA_NAME,
-            entities,
-          }
-
-          return yield* executeAuthorizationCheck(call, "complete", principal)
-        }),
+      canCorrectPublicCompletionTodo: (principal, resource, context) =>
+        authorizeStep(
+          principal,
+          resource,
+          "publicCompletionCorrection",
+          context,
+        ),
 
       canRequestRole: (principal, resource) =>
         Effect.gen(function* () {
@@ -898,42 +845,6 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
           return yield* executeAuthorizationCheck(
             call,
             "requestRole",
-            principal,
-          )
-        }),
-
-      canRequestProviderUserPermissions: (principal, resource) =>
-        Effect.gen(function* () {
-          const policySetId = yield* Ref.get(policySetIdRef)
-          const requestTime = yield* getRequestTime()
-          const context = yield* buildRequestContext(
-            requestTime,
-            requestContextCacheRef,
-          )
-
-          const entities: EntityJson[] = [
-            isServiceAccountPrincipal(principal)
-              ? serviceAccountPrincipalToEntity(principal)
-              : principalToEntity(principal),
-            principalToEntity(resource),
-          ]
-
-          const call: StatefulAuthorizationCall = {
-            principal: principal.uid,
-            action: {
-              type: "PF::Action",
-              id: "requestProviderUserPermissions",
-            },
-            resource: resource.uid,
-            context,
-            preparsedPolicySetId: policySetId,
-            preparsedSchemaName: SCHEMA_NAME,
-            entities,
-          }
-
-          return yield* executeAuthorizationCheck(
-            call,
-            "requestProviderUserPermissions",
             principal,
           )
         }),
@@ -983,6 +894,16 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
 
       canViewExecution: (principal, resource) =>
         Effect.gen(function* () {
+          const access = yield* Effect.serviceOption(DeploymentExecutionAccess)
+          const deploymentProjectGranted =
+            isServiceAccountPrincipal(principal) &&
+            resource.startedByServiceAccount?.id === principal.uid.id &&
+            Option.isSome(access) &&
+            (yield* access.value.permits(
+              resource.uid.id,
+              principal.uid.id,
+              resource.process.id,
+            ))
           const policySetId = yield* Ref.get(policySetIdRef)
           const requestTime = yield* getRequestTime()
           const context = yield* buildRequestContext(
@@ -993,7 +914,7 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
             isServiceAccountPrincipal(principal)
               ? serviceAccountPrincipalToEntity(principal)
               : principalToEntity(principal),
-            executionResourceToEntity(resource),
+            executionResourceToEntity(resource, deploymentProjectGranted),
             // Include Process and OrgUnit entities for hierarchy:
             // resource in PF::OrgUnit::"/Finance/" on Executions
             executionProcessEntity(resource),
@@ -1158,6 +1079,12 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
           const entities: EntityJson[] = [
             principalEntity,
             graphqlFieldResourceToEntity(resource),
+            ...(resource.step
+              ? [
+                  stepResourceToEntity(resource.step),
+                  stepProcessEntity(resource.step),
+                ]
+              : []),
           ]
 
           const call: StatefulAuthorizationCall = {
@@ -1344,7 +1271,9 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
             requestContextCacheRef,
           )
           const entities: EntityJson[] = [
-            principalToEntity(principal),
+            isServiceAccountPrincipal(principal)
+              ? serviceAccountPrincipalToEntity(principal)
+              : principalToEntity(principal),
             fileResourceToEntity(resource),
           ]
 
@@ -1392,6 +1321,9 @@ export const LocalCedarAuthorizationLive = Layer.scoped(
 
           return yield* executeAuthorizationCheck(call, action.id, principal)
         }),
-    }
+    })
+    return Context.make(AuthorizationService, authorization).pipe(
+      Context.add(ActivePolicyRevision, { current: Ref.get(policyVersionRef) }),
+    )
   }),
 )

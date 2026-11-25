@@ -1,4 +1,4 @@
-import { Inspectable, Logger } from "effect"
+import { Formatter, Logger } from "effect"
 
 /**
  * Process message to handle the common pattern of [string, object].
@@ -36,8 +36,8 @@ const processMessage = (
  * (standard fields like level, timestamp, etc. take precedence).
  */
 export const stdoutJsonLogger: Logger.Logger<unknown, void> = Logger.map(
-  Logger.structuredLogger,
-  ({ logLevel, message, ...rest }) => {
+  Logger.formatStructured,
+  ({ level, message, ...rest }) => {
     const { message: processedMessage, extra } = processMessage(message)
     // Spread extra first so standard fields take precedence. However,
     // structuredLogger always emits `cause` (undefined when absent), which
@@ -46,12 +46,12 @@ export const stdoutJsonLogger: Logger.Logger<unknown, void> = Logger.map(
     const { cause, ...restWithoutCause } = rest
     const output = {
       ...extra,
-      level: logLevel,
+      level,
       message: processedMessage,
       ...restWithoutCause,
       ...(cause === undefined ? {} : { cause }),
     }
-    process.stdout.write(`${Inspectable.stringifyCircular(output)}\n`)
+    process.stdout.write(`${Formatter.formatJson(output)}\n`)
   },
 )
 
@@ -59,7 +59,4 @@ export const stdoutJsonLogger: Logger.Logger<unknown, void> = Logger.map(
  * Logger layer that replaces the default logger with stdoutJsonLogger.
  * Use this in production AWS environments.
  */
-export const StdoutJsonLoggerLive = Logger.replace(
-  Logger.defaultLogger,
-  stdoutJsonLogger,
-)
+export const StdoutJsonLoggerLive = Logger.layer([stdoutJsonLogger])

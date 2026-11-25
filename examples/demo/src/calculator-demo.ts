@@ -1,7 +1,7 @@
 import { AwsFunctionStep } from "@processfocus/plugin-aws-lambda"
 import { Schema as ES, Effect } from "effect"
-import { NumberFieldFrom, TextField } from "@pf/form-schema"
 import { Form, type OrgUnit, Process, type Role, Sla } from "@pf/process"
+import { enterNumbersForm, showResultForm } from "./calculator-demo-forms"
 
 type CalculatorInputState = {
   readonly a: number
@@ -26,21 +26,14 @@ export class CalculatorDemo extends Process {
         thankYou:
           "Thanks. Your calculation request has been submitted without signing in.",
       },
-      form: () => ({
-        email: TextField({ label: "Email" }),
-        a: NumberFieldFrom(ES.NumberFromString, {
-          label: "First number",
-          required: true,
-        }),
-        b: NumberFieldFrom(ES.NumberFromString, {
-          label: "Second number",
-          required: true,
-        }),
-      }),
+      form: enterNumbersForm,
+      browser: {
+        entrypoint: "src/calculator-demo-forms.ts",
+        exportName: "enterNumbersForm",
+      },
       role: employeeRole,
     })
 
-    // Start the flow
     const flow = this.start(input_numbers)
 
     // Step 2: AWS Lambda function adds the numbers
@@ -57,22 +50,15 @@ export class CalculatorDemo extends Process {
     // Step 3: Show the result
     const show_result = new Form(flow2, "Show result", {
       name: "Calculation result",
-      form: ({ value }) => ({
-        firstNumber: TextField({
-          label: "First number",
-          readOnly: true,
-          default: value((state) => String(state.a)),
-        }),
-        secondNumber: TextField({
-          label: "Second number",
-          readOnly: true,
-          default: value((state) => String(state.b)),
-        }),
-        sum: TextField({
-          label: "Sum",
-          readOnly: true,
-          default: value((state) => String(state.result)),
-        }),
+      form: showResultForm,
+      browser: {
+        entrypoint: "src/calculator-demo-forms.ts",
+        exportName: "showResultForm",
+      },
+      bindings: (state) => ({
+        firstNumber: { default: String(state.a) },
+        secondNumber: { default: String(state.b) },
+        sum: { default: String(state.result) },
       }),
       summary: (state) => ({
         Calculation: `${state.a} + ${state.b} = ${state.result}`,
@@ -80,7 +66,6 @@ export class CalculatorDemo extends Process {
       role: employeeRole,
     })
 
-    // End the process
     flow2.end(show_result)
   }
 }

@@ -29,9 +29,7 @@ interface ProcessDurationStats {
 /**
  * Service for calculating business-hours-aware process durations.
  */
-export class ProcessDurationService extends Context.Tag(
-  "@pf/graphql-api/ProcessDurationService",
-)<
+export class ProcessDurationService extends Context.Service<
   ProcessDurationService,
   {
     /**
@@ -45,7 +43,7 @@ export class ProcessDurationService extends Context.Tag(
       processes: Array<{ id: string; orgUnitId: string }>,
     ) => Effect.Effect<Map<string, ProcessDurationStats>>
   }
->() {}
+>()("@pf/graphql-api/ProcessDurationService") {}
 
 /**
  * Build BusinessCalendarConfig from database data.
@@ -66,7 +64,7 @@ const buildCalendarConfig = (
 
   // Build date exceptions
   const exceptions = data.dateExceptions.map((row) => ({
-    date: DateTime.unsafeMake(row.exceptionDate),
+    date: DateTime.makeUnsafe(row.exceptionDate),
     slots: row.exceptionSlots,
     note: row.exceptionNote,
   }))
@@ -76,8 +74,8 @@ const buildCalendarConfig = (
     id: `${row.orgUnitId}-${row.periodKind}-${row.periodTitle}`,
     name: row.periodTitle,
     type: row.periodKind,
-    startDate: DateTime.unsafeMake(row.periodStart),
-    endDate: DateTime.unsafeMake(row.periodEnd),
+    startDate: DateTime.makeUnsafe(row.periodStart),
+    endDate: DateTime.makeUnsafe(row.periodEnd),
     isActive: row.periodActive,
     weeklySchedule: row.periodSchedule as DaySchedule[] | undefined,
   }))
@@ -106,8 +104,8 @@ const hasCalendarConfigured = (data: OrgUnitCalendarData): boolean =>
  * Curried so the queries are closed over once; the returned function is traced.
  */
 const calculateDurationsInternal = (
-  durationQueries: ExecutionDurationQueries["Type"],
-  calendarQueries: BusinessCalendarQueries["Type"],
+  durationQueries: Context.Service.Shape<typeof ExecutionDurationQueries>,
+  calendarQueries: Context.Service.Shape<typeof BusinessCalendarQueries>,
 ) =>
   Effect.fn("ProcessDurationService.calculateDurations")(function* (
     processes: Array<{ id: string; orgUnitId: string }>,
@@ -251,7 +249,7 @@ export const ProcessDurationServiceLive = Layer.effect(
               error,
             }),
           ),
-          Effect.catchAll(() => {
+          Effect.catch(() => {
             const result = new Map<string, ProcessDurationStats>()
             for (const process of processes) {
               result.set(process.id, {

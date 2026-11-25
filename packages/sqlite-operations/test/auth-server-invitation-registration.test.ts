@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 import { and, eq } from "drizzle-orm"
 import { Cause, DateTime, Effect, Exit, Option } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   AuthenticationDatabase,
   INVITATION_REGISTRATION_INVALID_MESSAGE,
@@ -12,7 +12,7 @@ import * as schema from "@pf/drizzle-sqlite"
 import {
   generateRegistrationLinkMaterial,
   hashRegistrationLinkToken,
-} from "@pf/graphql-schema"
+} from "@pf/identity-management/credentials"
 import { createTestApp } from "@pf/openauth"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { TestLayer, setupTestData } from "./auth-server.fixture.js"
@@ -26,6 +26,7 @@ describe("auth-server Invitation Registration from Registration Link", () => {
         providerName: "passkey",
         providerConfig: {
           rpName: "Test App",
+          accountLabel: "Example Organisation",
           rpID: "example.com",
           origin: "https://example.com",
           inviteOnly: true,
@@ -243,8 +244,12 @@ describe("auth-server Invitation Registration from Registration Link", () => {
             }
           }
           expect(body.challengeId).toBeTruthy()
-          expect(body.options.user.name).toBe(email)
-          expect(body.options.user.displayName).toBe(email)
+          expect(body.options.user.name).toBe(
+            "Example Organisation · options@example.com",
+          )
+          expect(body.options.user.displayName).toBe(
+            "Example Organisation · options@example.com",
+          )
           expect(body.options.authenticatorSelection.residentKey).toBe(
             "required",
           )
@@ -494,7 +499,7 @@ describe("auth-server Invitation Registration from Registration Link", () => {
           expect(failures).toHaveLength(1)
 
           if (Exit.isFailure(failures[0]!)) {
-            const error = Cause.failureOption(failures[0]!.cause)
+            const error = Cause.findErrorOption(failures[0]!.cause)
             if (Option.isSome(error)) {
               const isTyped =
                 error.value instanceof PasskeyInvitationRegistrationDeniedError

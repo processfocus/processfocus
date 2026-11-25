@@ -29,6 +29,10 @@ export const registerRendererPlugin = (
 export const getPluginRenderer = (type: string): FormRenderer | undefined =>
   rendererPlugins.get(type)?.renderer
 
+export const getPluginRegistration = (
+  type: string,
+): FormRendererRegistration | undefined => rendererPlugins.get(type)
+
 export const clearRendererPlugins = (): void => {
   rendererPlugins.reset()
 }

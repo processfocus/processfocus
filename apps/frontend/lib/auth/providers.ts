@@ -7,6 +7,8 @@ const OAUTH_METADATA_PATH = "/.well-known/oauth-authorization-server"
 interface OAuthMetadata {
   providers_supported?: string[]
   passkey_open_registration?: boolean
+  verified_human_identity_supported?: boolean
+  passkey_registration_supported?: boolean
 }
 
 export interface LoginAuthProviders {
@@ -16,6 +18,10 @@ export interface LoginAuthProviders {
    * When false, self-registration is hidden (invite-only).
    */
   readonly passkeyOpenRegistration: boolean
+  readonly invitationMethods: {
+    readonly sso: boolean
+    readonly passkey: boolean
+  }
 }
 
 /**
@@ -45,6 +51,10 @@ export async function getLoginAuthProviders(): Promise<LoginAuthProviders> {
   const providers = metadata.providers_supported ?? []
   return {
     providers,
+    invitationMethods: {
+      sso: metadata.verified_human_identity_supported === true,
+      passkey: metadata.passkey_registration_supported === true,
+    },
     passkeyOpenRegistration:
       providers.includes("passkey") &&
       metadata.passkey_open_registration === true,

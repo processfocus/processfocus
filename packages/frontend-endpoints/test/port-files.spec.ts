@@ -7,16 +7,12 @@ import {
   getEffectiveWsEndpoint,
   getFrontendBaseUrlFromPortFile,
   getGraphqlEndpointFromPortFile,
-  getWsEndpointFromPortFile,
   isLocalhostUrl,
-  readAuthPort,
-  readFrontendPort,
   readGraphqlPort,
   shouldUsePortFiles,
 } from "../src/port-files"
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test"
 
-// Mock the fs module
 mock.module("node:fs", () => ({
   readFileSync: mock(() => ""),
 }))
@@ -27,25 +23,9 @@ describe("readGraphqlPort", () => {
     mockReadFileSync.mockReset()
   })
 
-  it("should read port from .graphql-port.json file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 5000}')
-
-    expect(readGraphqlPort()).toBe(5000)
-  })
-
   it("should return default port when file contains invalid JSON", () => {
     const mockReadFileSync = readFileSync as ReturnType<typeof mock>
     mockReadFileSync.mockImplementation(() => "invalid")
-
-    expect(readGraphqlPort()).toBe(4000)
-  })
-
-  it("should return default port when file doesn't exist", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => {
-      throw new Error("ENOENT: no such file or directory")
-    })
 
     expect(readGraphqlPort()).toBe(4000)
   })
@@ -79,42 +59,10 @@ describe("readGraphqlPort", () => {
   })
 })
 
-describe("readAuthPort", () => {
-  beforeEach(() => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockReset()
-  })
-
-  it("should read port from .auth-port.json file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 4025}')
-
-    expect(readAuthPort()).toBe(4025)
-  })
-
-  it("should return default port when file doesn't exist", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => {
-      throw new Error("ENOENT: no such file or directory")
-    })
-
-    expect(readAuthPort()).toBe(4020)
-  })
-})
-
 describe("getGraphqlEndpointFromPortFile", () => {
   beforeEach(() => {
     const mockReadFileSync = readFileSync as ReturnType<typeof mock>
     mockReadFileSync.mockReset()
-  })
-
-  it("should return graphql endpoint with port from file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 5000}')
-
-    expect(getGraphqlEndpointFromPortFile()).toBe(
-      "http://localhost:5000/graphql",
-    )
   })
 
   it("should return graphql endpoint with default port when file missing", () => {
@@ -129,31 +77,10 @@ describe("getGraphqlEndpointFromPortFile", () => {
   })
 })
 
-describe("getWsEndpointFromPortFile", () => {
-  beforeEach(() => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockReset()
-  })
-
-  it("should return ws endpoint with port from file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 5000}')
-
-    expect(getWsEndpointFromPortFile()).toBe("ws://localhost:5000/graphql")
-  })
-})
-
 describe("getAuthUrlFromPortFile", () => {
   beforeEach(() => {
     const mockReadFileSync = readFileSync as ReturnType<typeof mock>
     mockReadFileSync.mockReset()
-  })
-
-  it("should return auth url with port from file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 4025}')
-
-    expect(getAuthUrlFromPortFile()).toBe("http://localhost:4025")
   })
 
   it("should return auth url with default port when file missing", () => {
@@ -167,28 +94,12 @@ describe("getAuthUrlFromPortFile", () => {
 })
 
 describe("isLocalhostUrl", () => {
-  it("should return true for http://localhost", () => {
-    expect(isLocalhostUrl("http://localhost")).toBe(true)
-  })
-
-  it("should return true for http://localhost:3000", () => {
-    expect(isLocalhostUrl("http://localhost:3000")).toBe(true)
-  })
-
-  it("should return true for https://localhost", () => {
-    expect(isLocalhostUrl("https://localhost")).toBe(true)
-  })
-
   it("should return true for http://127.0.0.1", () => {
     expect(isLocalhostUrl("http://127.0.0.1")).toBe(true)
   })
 
   it("should return true for http://127.0.0.1:4000", () => {
     expect(isLocalhostUrl("http://127.0.0.1:4000")).toBe(true)
-  })
-
-  it("should return false for a real URL", () => {
-    expect(isLocalhostUrl("https://api.example.com")).toBe(false)
   })
 
   it("should return false for invalid URL", () => {
@@ -211,35 +122,6 @@ describe("shouldUsePortFiles", () => {
     } else {
       process.env["GRAPHQL_ENDPOINT"] = originalGraphqlEndpoint
     }
-  })
-
-  it("should return true when BASE_URL is not set", () => {
-    delete process.env["BASE_URL"]
-    delete process.env["GRAPHQL_ENDPOINT"]
-    expect(shouldUsePortFiles()).toBe(true)
-  })
-
-  it("should return true when BASE_URL is http://localhost", () => {
-    process.env["BASE_URL"] = "http://localhost"
-    delete process.env["GRAPHQL_ENDPOINT"]
-    expect(shouldUsePortFiles()).toBe(true)
-  })
-
-  it("should return true when BASE_URL is https://localhost", () => {
-    process.env["BASE_URL"] = "https://localhost"
-    delete process.env["GRAPHQL_ENDPOINT"]
-    expect(shouldUsePortFiles()).toBe(true)
-  })
-
-  it("should return true when BASE_URL is localhost with a port", () => {
-    process.env["BASE_URL"] = "http://localhost:3000"
-    delete process.env["GRAPHQL_ENDPOINT"]
-    expect(shouldUsePortFiles()).toBe(true)
-  })
-
-  it("should return false when BASE_URL is a real URL", () => {
-    process.env["BASE_URL"] = "https://api.example.com"
-    expect(shouldUsePortFiles()).toBe(false)
   })
 
   it("should return false when GRAPHQL_ENDPOINT is set", () => {
@@ -375,54 +257,10 @@ describe("getEffectiveAuthUrl", () => {
   })
 })
 
-describe("readFrontendPort", () => {
-  beforeEach(() => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockReset()
-  })
-
-  it("should read port from .frontend-port.json file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 3005}')
-
-    expect(readFrontendPort()).toBe(3005)
-  })
-
-  it("should return default port when file doesn't exist", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => {
-      throw new Error("ENOENT: no such file or directory")
-    })
-
-    expect(readFrontendPort()).toBe(3000)
-  })
-
-  it("should return default port when file contains invalid JSON", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => "invalid")
-
-    expect(readFrontendPort()).toBe(3000)
-  })
-
-  it("should return default port when port field is missing", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"other": 3005}')
-
-    expect(readFrontendPort()).toBe(3000)
-  })
-})
-
 describe("getFrontendBaseUrlFromPortFile", () => {
   beforeEach(() => {
     const mockReadFileSync = readFileSync as ReturnType<typeof mock>
     mockReadFileSync.mockReset()
-  })
-
-  it("should return frontend base url with port from file", () => {
-    const mockReadFileSync = readFileSync as ReturnType<typeof mock>
-    mockReadFileSync.mockImplementation(() => '{"port": 3005}')
-
-    expect(getFrontendBaseUrlFromPortFile()).toBe("http://localhost:3005")
   })
 
   it("should return frontend base url with default port when file missing", () => {

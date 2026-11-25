@@ -1,3 +1,4 @@
+@localhost-only
 Feature: File Download Permissions
   As a system administrator
   I want only file owners to download their files

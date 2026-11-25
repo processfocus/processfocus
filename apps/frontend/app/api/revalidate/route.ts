@@ -2,7 +2,7 @@ import { revalidatePath, revalidateTag } from "next/cache"
 import { type NextRequest, NextResponse } from "next/server"
 
 /**
- * API route for on-demand revalidation of cached pages
+ * On-demand revalidation for the local Next.js runtime.
  *
  * Usage:
  *   POST /api/revalidate
@@ -11,6 +11,7 @@ import { type NextRequest, NextResponse } from "next/server"
  *   Body: { path: "/login", tag: "login-page", secret: "your-secret" }
  *
  * REVALIDATE_SECRET must be configured; requests are rejected when it is absent.
+ * Hosted OpenNext disables tag/path invalidation and returns 501 after auth.
  */
 export const POST = async (request: NextRequest) => {
   try {
@@ -29,7 +30,6 @@ export const POST = async (request: NextRequest) => {
       return NextResponse.json({ message: "Invalid secret" }, { status: 401 })
     }
 
-    // Validate that at least one of path or tag is provided
     const hasPath = path && typeof path === "string"
     const hasTag = tag && typeof tag === "string"
     if (!hasPath && !hasTag) {
@@ -39,8 +39,19 @@ export const POST = async (request: NextRequest) => {
       )
     }
 
-    // Next.js 16 requires a second arg (CacheLifeConfig); {} = default profile
-    if (hasTag) revalidateTag(tag, {})
+    if (process.env["AWS_LAMBDA_FUNCTION_NAME"]) {
+      return NextResponse.json(
+        {
+          revalidated: false,
+          message:
+            "On-demand revalidation is unavailable in the hosted runtime",
+        },
+        { status: 501 },
+      )
+    }
+
+    // Local Cedar hot reload must expire the old policy on the next request.
+    if (hasTag) revalidateTag(tag, { expire: 0 })
     if (hasPath) revalidatePath(path)
 
     return NextResponse.json({

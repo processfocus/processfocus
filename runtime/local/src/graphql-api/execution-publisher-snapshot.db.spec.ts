@@ -1,18 +1,14 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { FetchHttpClient } from "@effect/platform"
-import { ConfigProvider, DateTime, Effect, FiberRef, Layer } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/http"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   ExecutionCollectionOpsLive,
   SlaCalculationServiceLive,
 } from "@pf/graphql-api"
-import {
-  ExecutionQueries,
-  UserDetails,
-  type UserDetailsValue,
-} from "@pf/graphql-db-operations"
+import { ExecutionQueries, UserDetails } from "@pf/graphql-db-operations"
 import { ExecutionFromJobPublisher } from "@pf/job-handler"
 import { storeOrganisation } from "@pf/org-to-db"
 import {
@@ -55,16 +51,13 @@ it("publishes one execution snapshot and releases it before HTTP delivery", asyn
     form: () => ({}),
   })
   process.start(start).next(review).end()
-  const now = DateTime.unsafeMake("2026-09-08T07:41:38Z")
+  const now = DateTime.makeUnsafe("2026-09-08T07:41:38Z")
   const database = DatabaseTestFile(filename)
   const layers = Layer.mergeAll(
     SqliteDbOperationsLive,
     SqliteGraphqlDbOperationsLive,
-    Layer.succeed(RequestTime, FiberRef.unsafeMake(now)),
-    Layer.succeed(
-      UserDetails,
-      FiberRef.unsafeMake<UserDetailsValue>({ by: "TEST", id: null }),
-    ),
+    Layer.succeed(RequestTime, now),
+    Layer.succeed(UserDetails, { by: "TEST", id: null }),
     OrganisationProviderTest(org),
   ).pipe(Layer.provideMerge(database))
 
@@ -169,9 +162,11 @@ it("publishes one execution snapshot and releases it before HTTP delivery", asyn
             ),
             Layer.provide(FetchHttpClient.layer),
             Layer.provide(
-              Layer.setConfigProvider(
-                ConfigProvider.fromMap(
-                  new Map([["GRAPHQL_SERVER_URL", server.url.origin]]),
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown(
+                  Object.fromEntries(
+                    new Map([["GRAPHQL_SERVER_URL", server.url.origin]]),
+                  ),
                 ),
               ),
             ),
