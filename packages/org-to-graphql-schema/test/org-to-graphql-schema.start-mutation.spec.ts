@@ -182,7 +182,7 @@ describe("org-to-graphql-schema - start mutation generation", () => {
     validateGraphQL(sdl)
   })
 
-  it("tags embedded start mutations for frontend embed access", async () => {
+  it("binds generated start mutations to their step for Cedar authorization", async () => {
     const org = new Organisation({ name: "test-org" })
     const dept = new OrgUnit(org, "engineering", {
       name: "Engineering",
@@ -211,12 +211,12 @@ describe("org-to-graphql-schema - start mutation generation", () => {
     const sdl = await runSchemaBuilder(org)
 
     expect(sdl).toContain(
-      'startEngineeringPublicEnquiry(input: EngineeringPublicEnquirySubmit!, executionId: ID, withoutWaiting: Boolean = false): StartProcessPayload! @auth(tag: "embed")',
+      'startEngineeringPublicEnquiry(input: EngineeringPublicEnquirySubmit!, executionId: ID, withoutWaiting: Boolean = false): StartProcessPayload! @step(path: "/engineering/public-enquiry/submit")',
     )
     validateGraphQL(sdl)
   })
 
-  it("tags dependent lookup queries only for embedded forms", async () => {
+  it("binds dependent lookups to their steps without declaring access", async () => {
     const org = new Organisation({ name: "test-org" })
     const dept = new OrgUnit(org, "engineering", {
       name: "Engineering",
@@ -287,13 +287,10 @@ describe("org-to-graphql-schema - start mutation generation", () => {
     const sdl = await runSchemaBuilder(org)
 
     expect(sdl).toContain(
-      'lookupEngineeringPublicEnquirySubmitStageId(input: LookupEngineeringPublicEnquirySubmitStageIdInput!, limit: Int): [LookupItem!]! @auth(tag: "embed")',
+      'lookupEngineeringPublicEnquirySubmitStageId(input: LookupEngineeringPublicEnquirySubmitStageIdInput!, limit: Int): [LookupItem!]! @step(path: "/engineering/public-enquiry/submit")',
     )
     expect(sdl).toContain(
-      "lookupEngineeringInternalEnquirySubmitStageId(input: LookupEngineeringInternalEnquirySubmitStageIdInput!, limit: Int): [LookupItem!]!",
-    )
-    expect(sdl).not.toContain(
-      'lookupEngineeringInternalEnquirySubmitStageId(input: LookupEngineeringInternalEnquirySubmitStageIdInput!, limit: Int): [LookupItem!]! @auth(tag: "embed")',
+      'lookupEngineeringInternalEnquirySubmitStageId(input: LookupEngineeringInternalEnquirySubmitStageIdInput!, limit: Int): [LookupItem!]! @step(path: "/engineering/internal-enquiry/submit")',
     )
     validateGraphQL(sdl)
   })

@@ -4,7 +4,7 @@ import type { FormActionsContext } from "@pf/form"
 import { Button } from "@pf/shadcn-components"
 
 interface TodoFormActionsProps {
-  /** Form actions context from dynamicForm's renderActions callback */
+  /** Form actions context from EffectSchemaForm's children render function */
   context: FormActionsContext
 }
 

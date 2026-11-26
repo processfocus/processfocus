@@ -14,11 +14,9 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/experimental": "^0.61.1",
-    "@effect/sql": "^0.52.1",
     "@pf/db-info": "workspace:*",
-    "@tursodatabase/database": "0.7.2",
-    "effect": "^3.22.2"
+    "@tursodatabase/database": "0.8.3",
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

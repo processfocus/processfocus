@@ -8,19 +8,23 @@ import {
   XeroInvoiceNumber,
 } from "./identities"
 
-const cents = Schema.Number.pipe(Schema.filter(Number.isSafeInteger))
-const nonBlank = Schema.Trim.pipe(Schema.minLength(1))
+const cents = Schema.Number.pipe(
+  Schema.check(Schema.makeFilter(Number.isSafeInteger)),
+)
+const nonBlank = Schema.Trim.pipe(Schema.check(Schema.isMinLength(1)))
 const Tracking = Schema.Array(
   Schema.Struct({
     category: nonBlank,
     option: nonBlank,
   }),
 ).pipe(
-  Schema.minItems(1),
-  Schema.filter(
-    (tracking) =>
-      new Set(tracking.map((entry) => entry.category.toLowerCase())).size ===
-      tracking.length,
+  Schema.check(Schema.isMinLength(1)),
+  Schema.check(
+    Schema.makeFilter(
+      (tracking) =>
+        new Set(tracking.map((entry) => entry.category.toLowerCase())).size ===
+        tracking.length,
+    ),
   ),
 )
 
@@ -39,7 +43,7 @@ export const DraftSalesInvoice = Schema.Struct({
     Schema.Struct({
       itemCode: nonBlank,
       description: nonBlank,
-      quantity: Schema.Int.pipe(Schema.positive()),
+      quantity: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
       unitAmountCents: cents,
       lineAmountCents: cents,
       taxCents: cents,
@@ -48,39 +52,44 @@ export const DraftSalesInvoice = Schema.Struct({
       // Keeping names in the authoring contract avoids leaking a tenant's IDs.
       tracking: Schema.optional(Tracking),
     }),
-  ).pipe(Schema.minItems(1)),
-  totalCents: cents.pipe(Schema.nonNegative()),
+  ).pipe(Schema.check(Schema.isMinLength(1))),
+  totalCents: cents.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   taxCents: cents,
   subtotalCents: cents,
   // Older saved previews did not capture recipient intent. They remain readable,
   // but a new write requires this field and rechecks the live contact.
   expectedRecipientEmails: Schema.optional(
-    Schema.Array(Schema.Trim.pipe(Schema.filter(Schema.is(EmailAddress)))).pipe(
-      Schema.minItems(1),
-    ),
+    Schema.Array(
+      Schema.Trim.pipe(
+        Schema.check(Schema.makeFilter(Schema.is(EmailAddress))),
+      ),
+    ).pipe(Schema.check(Schema.isMinLength(1))),
   ),
 }).pipe(
-  Schema.filter(
-    (invoice) =>
-      invoice.dueDate >= invoice.date &&
-      (invoice.duplicateReference === undefined ||
-        matchesInvoiceReference(
-          invoice.reference,
-          invoice.duplicateReference,
-        )) &&
-      invoice.lines.every(
-        (line) => line.quantity * line.unitAmountCents === line.lineAmountCents,
-      ) &&
-      invoice.lines.reduce((sum, line) => sum + line.lineAmountCents, 0) ===
-        invoice.totalCents &&
-      invoice.lines.reduce((sum, line) => sum + line.taxCents, 0) ===
-        invoice.taxCents &&
-      invoice.totalCents - invoice.taxCents === invoice.subtotalCents,
+  Schema.check(
+    Schema.makeFilter(
+      (invoice) =>
+        invoice.dueDate >= invoice.date &&
+        (invoice.duplicateReference === undefined ||
+          matchesInvoiceReference(
+            invoice.reference,
+            invoice.duplicateReference,
+          )) &&
+        invoice.lines.every(
+          (line) =>
+            line.quantity * line.unitAmountCents === line.lineAmountCents,
+        ) &&
+        invoice.lines.reduce((sum, line) => sum + line.lineAmountCents, 0) ===
+          invoice.totalCents &&
+        invoice.lines.reduce((sum, line) => sum + line.taxCents, 0) ===
+          invoice.taxCents &&
+        invoice.totalCents - invoice.taxCents === invoice.subtotalCents,
+    ),
   ),
 )
 export type DraftSalesInvoice = typeof DraftSalesInvoice.Type
 
-export const DraftInvoiceResult = Schema.Union(
+export const DraftInvoiceResult = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("created-draft"),
     invoiceId: XeroInvoiceId,
@@ -97,7 +106,7 @@ export const DraftInvoiceResult = Schema.Union(
       }),
     ),
   }),
-)
+])
 export type DraftInvoiceResult = typeof DraftInvoiceResult.Type
 
 export const matchesInvoiceReference = (
@@ -112,13 +121,11 @@ export const matchesInvoiceReference = (
 }
 
 /** Creates drafts only, for an already resolved contact; never updates contacts. */
-export class XeroDraftInvoice extends Context.Tag(
-  "@processfocus/plugin-xero/XeroDraftInvoice",
-)<
+export class XeroDraftInvoice extends Context.Service<
   XeroDraftInvoice,
   {
     readonly createIfAbsent: (
       invoice: DraftSalesInvoice,
     ) => Effect.Effect<DraftInvoiceResult, XeroInvoiceError>
   }
->() {}
+>()("@processfocus/plugin-xero/XeroDraftInvoice") {}

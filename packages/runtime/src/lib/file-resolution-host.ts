@@ -13,16 +13,14 @@ export interface FileResolutionRequest {
 }
 
 /** Provider-neutral file handoff capability supplied by a runtime host. */
-export class FileResolutionHost extends Context.Tag(
-  "@processfocus/runtime/FileResolutionHost",
-)<
+export class FileResolutionHost extends Context.Service<
   FileResolutionHost,
   {
     readonly resolveDownloadUrl: (
       request: FileResolutionRequest,
     ) => Effect.Effect<string, FileResolutionError, never>
   }
->() {}
+>()("@processfocus/runtime/FileResolutionHost") {}
 
 export const resolveFileDownloadUrl = (
   request: FileResolutionRequest,

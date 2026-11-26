@@ -83,7 +83,8 @@ type AnyStep = Step<
   Schema.Struct.Fields | undefined,
   string,
   boolean,
-  boolean>
+  boolean
+>
 
 export function assertSameProcess(step: AnyStep, process: Process) {
   if (step.process !== process) {

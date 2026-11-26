@@ -29,7 +29,6 @@ export function StepNode({ data }: NodeProps) {
   // how step nodes are created with proper typing in layout.ts
   const stepData = data as unknown as WorkflowStepData
 
-  // Get colors based on step type
   const colors = stepData.isSystemStep
     ? SYSTEM_STEP_COLORS
     : stepData.phaseIndex !== undefined

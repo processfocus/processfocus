@@ -450,5 +450,4 @@ class XplainParser extends CstParser {
   })
 }
 
-// Create singleton parser instance
 export const parser = new XplainParser()

@@ -2,7 +2,21 @@ import { JSDOM } from "jsdom"
 import { act } from "react"
 import type { Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import { FormComponentType } from "@pf/form-client-representation/types"
+
+vi.mock("../lib/organisation-form-loaders", async () => {
+  const { Schema } = await import("effect")
+  const schema = Schema.Struct({
+    name: Schema.String.check(
+      Schema.isMinLength(1, { message: "Name is required" }),
+    ).annotate({ title: "Name" }),
+  })
+  return {
+    organisationFormLoaders: {
+      "/employees/edit": async () => schema,
+      "/records/edit": async () => Schema.Struct({}),
+    },
+  }
+})
 
 const graphqlClient = { request: vi.fn() }
 
@@ -25,11 +39,15 @@ describe("ListItemEditForm", () => {
 
   afterEach(async () => {
     await act(async () => root.unmount())
+    // Radix restores focus in a deferred callback; keep its DOM realm alive.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     cleanupDom?.()
     vi.clearAllMocks()
   })
 
-  test("renders, validates, and submits an item through the structured definition", async () => {
+  test("renders, validates, and submits an item through the executable definition", async () => {
     const { ListItemEditForm } = await import(
       "../app/(protected)/lists/components/list-item-edit-form"
     )
@@ -49,22 +67,6 @@ describe("ListItemEditForm", () => {
           updateInputTypeName="UpdateEmployeesInput"
           deleteMutationName={null}
           defaultValues={{ name: "Grace Hopper" }}
-          formDefinition={{
-            components: {
-              name: {
-                _tag: FormComponentType.Text,
-                field: "name",
-                label: "Name",
-                required: true,
-              },
-            },
-            rules: [],
-          }}
-          jsonSchema={{
-            type: "object",
-            properties: { name: { type: "string", minLength: 1 } },
-            required: ["name"],
-          }}
           outputFields={["id", "name"]}
           onClose={onClose}
           onSaved={onSaved}
@@ -79,7 +81,7 @@ describe("ListItemEditForm", () => {
       !(form instanceof HTMLFormElement)
     ) {
       throw new Error(
-        "Expected the structured list form to render a name input",
+        "Expected the executable list form to render a name input",
       )
     }
     expect(container.textContent).toContain("Name")
@@ -105,6 +107,40 @@ describe("ListItemEditForm", () => {
     )
     expect(onSaved).toHaveBeenCalledOnce()
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  test("delete confirmation keeps its accessible description without nested paragraphs", async () => {
+    const { ListItemEditForm } = await import(
+      "../app/(protected)/lists/components/list-item-edit-form"
+    )
+    await act(async () => {
+      root.render(
+        <ListItemEditForm
+          itemId="record-1"
+          listName="Records"
+          listPath="/records"
+          updateMutationName={null}
+          updateInputTypeName={null}
+          deleteMutationName="deleteListItemRecords"
+          defaultValues={null}
+          outputFields={[]}
+          onClose={() => undefined}
+        />,
+      )
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>("button")?.click()
+    })
+    const dialog = document.querySelector('[role="dialog"]')
+    const descriptionId = dialog?.getAttribute("aria-describedby")
+    if (!descriptionId)
+      throw new Error("Expected an accessible dialog description")
+    const description = document.getElementById(descriptionId)
+    expect(description?.textContent).toContain(
+      "Delete item record-1 from Records?",
+    )
+    expect(description?.textContent).toContain("This action cannot be undone.")
+    expect(dialog?.querySelector("p p") === null).toBe(true)
   })
 })
 
@@ -155,8 +191,12 @@ const installDom = (): (() => void) => {
     HTMLElement: globalThis.HTMLElement,
     HTMLFormElement: globalThis.HTMLFormElement,
     HTMLInputElement: globalThis.HTMLInputElement,
+    CustomEvent: globalThis.CustomEvent,
+    MutationObserver: globalThis.MutationObserver,
+    getComputedStyle: globalThis.getComputedStyle,
     navigator: globalThis.navigator,
     Node: globalThis.Node,
+    NodeFilter: globalThis.NodeFilter,
     requestAnimationFrame: globalThis.requestAnimationFrame,
     cancelAnimationFrame: globalThis.cancelAnimationFrame,
     window: globalThis.window,
@@ -193,8 +233,12 @@ const installDom = (): (() => void) => {
     HTMLElement: dom.window.HTMLElement,
     HTMLFormElement: dom.window.HTMLFormElement,
     HTMLInputElement: dom.window.HTMLInputElement,
+    CustomEvent: dom.window.CustomEvent,
+    MutationObserver: dom.window.MutationObserver,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     navigator: dom.window.navigator,
     Node: dom.window.Node,
+    NodeFilter: dom.window.NodeFilter,
     requestAnimationFrame: (callback: FrameRequestCallback) => {
       callback(0)
       return 0

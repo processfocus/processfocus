@@ -21,27 +21,6 @@ describe("Step - Type-safe state accumulation", () => {
     mockRole = new Role(orgUnit, "mock", { name: "Mock Role" })
   })
 
-  it("should infer state from a single step with output", () => {
-    const process = new Process(orgUnit, "process", {
-      name: "Test",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", {
-      role: mockRole,
-      form: () => ({
-        name: ES.String,
-        age: ES.Number,
-      }),
-    })
-
-    const flow = process.start(step1)
-
-    // Type test: flow should have state { name: string, age: number }
-    // This is verified at compile time - no runtime check needed
-    expect(flow).toBeDefined()
-  })
-
   it("should accumulate state through chaining", () => {
     const process = new Process(orgUnit, "process", {
       name: "Test",
@@ -135,7 +114,7 @@ describe("Step - Type-safe state accumulation", () => {
       form: () => ({
         first_name: ES.String,
         last_name: ES.String,
-        start_date: ES.DateTimeUtc,
+        start_date: ES.DateTimeUtcFromString,
       }),
     })
 
@@ -173,8 +152,8 @@ describe("Step - Type-safe state accumulation", () => {
         condition: {
           fn: (state) => {
             // On start date
-            return DateTime.greaterThanOrEqualTo(
-              DateTime.unsafeNow(),
+            return DateTime.isGreaterThanOrEqualTo(
+              DateTime.nowUnsafe(),
               state.start_date,
             )
           },
@@ -187,8 +166,8 @@ describe("Step - Type-safe state accumulation", () => {
             const thirtyDaysAfterStart = DateTime.add(state.start_date, {
               days: 30,
             })
-            return DateTime.greaterThanOrEqualTo(
-              DateTime.unsafeNow(),
+            return DateTime.isGreaterThanOrEqualTo(
+              DateTime.nowUnsafe(),
               thirtyDaysAfterStart,
             )
           },

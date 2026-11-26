@@ -6,6 +6,7 @@ import type {
 import { newRxError } from "rxdb/plugins/core"
 import { replicateRxCollection } from "rxdb/plugins/replication"
 import { replicateGraphQL } from "rxdb/plugins/replication-graphql"
+import { map } from "rxjs"
 import type { Session } from "@pf/auth-session"
 import { isRealtimeRecipientId } from "@pf/auth-session/realtime-recipient"
 import { AppSyncEventsAdapter } from "../appsync-events/adapter"
@@ -13,6 +14,8 @@ import { getCookie } from "../appsync-events/client"
 import { matchesRealtimeSessionToken } from "../auth/realtime-session-token"
 import type { PullCheckpoint } from "../generated/gql/graphql"
 import { createGraphQLStream } from "./graphql-stream"
+
+const PULL_BATCH_SIZE = 100
 
 /**
  * Base type for all RxDB documents - must have id and updatedAt
@@ -58,6 +61,8 @@ interface BaseReplicationConfig<TDoc extends RxDbDocumentBase> {
    * Unique identifier for this replication (e.g., "draft-process-execution", "process")
    */
   replicationIdentifier: string
+  /** Unordered notifications cannot advance a durable pull checkpoint. */
+  streamMode?: "documents" | "resync"
 
   /**
    * Key to extract pull result from GraphQL response (e.g., "pullDraftProcessExecution", "pullProcess")
@@ -137,7 +142,7 @@ const createGraphQLReplication = <TDoc extends RxDbDocumentBase>(
     SyncOptionsGraphQL<TDoc, PullCheckpoint>["pull"]
   > = {
     queryBuilder: config.pullQueryBuilder,
-    batchSize: 50,
+    batchSize: PULL_BATCH_SIZE,
   }
 
   const baseConfig: SyncOptionsGraphQL<TDoc, PullCheckpoint> = {
@@ -210,7 +215,11 @@ const createGraphQLReplication = <TDoc extends RxDbDocumentBase>(
     : undefined
   // Own the stream subscription lifecycle without replacing the RxDB state,
   // documents, or checkpoints when graphql-ws sends a terminal frame.
-  if (stream && replication.pull) replication.pull.stream$ = stream.stream$
+  if (stream && replication.pull)
+    replication.pull.stream$ =
+      config.streamMode === "resync"
+        ? stream.stream$.pipe(map((): "RESYNC" => "RESYNC"))
+        : stream.stream$
   const cancel = replication.cancel.bind(replication)
   replication.cancel = () => {
     stream?.close()
@@ -284,8 +293,11 @@ const createAppSyncEventsReplication = async <TDoc extends RxDbDocumentBase>(
     deletedField: config.deletedField,
     pull: {
       handler: pullHandler,
-      batchSize: 50,
-      stream$: eventsAdapter.getStream(),
+      batchSize: PULL_BATCH_SIZE,
+      stream$:
+        config.streamMode === "resync"
+          ? eventsAdapter.getStream().pipe(map((): "RESYNC" => "RESYNC"))
+          : eventsAdapter.getStream(),
     },
     live: true,
     retryTime: 10000,

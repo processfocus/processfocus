@@ -1,4 +1,6 @@
-import { ExecutionsPageContent } from "../page"
+import { ExecutionsPageContent } from "../executions-client"
+
+export const instant = false
 
 export default async function ExecutionDetailPage({
   params,

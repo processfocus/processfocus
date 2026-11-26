@@ -27,7 +27,6 @@ export const fetchProcessWorkflowEffect = (processPath: string) =>
   Effect.gen(function* () {
     const graphql = yield* GraphQLService
 
-    // Fetch data via GraphQL service
     const data = yield* graphql
       .request<ProcessWorkflowQuery>(processWorkflowQuery, { processPath })
       .pipe(
@@ -40,9 +39,8 @@ export const fetchProcessWorkflowEffect = (processPath: string) =>
         ),
       )
 
-    // Validate processWorkflow exists
     if (!data.processWorkflow) {
-      yield* Effect.fail(
+      return yield* Effect.fail(
         new WorkflowDataError({
           reason: "missing_workflow",
           message: `No workflow data available for process: ${processPath}`,

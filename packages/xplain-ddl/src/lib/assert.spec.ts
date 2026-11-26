@@ -63,11 +63,11 @@ describe("Assert declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag !== "Left") {
+    expect(result._tag).toBe("Failure")
+    if (result._tag !== "Failure") {
       throw new Error("Expected validation errors")
     }
-    expect(result.left[0]?.message).toContain(
+    expect(result.failure[0]?.message).toContain(
       "Identifier 'missing attribute' not found in type 'process state' for assert 'single starter'",
     )
   })
@@ -80,11 +80,11 @@ describe("Assert declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag !== "Left") {
+    expect(result._tag).toBe("Failure")
+    if (result._tag !== "Failure") {
       throw new Error("Expected validation errors")
     }
-    expect(result.left[0]?.message).toContain("must be a boolean expression")
+    expect(result.failure[0]?.message).toContain("must be a boolean expression")
   })
 
   it("should reject static asserts that traverse unrelated paths", async () => {
@@ -96,11 +96,11 @@ describe("Assert declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag !== "Left") {
+    expect(result._tag).toBe("Failure")
+    if (result._tag !== "Failure") {
       throw new Error("Expected validation errors")
     }
-    expect(result.left[0]?.message).toContain(
+    expect(result.failure[0]?.message).toContain(
       "can only reference attributes on the same type",
     )
   })

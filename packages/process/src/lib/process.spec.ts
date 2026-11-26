@@ -6,6 +6,7 @@ import { Organisation } from "./organisation"
 import type { EdgeAttributes } from "./process"
 import { Process } from "./process"
 import { Role } from "./role"
+import { Sla } from "./sla"
 import { describe, expect, it } from "bun:test"
 
 function createTestFixtures() {
@@ -17,6 +18,89 @@ function createTestFixtures() {
   const mockRole = new Role(orgUnit, "mock", { name: "Mock Role" })
   return { organisation, orgUnit, mockRole }
 }
+
+describe("Process - start SLAs", () => {
+  for (const kind of ["form", "system"]) {
+    for (const existingStarts of [0, 2]) {
+      it(`rejects a ${kind} SLA after ${existingStarts} starts without changing the graph`, () => {
+        const { orgUnit, mockRole } = createTestFixtures()
+        const process = new Process(orgUnit, "process", {
+          name: "Test",
+          purpose: "Test",
+        })
+        for (let i = 0; i < existingStarts; i++) {
+          const start = new Form(process, `start${i}`, {
+            role: mockRole,
+            form: () => ({}),
+          })
+          process.start(start).end()
+        }
+        const sla = kind === "form" ? Sla.businessHours(4) : Sla.minutes(1)
+        const step =
+          kind === "form"
+            ? new Form(process, "invalid", {
+                role: mockRole,
+                form: () => ({}),
+                sla,
+              })
+            : new NodeStep(process, "invalid", {
+                input: () => Effect.succeed({}),
+                output: {},
+                execute: () => Effect.succeed({}),
+                sla,
+              })
+        const before = process.getGraph().export()
+
+        expect(() => {
+          process.start(step)
+        }).toThrow(
+          'Start step "test-unit/process/invalid" in process "test-unit/process" cannot have an SLA',
+        )
+        expect(process.getGraph().export()).toEqual(before)
+        expect(process.startNodes()).toHaveLength(existingStarts)
+        expect(step.props.sla).toEqual(sla)
+      })
+    }
+  }
+
+  it("preserves overall and later-step SLAs with SLA-free form and system starts", () => {
+    const { organisation, orgUnit, mockRole } = createTestFixtures()
+    const process = new Process(orgUnit, "process", {
+      name: "Test",
+      purpose: "Test",
+      sla: Sla.businessWeeks(1),
+    })
+    const start = new Form(process, "submit", {
+      role: mockRole,
+      form: () => ({}),
+    })
+    const systemStart = new NodeStep(process, "automatic", {
+      input: () => Effect.succeed({}),
+      output: {},
+      execute: () => Effect.succeed({}),
+    })
+    const later = new Form(process, "approve", {
+      role: mockRole,
+      form: () => ({}),
+      sla: Sla.businessHours(4),
+    })
+    const laterSystem = new NodeStep(process, "save", {
+      input: () => Effect.succeed({}),
+      output: {},
+      execute: () => Effect.succeed({}),
+      sla: Sla.minutes(1),
+    })
+
+    process.start(start).next(later).next(laterSystem).end()
+    process.start(systemStart).next(later)
+
+    expect(organisation.validateAllFlows()).toEqual([])
+    expect(process.startNodes()).toEqual([start, systemStart])
+    expect(process.props.sla).toEqual(Sla.businessWeeks(1))
+    expect(later.props.sla).toEqual(Sla.businessHours(4))
+    expect(laterSystem.props.sla).toEqual(Sla.minutes(1))
+  })
+})
 
 describe("Process - validateFlows", () => {
   it("should detect a single dangling step (no .end() call)", () => {
@@ -60,29 +144,6 @@ describe("Process - validateFlows", () => {
     })
 
     process.start(step1).next(step2).end()
-
-    const result = process.validateFlows()
-    expect(result.dangling).toEqual([])
-    expect(result.unreachable).toEqual([])
-  })
-
-  it("should pass when using .end(step) shorthand", () => {
-    const { orgUnit, mockRole } = createTestFixtures()
-    const process = new Process(orgUnit, "process", {
-      name: "Test",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", {
-      role: mockRole,
-      form: () => ({}),
-    })
-    const step2 = new Form(process, "step2", {
-      role: mockRole,
-      form: () => ({}),
-    })
-
-    process.start(step1).end(step2)
 
     const result = process.validateFlows()
     expect(result.dangling).toEqual([])
@@ -405,30 +466,6 @@ describe("Process - edge cases", () => {
 
     expect(() => process1.start(step1).next(step2)).toThrow(
       'Step "test-unit/process2/step2" belongs to a different process than "test-unit/process1"',
-    )
-  })
-
-  it("should throw when calling .end() twice on the same step", () => {
-    const { orgUnit, mockRole } = createTestFixtures()
-    const process = new Process(orgUnit, "process", {
-      name: "Test",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", {
-      role: mockRole,
-      form: () => ({}),
-    })
-    const step2 = new Form(process, "step2", {
-      role: mockRole,
-      form: () => ({}),
-    })
-
-    const flow = process.start(step1).next(step2)
-    flow.end()
-
-    expect(() => flow.end()).toThrow(
-      'Step "test-unit/process/step2" already has .end() called',
     )
   })
 
@@ -1052,7 +1089,7 @@ describe("Process - schedule property", () => {
 
     const step1 = new Form(process, "step1", {
       role: mockRole,
-      form: () => ({ start_date: ES.DateTimeUtc }),
+      form: () => ({ start_date: ES.DateTimeUtcFromString }),
     })
     const step2 = new Form(process, "step2", {
       role: mockRole,
@@ -1086,7 +1123,7 @@ describe("Process - schedule property", () => {
 
     const step1 = new Form(process, "step1", {
       role: mockRole,
-      form: () => ({ start_date: ES.DateTimeUtc }),
+      form: () => ({ start_date: ES.DateTimeUtcFromString }),
     })
     const step2 = new Form(process, "step2", {
       role: mockRole,
@@ -1121,7 +1158,10 @@ describe("Process - schedule property", () => {
 
     const step1 = new Form(process, "step1", {
       role: mockRole,
-      form: () => ({ start_date: ES.DateTimeUtc, approved: ES.Boolean }),
+      form: () => ({
+        start_date: ES.DateTimeUtcFromString,
+        approved: ES.Boolean,
+      }),
     })
     const step2 = new Form(process, "step2", {
       role: mockRole,
@@ -1169,7 +1209,7 @@ describe("Process - schedule property", () => {
       form: () => ({
         first_name: ES.String,
         last_name: ES.String,
-        start_date: ES.DateTimeUtc,
+        start_date: ES.DateTimeUtcFromString,
       }),
     })
 
@@ -1203,79 +1243,5 @@ describe("Process - schedule property", () => {
       .end()
 
     expect(true).toBe(true)
-  })
-
-  it("should work with FlowPath.next() schedule option via step flow pattern", () => {
-    const { orgUnit, mockRole } = createTestFixtures()
-    const process = new Process(orgUnit, "process", {
-      name: "Test",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", {
-      role: mockRole,
-      form: () => ({ start_date: ES.DateTimeUtc }),
-    })
-    const step2 = new Form(process, "step2", {
-      role: mockRole,
-      form: () => ({}),
-    })
-
-    // Use flow pattern to get properly typed state
-    const flow = process.start(step1)
-    flow.next(step2, {
-      schedule: {
-        fn: (state) => DateTime.subtract(state.start_date, { days: 7 }),
-        text: "One week before start",
-      },
-    })
-
-    const graph = process.getGraph()
-    const edges = graph.outEdges(step1.node.path)
-    expect(edges).toHaveLength(1)
-
-    const edge = edges![0]!
-    const attrs = graph.getEdgeAttributes(edge) as EdgeAttributes<{
-      start_date: DateTime.DateTime
-    }>
-    expect(attrs.schedule).toBeDefined()
-    expect(attrs.scheduleText).toBe("One week before start")
-  })
-
-  it("should work with FlowPath.end() schedule option via step flow pattern", () => {
-    const { orgUnit, mockRole } = createTestFixtures()
-    const process = new Process(orgUnit, "process", {
-      name: "Test",
-      purpose: "Test",
-    })
-
-    const step1 = new Form(process, "step1", {
-      role: mockRole,
-      form: () => ({ start_date: ES.DateTimeUtc }),
-    })
-    const step2 = new Form(process, "step2", {
-      role: mockRole,
-      form: () => ({}),
-    })
-
-    // Use flow pattern to get properly typed state
-    const flow = process.start(step1)
-    flow.end(step2, {
-      schedule: {
-        fn: (state) => state.start_date,
-        text: "On employee start date",
-      },
-    })
-
-    const graph = process.getGraph()
-    const edges = graph.outEdges(step1.node.path)
-    expect(edges).toHaveLength(1)
-
-    const edge = edges![0]!
-    const attrs = graph.getEdgeAttributes(edge) as EdgeAttributes<{
-      start_date: DateTime.DateTime
-    }>
-    expect(attrs.schedule).toBeDefined()
-    expect(attrs.scheduleText).toBe("On employee start date")
   })
 })

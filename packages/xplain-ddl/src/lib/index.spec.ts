@@ -59,10 +59,10 @@ describe("Index declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const errorMessage = result.left[0]?.message || ""
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const errorMessage = result.failure[0]?.message || ""
       expect(errorMessage).toContain(
         "Index attributes must be simple attribute names",
       )
@@ -81,9 +81,9 @@ describe("Index declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 })

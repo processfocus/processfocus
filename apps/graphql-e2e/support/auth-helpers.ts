@@ -1,4 +1,7 @@
 import { Data, Effect, Schedule } from "effect"
+import { FetchHttpClient } from "effect/http"
+import { exchangeWorkloadAccess } from "@pf/auth-session"
+import { createWorkloadSessionSource } from "@pf/auth-session/github-workload-client"
 import {
   getAuthUrl as getAuthUrlBase,
   getBaseUrl,
@@ -9,6 +12,7 @@ import {
   getGraphqlEndpointFromPortFile,
 } from "@pf/frontend-endpoints/port-files"
 import { withPausedLocalWorker } from "./local-worker-pause"
+import { providerUser } from "./provider-user"
 import { sleep } from "./sleep"
 
 /**
@@ -41,7 +45,63 @@ interface RequestRoleResponse {
 
 // E2E starts one short-lived runtime per process, so these tokens do not need TTL eviction.
 const roleAuthCache = new Map<string, AuthResponse>()
-const providerUserAuthCache = new Map<string, AuthResponse>()
+
+const makeWorkloadSource = () => {
+  const assertionAudience = process.env["PF_WORKLOAD_AUDIENCE"]
+  if (!assertionAudience)
+    throw new Error("PF_WORKLOAD_AUDIENCE is required for OIDC test sign-in")
+  return Effect.runPromise(
+    createWorkloadSessionSource({
+      tokenEndpoint: `${getAuthUrl()}/oauth/token`,
+      graphqlEndpoint: getGraphqlEndpoint(),
+      assertionAudience,
+      jobCapability: () => ({
+        requestUrl: process.env["ACTIONS_ID_TOKEN_REQUEST_URL"],
+        requestToken: process.env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"],
+      }),
+    }).pipe(Effect.provide(FetchHttpClient.layer)),
+  )
+}
+let workloadSource: ReturnType<typeof makeWorkloadSource> | undefined
+const workloadScopes = new Map<string, string | undefined>()
+const authenticateWorkload = async (
+  scope?: string,
+  requestPermission = true,
+): Promise<AuthResponse> => {
+  workloadSource ??= makeWorkloadSource()
+  const source = await workloadSource
+  try {
+    const result = await Effect.runPromise(
+      source.acquire(requestPermission ? scope : undefined),
+    )
+    let accessToken = result.accessToken
+    if (scope && !requestPermission) {
+      // Negative scope tests deliberately omit the permission-request step.
+      const exchanged = await exchangeWorkloadAccess({
+        endpoint: `${getAuthUrl()}/oauth/token`,
+        accessToken,
+        scope,
+      })
+      if (exchanged.err) return { error: "invalid_scope" }
+      accessToken = exchanged.tokens.access
+    }
+    workloadScopes.set(accessToken, scope)
+    return { access_token: accessToken }
+  } catch (error) {
+    if (!scope) throw error
+    return {
+      error: "invalid_scope",
+      error_description: "Workload scope acquisition rejected",
+    }
+  }
+}
+
+export const renewWorkloadToken = async (token: string): Promise<string> => {
+  if (!workloadScopes.has(token)) return token
+  const result = await authenticateWorkload(workloadScopes.get(token))
+  if (!result.access_token) throw new Error("Workload renewal failed")
+  return result.access_token
+}
 
 const transientGraphqlFailureMarkers = [
   "Database operation failed",
@@ -210,8 +270,8 @@ const authenticateWithClient = (
     return result
   }).pipe(
     Effect.retry({
-      schedule: Schedule.exponential("150 millis").pipe(
-        Schedule.compose(Schedule.recurs(5)),
+      schedule: Schedule.exponential("150 millis").pipe((schedule) =>
+        Schedule.max([schedule, Schedule.recurs(5)]),
       ),
       while: (e) => e instanceof TransientAuthError,
     }),
@@ -230,7 +290,9 @@ const authenticate = (scope?: string) =>
   })
 
 export const runAuthenticate = (scope?: string): Promise<AuthResponse> =>
-  Effect.runPromise(authenticate(scope))
+  process.env["PF_AUTH_MODE"] === "oidc"
+    ? authenticateWorkload(scope, false)
+    : Effect.runPromise(authenticate(scope))
 
 export const runAuthenticateAsFrontend = (): Promise<AuthResponse> => {
   const frontendJwtToken = process.env["FRONTEND_JWT_TOKEN"]
@@ -315,74 +377,6 @@ const requestRole = async (
 }
 
 /**
- * Call the requestProviderUserPermissions GraphQL mutation to pre-authorize an email for M2M access.
- * This writes to permitted_client_email table and must be called before
- * authenticating with an email scope.
- */
-const requestProviderUserPermissions = async (
-  accessToken: string,
-  email: string,
-): Promise<{ success: boolean; error?: string }> => {
-  const maxAttempts = 4
-
-  for (let attempt = 1; ; attempt++) {
-    const response = await postGraphqlWithRetry(accessToken, {
-      query: `
-        mutation RequestProviderUserPermissions($email: String!) {
-          requestProviderUserPermissions(email: $email) {
-            success
-            error
-          }
-        }
-      `,
-      variables: { email },
-    })
-    const result = (await response.json()) as {
-      data?: {
-        requestProviderUserPermissions: {
-          success: boolean
-          error?: string
-        }
-      }
-      errors?: Array<{ message: string }>
-    }
-    if (result.errors?.length) {
-      const error = result.errors[0]?.message ?? "Unknown error"
-      console.error(
-        `[requestProviderUserPermissions] GraphQL errors for ${email}:`,
-        result.errors,
-      )
-      if (isTransientGraphqlFailure(error) && attempt < maxAttempts) {
-        await sleep(150 * attempt)
-        continue
-      }
-      return {
-        success: false,
-        error,
-      }
-    }
-    const permResult = result.data?.requestProviderUserPermissions ?? {
-      success: false,
-      error: "Request failed",
-    }
-    if (!permResult.success) {
-      console.error(
-        `[requestProviderUserPermissions] Failed for ${email}:`,
-        permResult.error,
-      )
-      if (
-        isTransientGraphqlFailure(permResult.error) &&
-        attempt < maxAttempts
-      ) {
-        await sleep(150 * attempt)
-        continue
-      }
-    }
-    return permResult
-  }
-}
-
-/**
  * Authenticate M2M client with a role using the two-step flow.
  *
  * This makes TWO authentication calls:
@@ -396,6 +390,8 @@ const requestProviderUserPermissions = async (
 export const runAuthenticateWithRole = async (
   role: string,
 ): Promise<AuthResponse> => {
+  if (process.env["PF_AUTH_MODE"] === "oidc")
+    return authenticateWorkload(`role:${encodeURIComponent(role)}`)
   const cached = roleAuthCache.get(role)
   if (cached?.access_token) {
     return cached
@@ -438,48 +434,9 @@ export const runAuthenticateWithRole = async (
   })
 }
 
-/**
- * Authenticate M2M client as a provider user using the two-step flow.
- *
- * This makes TWO authentication calls:
- *   1. Authenticate without email to get base token
- *   2. Call requestProviderUserPermissions GraphQL mutation (Cedar authorization)
- *   3. Re-authenticate with email scope
- */
+/** Reuse only credentials acquired by the shared normal Passkey login fixture. */
 export const runAuthenticateAsProviderUser = async (
   email: string,
 ): Promise<AuthResponse> => {
-  const cached = providerUserAuthCache.get(email)
-  if (cached?.access_token) {
-    return cached
-  }
-
-  // Step 1: Get base token (no email scope)
-  const baseAuth = await runAuthenticate()
-  if (!baseAuth.access_token) {
-    return baseAuth // Return error
-  }
-  const baseAccessToken = baseAuth.access_token
-
-  return await withPausedLocalWorker(async () => {
-    // Step 2: Request provider user permission via GraphQL mutation
-    const permResult = await requestProviderUserPermissions(
-      baseAccessToken,
-      email,
-    )
-    if (!permResult.success) {
-      return {
-        error: "invalid_scope",
-        error_description:
-          permResult.error ?? "Email permission request failed",
-      }
-    }
-
-    // Step 3: Re-authenticate with email scope
-    const result = await runAuthenticate(`email:${email}`)
-    if (result.access_token) {
-      providerUserAuthCache.set(email, result)
-    }
-    return result
-  })
+  return { access_token: await (await providerUser(email)).credentials() }
 }

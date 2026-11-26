@@ -15,7 +15,7 @@ export const RESEND_PUBLIC_COMPLETION_ENVIRONMENT_TAG_NAME =
 export const RESEND_PUBLIC_COMPLETION_INVITATION_ATTEMPT_TAG_NAME =
   "pf_public_completion_invitation_attempt_id"
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 const RESEND_FAILURE_EVENT_TYPES = [
   "email.failed",
@@ -366,7 +366,7 @@ const getFailureForEventType = (
 export const decodeResendWebhookPayload = (
   rawBody: string,
 ): Effect.Effect<ResendWebhookPayload, InvalidResendWebhookPayloadError> =>
-  Schema.decodeUnknown(JsonValue)(rawBody).pipe(
+  Schema.decodeUnknownEffect(JsonValue)(rawBody).pipe(
     Effect.map((value) => value as ResendWebhookPayload),
     Effect.mapError(
       (error) => new InvalidResendWebhookPayloadError({ cause: error }),

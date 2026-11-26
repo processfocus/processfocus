@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { HttpClient, HttpClientRequest } from "@effect/platform"
 import { Effect, Schema } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/http"
 import { CliError } from "../errors"
 import {
   type Credentials,
@@ -14,7 +14,7 @@ const AUTH_LOGIN_HINT =
 const LOCALHOST_HOSTS = new Set(["localhost", "127.0.0.1"])
 const DEFAULT_GRAPHQL_PORT = 4000
 
-const GraphqlPortFileSchema = Schema.parseJson(
+const GraphqlPortFileSchema = Schema.fromJsonString(
   Schema.Struct({ port: Schema.Number }),
 )
 
@@ -24,12 +24,12 @@ const GraphqlErrorSchema = Schema.Struct({
 
 const GraphqlResponseSchema = Schema.Struct({
   data: Schema.optional(
-    Schema.NullOr(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+    Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
   ),
   errors: Schema.optional(Schema.Array(GraphqlErrorSchema)),
 })
 
-const ParsedGraphqlResponseSchema = Schema.parseJson(GraphqlResponseSchema)
+const ParsedGraphqlResponseSchema = Schema.fromJsonString(GraphqlResponseSchema)
 
 const redactAccessToken = (message: string, accessToken: string): string =>
   message.replaceAll(accessToken, "[REDACTED]")
@@ -96,7 +96,7 @@ export const graphqlRequest = (
       "Content-Type": "application/json",
       Authorization: `Bearer ${credentials.accessToken}`,
     })
-    request = HttpClientRequest.bodyUnsafeJson(request, {
+    request = HttpClientRequest.bodyJsonUnsafe(request, {
       query,
       variables: options.variables ?? {},
     })
@@ -113,7 +113,12 @@ export const graphqlRequest = (
       return yield* new CliError({ message: AUTH_LOGIN_HINT })
     }
 
-    if (response.status < 200 || response.status >= 300) {
+    // Yoga returns GraphQL validation errors with HTTP 400. Preserve their
+    // actionable messages and the same credential redaction as execution errors.
+    if (
+      response.status !== 400 &&
+      (response.status < 200 || response.status >= 300)
+    ) {
       return yield* new CliError({
         message: `GraphQL request failed with status ${String(response.status)}`,
       })
@@ -129,9 +134,9 @@ export const graphqlRequest = (
       ),
     )
 
-    const result = yield* Schema.decodeUnknown(ParsedGraphqlResponseSchema)(
-      body,
-    ).pipe(
+    const result = yield* Schema.decodeUnknownEffect(
+      ParsedGraphqlResponseSchema,
+    )(body).pipe(
       Effect.mapError(
         (cause) =>
           new CliError({
@@ -155,6 +160,12 @@ export const graphqlRequest = (
           errorMessage,
           credentials.accessToken,
         )}`,
+      })
+    }
+
+    if (response.status === 400) {
+      return yield* new CliError({
+        message: "GraphQL request failed with status 400",
       })
     }
 

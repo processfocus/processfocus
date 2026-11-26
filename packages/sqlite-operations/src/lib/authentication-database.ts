@@ -14,7 +14,7 @@ import {
   or,
   sql,
 } from "drizzle-orm"
-import { Data, DateTime, Effect, Either, Layer, Option, Stream } from "effect"
+import { Data, DateTime, Effect, Layer, Option, Result, Stream } from "effect"
 import {
   AuthenticationDatabase,
   type CreatePasskeyCredentialInput,
@@ -31,7 +31,7 @@ import {
   type RemovePasskeyCredentialResult,
   mapQueryError,
   mapWriteError,
-} from "@pf/auth-api"
+} from "@pf/auth-api/issuer"
 
 const REGISTRATION_SESSION_TOKEN_BYTES = 32
 
@@ -61,10 +61,7 @@ import {
 import { StorageError, StorageService } from "@pf/openauth"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { SqliteDelegationDatabaseLive } from "./delegation-database.js"
-import {
-  isTransientSqliteError,
-  retryTransientSqliteError,
-} from "./transient-sqlite-error"
+import { retryTransientSqliteError } from "./transient-sqlite-error"
 
 export { isSqliteBusy, isTransientSqliteError } from "./transient-sqlite-error"
 
@@ -161,17 +158,17 @@ const AuthenticationDatabaseLive = Layer.effect(
               and(
                 eq(schema.providerUser.userId, userId),
                 eq(schema.providerUser.email, email),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
                 eq(schema.invitation.email, email),
                 inArray(schema.invitation.invitationStatus, [
                   InvitationLifecycleStatus.Accepted,
                   InvitationLifecycleStatus.LegacyClosed,
                 ]),
-                eq(schema.invitation._deleted, false),
+                eq(schema.invitation._deleted, sql`0`),
               ),
             )
             .limit(1)
-          return Option.fromNullable(rows[0]?.id)
+          return Option.fromNullishOr(rows[0]?.id)
         }).pipe(mapQueryError("Failed to find recovery invitation")),
       findRootOrgUnit: () =>
         Effect.gen(function* () {
@@ -211,9 +208,9 @@ const AuthenticationDatabaseLive = Layer.effect(
               and(
                 eq(schema.user.provider, provider),
                 eq(schema.user.sub, sub),
-                eq(schema.providerUser._deleted, false),
-                eq(schema.user._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
+                eq(schema.user._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -250,9 +247,9 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 sql`lower(${schema.providerUser.email}) = ${email.toLowerCase()}`,
-                eq(schema.providerUser._deleted, false),
-                eq(schema.user._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
+                eq(schema.user._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -287,9 +284,9 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.id, id),
-                eq(schema.providerUser._deleted, false),
-                eq(schema.user._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
+                eq(schema.user._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -324,9 +321,9 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.userId, userId),
-                eq(schema.providerUser._deleted, false),
-                eq(schema.user._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
+                eq(schema.user._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -347,15 +344,12 @@ const AuthenticationDatabaseLive = Layer.effect(
 
       createProviderUser: (input: CreateProviderUserInput) =>
         Effect.gen(function* () {
-          const now = yield* DateTime.now
-
           // First, create the user record
           const userResult = yield* db
             .insert(schema.user)
             .values({
               provider: input.provider,
               sub: input.sub,
-              lastLoggedIn: now,
             })
             .returning()
 
@@ -421,9 +415,9 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.passkeyCredential.passkeyCredentialId, credentialId),
-                eq(schema.passkeyCredential._deleted, false),
-                eq(schema.user._deleted, false),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.passkeyCredential._deleted, sql`0`),
+                eq(schema.user._deleted, sql`0`),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -480,7 +474,7 @@ const AuthenticationDatabaseLive = Layer.effect(
           .where(
             and(
               eq(schema.passkeyCredential.userId, userId),
-              eq(schema.passkeyCredential._deleted, false),
+              eq(schema.passkeyCredential._deleted, sql`0`),
             ),
           )
           .orderBy(
@@ -611,16 +605,6 @@ const AuthenticationDatabaseLive = Layer.effect(
           .pipe(Effect.map((rows) => rows.length === 1))
           .pipe(mapWriteError("Failed to advance passkey credential counter")),
 
-      updateLastLoggedIn: (userId: string, lastLoggedIn: DateTime.Utc) =>
-        db
-          .update(schema.user)
-          .set({ lastLoggedIn })
-          .where(eq(schema.user.id, userId))
-          .pipe(
-            mapWriteError("Failed to update last logged in"),
-            Effect.asVoid,
-          ),
-
       updateProviderUserProfilePicture: (userId: string, picture: string) =>
         db
           .update(schema.providerUser)
@@ -639,7 +623,7 @@ const AuthenticationDatabaseLive = Layer.effect(
               config: schema.oauthProvider.providerConfig,
             })
             .from(schema.oauthProvider)
-            .where(eq(schema.oauthProvider._deleted, false))
+            .where(eq(schema.oauthProvider._deleted, sql`0`))
 
           return results.map((row) => ({
             name: row.name,
@@ -658,7 +642,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.oauthProvider.providerName, name),
-                eq(schema.oauthProvider._deleted, false),
+                eq(schema.oauthProvider._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -691,9 +675,9 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.userId, userId),
-                eq(schema.providerUserRole._deleted, false),
-                eq(schema.providerUser._deleted, false),
-                eq(schema.role._deleted, false),
+                eq(schema.providerUserRole._deleted, sql`0`),
+                eq(schema.providerUser._deleted, sql`0`),
+                eq(schema.role._deleted, sql`0`),
               ),
             )
 
@@ -720,9 +704,9 @@ const AuthenticationDatabaseLive = Layer.effect(
               and(
                 eq(schema.invitation.invitationPendingEmail, normalizedEmail),
                 eq(schema.invitation.invitationStatus, "pending"),
-                eq(schema.invitation._deleted, false),
-                eq(schema.invitationRole._deleted, false),
-                eq(schema.role._deleted, false),
+                eq(schema.invitation._deleted, sql`0`),
+                eq(schema.invitationRole._deleted, sql`0`),
+                eq(schema.role._deleted, sql`0`),
               ),
             )
 
@@ -739,7 +723,7 @@ const AuthenticationDatabaseLive = Layer.effect(
               and(
                 eq(schema.invitation.invitationPendingEmail, normalizedEmail),
                 eq(schema.invitation.invitationStatus, "pending"),
-                eq(schema.invitation._deleted, false),
+                eq(schema.invitation._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -755,7 +739,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.userId, input.userId),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -839,7 +823,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.oauthProvider.providerName, "passkey"),
-                eq(schema.oauthProvider._deleted, false),
+                eq(schema.oauthProvider._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -860,7 +844,7 @@ const AuthenticationDatabaseLive = Layer.effect(
               and(
                 eq(schema.invitation.registrationTokenHash, tokenHash),
                 eq(schema.invitation.invitationStatus, "pending"),
-                eq(schema.invitation._deleted, false),
+                eq(schema.invitation._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -876,7 +860,7 @@ const AuthenticationDatabaseLive = Layer.effect(
           }
 
           // Link expiry is enforced at exchange only.
-          if (DateTime.lessThanOrEqualTo(invitation.expiresAt, now)) {
+          if (DateTime.isLessThanOrEqualTo(invitation.expiresAt, now)) {
             return Option.none<RegistrationSessionExchangeResult>()
           }
 
@@ -891,8 +875,8 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.invitationRole.invitationId, invitation.id),
-                eq(schema.invitationRole._deleted, false),
-                eq(schema.role._deleted, false),
+                eq(schema.invitationRole._deleted, sql`0`),
+                eq(schema.role._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -907,7 +891,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.email, invitation.pendingEmail),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -952,7 +936,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.oauthProvider.providerName, "passkey"),
-                eq(schema.oauthProvider._deleted, false),
+                eq(schema.oauthProvider._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -986,7 +970,7 @@ const AuthenticationDatabaseLive = Layer.effect(
                   schema.registrationSession.registrationSessionTokenHash,
                   sessionHash,
                 ),
-                eq(schema.registrationSession._deleted, false),
+                eq(schema.registrationSession._deleted, sql`0`),
                 gt(
                   schema.registrationSession.registrationSessionExpiresAt,
                   now,
@@ -1017,8 +1001,8 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.invitationRole.invitationId, row.invitationId),
-                eq(schema.invitationRole._deleted, false),
-                eq(schema.role._deleted, false),
+                eq(schema.invitationRole._deleted, sql`0`),
+                eq(schema.role._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -1032,7 +1016,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.email, row.pendingEmail),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -1076,7 +1060,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 inArray(schema.role.path, paths as string[]),
-                eq(schema.role._deleted, false),
+                eq(schema.role._deleted, sql`0`),
               ),
             )
           return results.map((r) => r.id)
@@ -1093,7 +1077,7 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.userId, providerUserId),
-                eq(schema.providerUser._deleted, false),
+                eq(schema.providerUser._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -1118,16 +1102,38 @@ const AuthenticationDatabaseLive = Layer.effect(
           )
         }).pipe(mapWriteError("Failed to assign provider user roles")),
 
+      enrollProjectWorkload: (clientId, expected, enrolled) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now
+          const rows = yield* db
+            .update(schema.oauthClient)
+            .set({
+              workloadTrust: enrolled,
+              updatedAt: now,
+              updatedBy: `workload-enrollment:${clientId}`,
+            })
+            .where(
+              and(
+                eq(schema.oauthClient.clientId, clientId),
+                eq(schema.oauthClient._deleted, false),
+                eq(schema.oauthClient.workloadTrust, expected),
+              ),
+            )
+            .returning({ id: schema.oauthClient.id })
+          return rows.length === 1
+        }).pipe(mapWriteError("Failed to enroll project workload")),
+
       findAllOAuthClients: () =>
         Effect.gen(function* () {
           const results = yield* db
             .select({
               clientId: schema.oauthClient.clientId,
               secretHash: schema.oauthClient.clientSecretHash,
+              workloadTrust: schema.oauthClient.workloadTrust,
               audience: schema.oauthClient.audience,
             })
             .from(schema.oauthClient)
-            .where(eq(schema.oauthClient._deleted, false))
+            .where(eq(schema.oauthClient._deleted, sql`0`))
 
           return results satisfies OAuthClientRecord[]
         }).pipe(mapQueryError("Failed to list OAuth clients")),
@@ -1138,13 +1144,14 @@ const AuthenticationDatabaseLive = Layer.effect(
             .select({
               clientId: schema.oauthClient.clientId,
               secretHash: schema.oauthClient.clientSecretHash,
+              workloadTrust: schema.oauthClient.workloadTrust,
               audience: schema.oauthClient.audience,
             })
             .from(schema.oauthClient)
             .where(
               and(
                 eq(schema.oauthClient.clientId, clientId),
-                eq(schema.oauthClient._deleted, false),
+                eq(schema.oauthClient._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -1165,25 +1172,20 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 inArray(schema.role.path, paths as string[]),
-                eq(schema.role._deleted, false),
+                eq(schema.role._deleted, sql`0`),
               ),
             )
 
           return results.map((r) => r.path)
         }).pipe(mapQueryError("Failed to validate role paths")),
 
-      upsertM2MUser: (
-        clientId: string,
-        lastLoggedIn: DateTime.Utc,
-        options?: { readonly updateLastLoggedIn?: boolean },
-      ) =>
+      upsertM2MUser: (clientId: string, createdAt: DateTime.Utc) =>
         Effect.gen(function* () {
           const M2M_PROVIDER = "client_credentials"
-          const shouldUpdateLastLoggedIn = options?.updateLastLoggedIn !== false
           const m2mUserWhere = and(
             eq(schema.user.provider, M2M_PROVIDER),
             eq(schema.user.sub, clientId),
-            eq(schema.user._deleted, false),
+            eq(schema.user._deleted, sql`0`),
           )
           const findExistingM2MUser = () =>
             db
@@ -1191,34 +1193,6 @@ const AuthenticationDatabaseLive = Layer.effect(
               .from(schema.user)
               .where(m2mUserWhere)
               .limit(1)
-
-          if (shouldUpdateLastLoggedIn) {
-            const updated = yield* db
-              .update(schema.user)
-              .set({
-                lastLoggedIn,
-                updatedAt: lastLoggedIn,
-              })
-              .where(m2mUserWhere)
-              .returning({ id: schema.user.id })
-              .pipe(
-                retryTransientSqliteError,
-                Effect.catchAll((error) =>
-                  isTransientSqliteError(error)
-                    ? Effect.logWarning(
-                        "Non-critical last_logged_in update failed, continuing authentication",
-                      ).pipe(
-                        Effect.annotateLogs({ error, clientId }),
-                        Effect.as([] as Array<{ id: string }>),
-                      )
-                    : Effect.fail(error),
-                ),
-              )
-
-            if (updated[0]) {
-              return updated[0].id
-            }
-          }
 
           const existing = yield* findExistingM2MUser()
 
@@ -1230,42 +1204,86 @@ const AuthenticationDatabaseLive = Layer.effect(
           const insertM2MUser = db.insert(schema.user).values({
             provider: M2M_PROVIDER,
             sub: clientId,
-            lastLoggedIn,
-            createdAt: lastLoggedIn,
-            updatedAt: lastLoggedIn,
+            createdAt,
+            updatedAt: createdAt,
             createdBy: "SYSTEM",
             updatedBy: "SYSTEM",
           })
 
-          const insertResult = shouldUpdateLastLoggedIn
-            ? yield* insertM2MUser
-                .onConflictDoUpdate({
-                  target: [schema.user.provider, schema.user.sub],
-                  targetWhere: sql`_deleted = 0`,
-                  set: {
-                    lastLoggedIn,
-                    updatedAt: lastLoggedIn,
-                  },
-                })
-                .returning({ id: schema.user.id })
-                .pipe(retryTransientSqliteError, Effect.either)
-            : yield* insertM2MUser
-                .returning({ id: schema.user.id })
-                .pipe(retryTransientSqliteError, Effect.either)
+          const insertResult = yield* insertM2MUser
+            .returning({ id: schema.user.id })
+            .pipe(retryTransientSqliteError, Effect.result)
 
-          if (Either.isLeft(insertResult)) {
+          if (Result.isFailure(insertResult)) {
             const racedExisting = yield* findExistingM2MUser()
 
             if (racedExisting[0]) {
               return racedExisting[0].id
             }
 
-            return yield* Effect.fail(insertResult.left)
+            return yield* Effect.fail(insertResult.failure)
           }
 
-          const newUser = yield* returnedRow(insertResult.right)
+          const newUser = yield* returnedRow(insertResult.success)
           return newUser.id
         }).pipe(mapWriteError("Failed to upsert M2M user")),
+
+      prepareRoleSwitch: ({ key, value, expiresAt }) =>
+        db
+          .insert(schema.oauthStorage)
+          .values({
+            oauthKey: key,
+            keyKind: "role-switch",
+            keyValue: value,
+            keyExpiry: expiresAt,
+          })
+          .onConflictDoUpdate({
+            target: schema.oauthStorage.oauthKey,
+            set: { keyValue: value, keyExpiry: expiresAt },
+          })
+          .pipe(Effect.asVoid, mapWriteError("Failed to prepare role switch")),
+      consumeRoleSwitch: (key) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now
+          const rows = yield* db
+            .delete(schema.oauthStorage)
+            .where(
+              and(
+                eq(schema.oauthStorage.oauthKey, key),
+                gt(schema.oauthStorage.keyExpiry, now),
+              ),
+            )
+            .returning({ value: schema.oauthStorage.keyValue })
+          return rows[0]?.value
+        }).pipe(mapWriteError("Failed to consume role switch")),
+
+      findProviderUserAuthorityVersion: (userId: string) =>
+        Effect.gen(function* () {
+          const owner = yield* db
+            .select()
+            .from(schema.providerUser)
+            .where(eq(schema.providerUser.userId, userId))
+            .orderBy(schema.providerUser.id)
+          const assignments = yield* db
+            .select()
+            .from(schema.providerUserRole)
+            .innerJoin(
+              schema.providerUser,
+              eq(
+                schema.providerUserRole.providerUserId,
+                schema.providerUser.id,
+              ),
+            )
+            .innerJoin(
+              schema.role,
+              eq(schema.providerUserRole.roleId, schema.role.id),
+            )
+            .where(eq(schema.providerUser.userId, userId))
+            .orderBy(schema.providerUserRole.id)
+          return JSON.stringify([owner, assignments])
+        }).pipe(
+          mapQueryError("Failed to read provider user authority version"),
+        ),
 
       findPermittedRolesWithOrgUnit: (userId: string) =>
         Effect.gen(function* () {
@@ -1293,10 +1311,10 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 eq(schema.providerUser.userId, userId),
-                eq(schema.permittedRole._deleted, false),
-                eq(schema.providerUser._deleted, false),
-                eq(schema.role._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.permittedRole._deleted, sql`0`),
+                eq(schema.providerUser._deleted, sql`0`),
+                eq(schema.role._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
 
@@ -1339,8 +1357,8 @@ const AuthenticationDatabaseLive = Layer.effect(
             .where(
               and(
                 inArray(schema.role.path, paths as string[]),
-                eq(schema.role._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.role._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
 
@@ -1378,10 +1396,10 @@ const AuthenticationDatabaseLive = Layer.effect(
               and(
                 eq(schema.oauthClient.clientId, clientId),
                 eq(schema.role.path, rolePath),
-                eq(schema.oauthClient._deleted, false),
-                eq(schema.permittedClientRole._deleted, false),
-                eq(schema.role._deleted, false),
-                eq(schema.orgUnit._deleted, false),
+                eq(schema.oauthClient._deleted, sql`0`),
+                eq(schema.permittedClientRole._deleted, sql`0`),
+                eq(schema.role._deleted, sql`0`),
+                eq(schema.orgUnit._deleted, sql`0`),
               ),
             )
             .limit(1)
@@ -1398,50 +1416,12 @@ const AuthenticationDatabaseLive = Layer.effect(
             updatedAt: row.updatedAt,
           })
         }).pipe(mapQueryError("Failed to find permitted client role")),
-
-      findPermittedClientEmail: (clientId: string, email: string) =>
-        Effect.gen(function* () {
-          // Look up oauth_client by clientId, then join permitted_client_email
-          const results = yield* db
-            .select({
-              email: schema.permittedClientEmail.email,
-              updatedAt: schema.permittedClientEmail.updatedAt,
-            })
-            .from(schema.oauthClient)
-            .innerJoin(
-              schema.permittedClientEmail,
-              eq(
-                schema.permittedClientEmail.oauthClientId,
-                schema.oauthClient.id,
-              ),
-            )
-            .where(
-              and(
-                eq(schema.oauthClient.clientId, clientId),
-                eq(schema.permittedClientEmail.email, email),
-                eq(schema.oauthClient._deleted, false),
-                eq(schema.permittedClientEmail._deleted, false),
-              ),
-            )
-            .limit(1)
-
-          const row = results[0]
-
-          if (!row) {
-            return Option.none()
-          }
-
-          return Option.some({
-            email: row.email,
-            updatedAt: row.updatedAt,
-          })
-        }).pipe(mapQueryError("Failed to find permitted client email")),
     }
   }),
 )
 
 const mapSqlToStorageError = <A, R>(
-  effect: Effect.Effect<A, import("@effect/sql/SqlError").SqlError, R>,
+  effect: Effect.Effect<A, import("effect/sql/SqlError").SqlError, R>,
 ): Effect.Effect<A, StorageError, R> =>
   effect.pipe(
     retryTransientSqliteError,
@@ -1517,7 +1497,7 @@ export const SqliteOpenAuthStorageServiceLive = Layer.effect(
             const expiryUtc =
               ttl === undefined
                 ? undefined
-                : DateTime.unsafeMake(Date.now() + ttl * 1000)
+                : DateTime.makeUnsafe(Date.now() + ttl * 1000)
 
             yield* db
               .insert(schema.oauthStorage)

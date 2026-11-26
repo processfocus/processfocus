@@ -5,14 +5,14 @@ import {
   type CalendarSlotItem,
   type FieldError,
   type FormActionsContext,
-  type JsonSchemaRoot,
   LookupProvider,
   type LookupService,
   type LookupSuggestion,
-  dynamicForm,
 } from "@pf/form"
+import { AnonymousStartForm } from "@/components/anonymous-start-form"
 import { useActiveFrontendClientPlugins } from "@/components/frontend-client-plugin-provider"
 import { reportClientException } from "@/lib/client-plugin-error-reporting"
+import type { EmbedFormData } from "@/lib/embed-form-server"
 import {
   EMBED_EVENT_SOURCE,
   EMBED_EVENT_VERSION,
@@ -23,6 +23,7 @@ import {
 } from "@/lib/embed-manifest"
 
 interface EmbedClientProps {
+  data: EmbedFormData
   entry: EmbedManifestEntry
 }
 
@@ -154,12 +155,25 @@ const ThankYouState = ({
   )
 }
 
-export default function EmbedClient({ entry }: EmbedClientProps) {
+export default function EmbedClient({ entry, data }: EmbedClientProps) {
   const [isSubmitted, setIsSubmitted] = useState(false)
   const activePlugins = useActiveFrontendClientPlugins()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const lookupService = useMemo<LookupService>(
     () => ({
+      resolveSelection: async (stepPath, field, selectedValue) =>
+        (await requestEmbedLookup({ stepPath, field, selectedValue }))[0] ??
+        null,
+      search: async (stepPath, field, filter, requestedLimit) => {
+        const limit = Math.max(1, Math.min(requestedLimit, 99))
+        const items = await requestEmbedLookup({
+          stepPath,
+          field,
+          filter,
+          limit: limit + 1,
+        })
+        return { items: items.slice(0, limit), hasMore: items.length > limit }
+      },
       fetchSuggestions: async (stepPath, field, filter, limit) =>
         requestEmbedLookup({ stepPath, field, filter, limit }),
       fetchDependentSuggestions: async (queryName, variables) =>
@@ -351,17 +365,19 @@ export default function EmbedClient({ entry }: EmbedClientProps) {
     </div>
   )
 
-  const form = dynamicForm({
-    draftId: buildEmbedStorageKey(entry.stepPath),
-    formDefinition: entry.formDefinition,
-    defaultValues: entry.defaultValues,
-    handleCancel: () => undefined,
-    handleSubmit,
-    jsonSchema: (entry.jsonSchema as JsonSchemaRoot | null) ?? null,
-    renderActions,
-    stepPath: entry.stepPath,
-    enableProviderUserLookup: false,
-  })
+  const form = (
+    <AnonymousStartForm
+      formPath={entry.formPath}
+      draftId={buildEmbedStorageKey(entry.stepPath)}
+      defaultValues={data.defaultValues}
+      requestData={data.requestData}
+      pluginConfiguration={data.pluginConfiguration}
+      onSubmit={handleSubmit}
+      stepPath={entry.stepPath}
+    >
+      {renderActions}
+    </AnonymousStartForm>
+  )
 
   return (
     <div
@@ -375,10 +391,7 @@ export default function EmbedClient({ entry }: EmbedClientProps) {
         />
       ) : (
         <section className="space-y-6">
-          <div className="mb-6 space-y-2">
-            <p className="text-muted-foreground text-xs font-semibold uppercase tracking-[0.18em]">
-              Process Focus Form
-            </p>
+          <div className="mb-6">
             <h1 className="text-foreground text-2xl font-semibold sm:text-3xl">
               {entry.processName}
             </h1>

@@ -28,7 +28,7 @@ const providerUser = (
   ...overrides,
 })
 
-const makeResolver = (queries: ProviderUserQueries["Type"]) =>
+const makeResolver = (queries: ProviderUserQueries["Service"]) =>
   Effect.runPromise(makeProviderUserDisplayResolver(queries))
 
 describe("makeProviderUserDisplayResolver", () => {
@@ -55,8 +55,8 @@ describe("makeProviderUserDisplayResolver", () => {
           email === emailRow.email ? Option.some(emailRow) : Option.none(),
         ),
       queryProviderUserByProviderUserId: (id: string) =>
-        Effect.succeed(Option.fromNullable(rows.get(id))),
-    } as ProviderUserQueries["Type"]
+        Effect.succeed(Option.fromNullishOr(rows.get(id))),
+    } as ProviderUserQueries["Service"]
 
     const resolver = await makeResolver(queries)
 
@@ -75,7 +75,7 @@ describe("makeProviderUserDisplayResolver", () => {
     const queries = {
       queryProviderUserByEmail: () => Effect.succeed(Option.none()),
       queryProviderUserByProviderUserId: () => Effect.succeed(Option.none()),
-    } as ProviderUserQueries["Type"]
+    } as ProviderUserQueries["Service"]
 
     const resolver = await makeResolver(queries)
 
@@ -89,7 +89,7 @@ describe("makeProviderUserDisplayResolver", () => {
       queryProviderUserByEmail: () => Effect.die("unexpected email lookup"),
       queryProviderUserByProviderUserId: () =>
         Effect.fail(new Error("db down")),
-    } as ProviderUserQueries["Type"]
+    } as ProviderUserQueries["Service"]
 
     const resolver = await makeResolver(queries)
 
@@ -103,7 +103,7 @@ describe("makeProviderUserDisplayResolver", () => {
       queryProviderUserByEmail: () => Effect.die("db defect"),
       queryProviderUserByProviderUserId: () =>
         Effect.die("unexpected id lookup"),
-    } as ProviderUserQueries["Type"]
+    } as ProviderUserQueries["Service"]
 
     const resolver = await makeResolver(queries)
 
@@ -129,7 +129,7 @@ describe("makeProviderUserDisplayResolver", () => {
             }),
           )
         }),
-    } as ProviderUserQueries["Type"]
+    } as ProviderUserQueries["Service"]
 
     const resolver = await makeResolver(queries)
 

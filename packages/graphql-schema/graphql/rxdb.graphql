@@ -116,6 +116,7 @@ input ExecutionStepsProviderUserInput {
 }
 
 type ExecutionSteps {
+  deadlineActivity: String
   id: ID!
   name: String!
   path: String!
@@ -132,6 +133,7 @@ type ExecutionSteps {
 }
 
 input ExecutionStepsInput {
+  deadlineActivity: String
   id: ID!
   name: String!
   path: String!

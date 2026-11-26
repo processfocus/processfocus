@@ -2,6 +2,8 @@ import { Suspense } from "react"
 import { InvitationDetailClient } from "../invitation-detail-client"
 import { InvitationDetailSkeleton } from "../invitation-detail-skeleton"
 
+export const instant = false
+
 interface InvitationDetailPageProps {
   params: Promise<{
     invitationId: string

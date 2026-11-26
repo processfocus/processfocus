@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer, Option } from "effect"
-import { DelegationDatabase } from "@pf/auth-api"
+import { DateTime, Effect, Layer, Option } from "effect"
 import { AuthenticationConfig } from "@pf/auth-config"
+import { DelegationDatabase } from "@pf/delegation"
 import * as schema from "@pf/drizzle-sqlite"
 import { storeOrganisation } from "@pf/org-to-db"
 import { Organisation } from "@pf/process"
@@ -14,12 +14,12 @@ import { SqliteDelegationDatabaseLive } from "../src/lib/delegation-database"
 import { SqliteDbOperationsLive } from "../src/lib/org-to-db"
 import { describe, expect, it } from "bun:test"
 
-const now = DateTime.unsafeMake("2026-09-07T12:00:00Z")
+const now = DateTime.makeUnsafe("2026-09-07T12:00:00Z")
 const layer = Layer.mergeAll(
   DatabaseTest,
   SqliteDbOperationsLive,
   SqliteDelegationDatabaseLive.pipe(Layer.provide(DatabaseTest)),
-  Layer.succeed(RequestTime, FiberRef.unsafeMake(now)),
+  Layer.succeed(RequestTime, now),
 )
 
 const organisation = (
@@ -59,7 +59,7 @@ const setup = Effect.gen(function* () {
     id: "u-owner",
     provider: "passkey",
     sub: "owner",
-    lastLoggedIn: now,
+    createdAt: now,
   })
   yield* db.insert(schema.providerUser).values({
     id: "pu-owner",
@@ -119,9 +119,8 @@ describe("delegation configuration hydration", () => {
             )
           }
           // Repeated hydration with the option hidden must not revoke credentials.
-          const requestTime = yield* RequestTime
           yield* storeOrganisation(organisation(mode)).pipe(
-            Effect.locally(requestTime, DateTime.add(now, { hours: 1 })),
+            Effect.provideService(RequestTime, DateTime.add(now, { hours: 1 })),
           )
           const old = Option.getOrThrow(
             yield* store.findGeneration({ verifier: "old-verifier" }),

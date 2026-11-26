@@ -20,7 +20,7 @@ const PortFileContentStruct = Schema.Struct({ port: Schema.Number })
 /**
  * JSON string schema for port-file payloads: `{"port": number}`.
  */
-export const PortFileContentJson = Schema.parseJson(PortFileContentStruct)
+export const PortFileContentJson = Schema.fromJsonString(PortFileContentStruct)
 
 export type PortFileContent = Schema.Schema.Type<typeof PortFileContentStruct>
 

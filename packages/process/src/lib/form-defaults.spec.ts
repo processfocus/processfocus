@@ -17,7 +17,7 @@ import { beforeEach, describe, expect, it } from "bun:test"
 const emptyCtx: FlowContext<Record<string, never>> = {
   process: {
     executionId: "pex-test",
-    startedAt: DateTime.unsafeNow(),
+    startedAt: DateTime.nowUnsafe(),
     startStep: {
       user: { userId: "", sub: "" },
       providerUser: {
@@ -28,7 +28,7 @@ const emptyCtx: FlowContext<Record<string, never>> = {
         email: "",
         picture: "",
       },
-      completedAt: DateTime.unsafeNow(),
+      completedAt: DateTime.nowUnsafe(),
     },
   },
   step: {},
@@ -53,8 +53,8 @@ describe("Form.resolveDefaults", () => {
     const form = new Form(process, "test-form", {
       role,
       form: () => ({
-        name: ES.String.annotations({ [FormDefault]: "John" }),
-        age: ES.Number.annotations({ [FormDefault]: 25 }),
+        name: ES.String.annotate({ [FormDefault]: "John" }),
+        age: ES.Number.annotate({ [FormDefault]: 25 }),
       }),
     })
     process.start(form)
@@ -78,7 +78,7 @@ describe("Form.resolveDefaults", () => {
     const form = new Form(process, "test-form", {
       role,
       form: () => ({
-        summary: ES.String.annotations({
+        summary: ES.String.annotate({
           [FormDefault]: () => `${state.firstName} ${state.lastName}`,
         }),
       }),
@@ -120,7 +120,7 @@ describe("Form.resolveDefaults", () => {
       role,
       form: () => ({
         name: ES.String,
-        withDefault: ES.String.annotations({ [FormDefault]: "default value" }),
+        withDefault: ES.String.annotate({ [FormDefault]: "default value" }),
       }),
     })
     process.start(form)
@@ -138,12 +138,12 @@ describe("Form.resolveDefaults", () => {
     const form = new Form(process, "test-form", {
       role,
       form: () => ({
-        failing: ES.String.annotations({
+        failing: ES.String.annotate({
           [FormDefault]: () => {
             throw new Error("boom")
           },
         }),
-        working: ES.String.annotations({ [FormDefault]: "works" }),
+        working: ES.String.annotate({ [FormDefault]: "works" }),
       }),
     })
     process.start(form)
@@ -177,8 +177,8 @@ describe("Form.resolveDefaults", () => {
     const form = new Form(process, "test-form", {
       role,
       form: () => ({
-        staticField: ES.String.annotations({ [FormDefault]: "static" }),
-        dynamicField: ES.String.annotations({
+        staticField: ES.String.annotate({ [FormDefault]: "static" }),
+        dynamicField: ES.String.annotate({
           [FormDefault]: () => state.value.toUpperCase(),
         }),
       }),

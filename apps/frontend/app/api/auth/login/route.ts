@@ -9,7 +9,6 @@ import { getCookieNamesFromHost } from "@/lib/auth/session"
 export const POST = async (request: NextRequest) => {
   const url = new URL(request.url)
 
-  // Extract provider and redirect from request body
   const body = (await request.json().catch(() => ({}))) as {
     provider?: string
     redirect?: string

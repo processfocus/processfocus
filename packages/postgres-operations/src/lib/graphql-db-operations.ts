@@ -1,4 +1,5 @@
 import { Layer } from "effect"
+import { PostgresAwsRoleProofStoreLive } from "./aws-role-proof"
 import { PostgresBusinessCalendarQueriesLive } from "./business-calendar-queries"
 import { PostgresCleanupOperationsLive } from "./cleanup"
 import { PostgresDraftProcessExecutionQueriesLive } from "./draft-process-execution"
@@ -26,6 +27,7 @@ import { PostgresTodoQueriesLive } from "./todo-queries"
  * Combines all individual query and operation services into a single layer.
  */
 export const PostgresGraphqlDbOperationsLive = Layer.mergeAll(
+  PostgresAwsRoleProofStoreLive,
   PostgresBusinessCalendarQueriesLive,
   PostgresCleanupOperationsLive,
   PostgresOrgQueriesLive,

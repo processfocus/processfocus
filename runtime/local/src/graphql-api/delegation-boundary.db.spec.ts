@@ -1,26 +1,21 @@
 import { createHash } from "node:crypto"
 import { eq } from "drizzle-orm"
-import {
-  Clock,
-  Context,
-  DateTime,
-  Effect,
-  Layer,
-  Option,
-  Runtime,
-} from "effect"
+import { Clock, Context, DateTime, Effect, Layer, Option } from "effect"
 import { buildSchema } from "graphql"
 import {
   AuthenticationDatabase,
-  DelegationDatabase,
-  DelegationSessionService,
-  DelegationSessionServiceIsolated,
+  AuthenticationDelegationIdentityFactsLive,
 } from "@pf/auth-api"
 import {
   LocalCedarAuthorizationLive,
   LocalCedarConfig,
   LocalCedarConfigDefault,
 } from "@pf/auth-local-cedar"
+import { DelegationDatabase } from "@pf/delegation"
+import {
+  DelegationSessionService,
+  DelegationSessionServiceIsolated,
+} from "@pf/delegation/authorization"
 import * as schema from "@pf/drizzle-sqlite"
 import { LocalDelegatedRealtime } from "@pf/graphql-api"
 import {
@@ -49,9 +44,11 @@ import {
   type EventHubService,
   createEventHubLayer,
 } from "../services/event-hub"
+import { makeClock } from "../test-support/clock"
 import { describe, expect, it, setSystemTime } from "bun:test"
 
-const TestLayer = SqliteAuthenticationDatabaseLive.pipe(
+const TestLayer = AuthenticationDelegationIdentityFactsLive.pipe(
+  Layer.provideMerge(SqliteAuthenticationDatabaseLive),
   Layer.provideMerge(DatabaseTest),
 )
 const base = Layer.mergeAll(
@@ -116,8 +113,8 @@ const setup = Effect.gen(function* () {
     id: "dsg-graphql",
     delegationId: "dlg-graphql",
     verifier: createHash("sha256").update(secret).digest("base64url"),
-    issuedAt: DateTime.unsafeMake(now),
-    expiresAt: DateTime.unsafeMake(now + 120_000),
+    issuedAt: DateTime.makeUnsafe(now),
+    expiresAt: DateTime.makeUnsafe(now + 120_000),
   })
   const properties = yield* (yield* DelegationSessionService).exchange(secret)
   const jwt = {
@@ -133,10 +130,9 @@ const setup = Effect.gen(function* () {
   return { jwt, db, ownerId, store, secret }
 })
 
-class Events extends Context.Tag("delegation-boundary-events")<
-  Events,
-  EventHubService<number>
->() {}
+class Events extends Context.Service<Events, EventHubService<number>>()(
+  "delegation-boundary-events",
+) {}
 const eventSchema = buildSchema("type Query { value: Int }")
 const realtime = Layer.mergeAll(
   isolated,
@@ -200,8 +196,8 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
                       `pfds_${(name === "middle" ? "m" : "l").repeat(43)}`,
                     )
                     .digest("base64url"),
-                  issuedAt: DateTime.unsafeMake(now),
-                  expiresAt: DateTime.unsafeMake(now + 120_000),
+                  issuedAt: DateTime.makeUnsafe(now),
+                  expiresAt: DateTime.makeUnsafe(now + 120_000),
                 })
                 parentGenerationId = `dsg-${name}`
               }
@@ -224,7 +220,7 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
                 },
               }
               const hub = yield* Events
-              const run = Runtime.runPromise(yield* Effect.runtime<never>())
+              const run = Effect.runPromiseWith(yield* Effect.context<never>())
               const delegatedSource = yield* hub.subscribe()
               const humanSource = yield* hub.subscribe()
               let deliveries = 0
@@ -235,7 +231,7 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
                 const context: UserContext = {
                   jwt: token,
                   userId: properties.userId,
-                  _requestTime: DateTime.unsafeMake(now),
+                  _requestTime: DateTime.makeUnsafe(now),
                   _userDetails: { id: properties.userId, by: properties.email },
                 }
                 return guardRealtimeStream(source, {
@@ -332,10 +328,11 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
               })
             }).pipe(
               Effect.provide(realtime),
-              Effect.withClock(
-                Object.assign(Clock.make(), {
+              Effect.provideService(
+                Clock.Clock,
+                Object.assign(makeClock(), {
                   currentTimeMillis: Effect.succeed(now),
-                  unsafeCurrentTimeMillis: () => now,
+                  currentTimeMillisUnsafe: () => now,
                 }),
               ),
             ),
@@ -368,11 +365,11 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
               jwt.exp = (now + 60_000) / 1000
             const verifier = yield* DelegationSessionService
             const hub = yield* Events
-            const run = Runtime.runPromise(yield* Effect.runtime<never>())
+            const run = Effect.runPromiseWith(yield* Effect.context<never>())
             const context: UserContext = {
               jwt,
               userId: jwt.properties.userId,
-              _requestTime: DateTime.unsafeMake(now),
+              _requestTime: DateTime.makeUnsafe(now),
               _userDetails: {
                 id: jwt.properties.userId,
                 by: jwt.properties.email,
@@ -403,7 +400,7 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
               case "replacement":
                 yield* store.revokeGeneration({
                   generationId: "dsg-graphql",
-                  revokedAt: DateTime.unsafeMake(time),
+                  revokedAt: DateTime.makeUnsafe(time),
                 })
                 yield* store.insertGeneration({
                   id: "dsg-replacement",
@@ -411,8 +408,8 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
                   verifier: createHash("sha256")
                     .update(`pfds_${"d".repeat(43)}`)
                     .digest("base64url"),
-                  issuedAt: DateTime.unsafeMake(time),
-                  expiresAt: DateTime.unsafeMake(time + 120_000),
+                  issuedAt: DateTime.makeUnsafe(time),
+                  expiresAt: DateTime.makeUnsafe(time + 120_000),
                 })
                 expect(
                   (yield* verifier.exchange(`pfds_${"d".repeat(43)}`))
@@ -422,7 +419,7 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
               case "revoke":
                 yield* store.revoke({
                   id: "dlg-graphql",
-                  revokedAt: DateTime.unsafeMake(time),
+                  revokedAt: DateTime.makeUnsafe(time),
                 })
                 break
               case "owner deleted":
@@ -484,10 +481,11 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
             }
           }).pipe(
             Effect.provide(realtime),
-            Effect.withClock(
-              Object.assign(Clock.make(), {
+            Effect.provideService(
+              Clock.Clock,
+              Object.assign(makeClock(), {
                 currentTimeMillis: Effect.sync(() => time),
-                unsafeCurrentTimeMillis: () => time,
+                currentTimeMillisUnsafe: () => time,
               }),
             ),
           ),
@@ -505,11 +503,11 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
         Effect.gen(function* () {
           const { jwt, db, ownerId } = yield* setup
           const hub = yield* Events
-          const run = Runtime.runPromise(yield* Effect.runtime<never>())
+          const run = Effect.runPromiseWith(yield* Effect.context<never>())
           const context: UserContext = {
             jwt,
             userId: jwt.properties.userId,
-            _requestTime: DateTime.unsafeMake(now),
+            _requestTime: DateTime.makeUnsafe(now),
             _userDetails: {
               id: jwt.properties.userId,
               by: jwt.properties.email,
@@ -589,10 +587,11 @@ describe("local delegated realtime with real SQLite verifier and Cedar", () => {
           })
         }).pipe(
           Effect.provide(realtime),
-          Effect.withClock(
-            Object.assign(Clock.make(), {
+          Effect.provideService(
+            Clock.Clock,
+            Object.assign(makeClock(), {
               currentTimeMillis: Effect.succeed(now),
-              unsafeCurrentTimeMillis: () => now,
+              currentTimeMillisUnsafe: () => now,
             }),
           ),
         ),
@@ -613,7 +612,7 @@ describe("GraphQL delegation accepting boundary with real SQLite and Cedar", () 
         const context: UserContext = {
           jwt: accepted,
           userId: jwt.properties.userId,
-          _requestTime: DateTime.unsafeMake(now),
+          _requestTime: DateTime.makeUnsafe(now),
           _userDetails: { by: "owner@example.com", id: jwt.properties.userId },
         }
         const principal = yield* buildPrincipal(context)
@@ -626,7 +625,6 @@ describe("GraphQL delegation accepting boundary with real SQLite and Cedar", () 
           "file download",
           "file upload",
           "database transfer",
-          "impersonation",
           "subscription",
           "CLI",
         ]) {
@@ -659,10 +657,11 @@ describe("GraphQL delegation accepting boundary with real SQLite and Cedar", () 
         ).toBe(true)
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(makeClock(), {
             currentTimeMillis: Effect.succeed(now),
-            unsafeCurrentTimeMillis: () => now,
+            currentTimeMillisUnsafe: () => now,
           }),
         ),
       ),
@@ -699,7 +698,11 @@ describe("GraphQL delegation accepting boundary with real SQLite and Cedar", () 
             roles: [],
           },
         }
-        expect(yield* acceptVerifiedGraphqlJwt(human)).toEqual(human)
+        expect(
+          Option.isNone(
+            yield* acceptVerifiedGraphqlJwt(human).pipe(Effect.option),
+          ),
+        ).toBe(true)
         const withoutService = yield* Effect.promise(() =>
           Effect.runPromise(acceptVerifiedGraphqlJwt(jwt).pipe(Effect.option)),
         )
@@ -714,10 +717,11 @@ describe("GraphQL delegation accepting boundary with real SQLite and Cedar", () 
         ).toBe(true)
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(makeClock(), {
             currentTimeMillis: Effect.sync(() => time),
-            unsafeCurrentTimeMillis: () => time,
+            currentTimeMillisUnsafe: () => time,
           }),
         ),
       ),

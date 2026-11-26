@@ -1,0 +1,89 @@
+---
+title: Roles
+description: Define roles and understand their authority in sessions.
+---
+
+Use roles to grant employees (authenticated users) permissions. That
+is preferable to granting permissions to individuals.
+
+## What are good roles?
+
+Define roles around areas of responsibility rather than job titles.
+For example, if office staff also purchase office equipment, create
+separate Office staff and Purchasing roles. Assign both roles to employees
+who handle both responsibilities.
+
+Similarly, a sales representative who also handles customer support could
+have both Sales and Customer support roles. This lets you assign each
+responsibility independently as people's duties change.
+
+## Creating roles
+
+Attach roles to the organisation or to an organisational unit. Define a role
+such as Employee at the organisation level.
+
+```typescript
+export const org = new Organisation({
+  name: "Demo",
+})
+
+export const employee = new Role(org, "Employee", {
+  name: "Employee",
+})
+```
+
+Every employee would have this role, as this makes it possible to
+define processes accessible to all employees: requesting leave or
+creating a support ticket.
+
+Attach the HR Manager role to the HR department:
+
+```typescript
+const hr = new OrgUnit(org, "hr", {
+  name: "Human Resources",
+  type: "department",
+})
+
+export const manager = new Role(hr, "Manager", {
+  name: "Manager",
+})
+```
+
+Managers could then be authorised to grant leave and authorise specific actions.
+
+## Assigning roles
+
+### Assigning roles in the frontend
+
+Users can be assigned roles after they have logged in. Go to
+`/settings/users` in the frontend (Users & Sign-in):
+
+![Users & Sign-in page showing the list of users](/images/docs/users-sign-in.png)
+
+Then click on a user, and assign roles under "Role Assignments":
+
+![Role Assignments showing available roles and a selected role](/images/docs/role-assignments.png)
+
+Tick or untick roles and save.
+
+### Assigning roles in code
+
+Set the `roles` property on an `Invitation` to assign initial roles to a new
+user. Using the roles defined above:
+
+```typescript
+import { Invitation } from "@pf/process"
+
+new Invitation(org, "alice", {
+  email: "alice@example.com",
+  roles: [employee, manager],
+})
+```
+
+When Alice accepts the invitation, her user is created with both the Employee
+and Manager roles. These are initial role assignments: changing the invitation
+after acceptance does not change her roles. To update an existing user's roles,
+use the frontend as described above.
+
+See [Invitations](/docs/reference/authentication/invitations/) for more about
+creating and accepting invitations.

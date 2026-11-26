@@ -1,3 +1,4 @@
+export { ResendNotificationEmailSenderLive } from "./lib/notification-email-sender"
 export {
   type ResendApiAttachment,
   ResendClient,
@@ -11,10 +12,19 @@ export {
   ResendError,
 } from "./lib/resend-client"
 export {
+  ResendConfiguration,
+  ResendDeferredDeliveryConfiguration,
+  ResendWebhookConfiguration,
+  makeResendConfiguration,
+  makeResendDeferredDeliveryConfiguration,
+  makeResendWebhookConfiguration,
+} from "./lib/resend-configuration"
+export {
   RESEND_WEBHOOK_PATH,
   ResendDeferredDeliveryFromEnv,
   ResendServerPlugin,
   handleResendWebhookRequest,
+  makeResendDeferredDeliveryFromEnv,
   makeResendServerPlugin,
 } from "./lib/resend-server-plugin"
 export {

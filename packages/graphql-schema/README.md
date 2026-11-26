@@ -1,9 +1,10 @@
-# About
+# @pf/graphql-schema
 
-Fixed part of our graphql schema:
-1. `system.graphql`: the nice graphql API.
-2. `rxdb.graphql`: API specifically to make Tanstack DB work with RXDB
-   to provide a sync engine experience in the frontend.
+The shared GraphQL schema, generated TypeScript types, and API errors.
 
-There is also a dynamic part, derived from the user's organisation
-model. This file is generated per organisation.
+The schema includes system operations and the replication interface used by
+frontend RxDB collections. Organisation-specific operations are generated
+separately by
+[`@pf/org-to-graphql-schema`](../org-to-graphql-schema/README.md).
+
+[`@pf/graphql-api`](../graphql-api/README.md) combines these into the running API.

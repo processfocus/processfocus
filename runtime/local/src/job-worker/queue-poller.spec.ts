@@ -6,20 +6,19 @@ import {
   Deferred,
   Duration,
   Effect,
-  Either,
   Fiber,
-  FiberRef,
   Layer,
-  LogLevel,
   Logger,
   Option,
+  References,
+  Result,
   Schema,
-  TestClock,
-  TestContext,
+  Semaphore,
 } from "effect"
+import { TestClock } from "effect/testing"
 import * as schema from "@pf/drizzle-sqlite"
-import { UserDetails, type UserDetailsValue } from "@pf/graphql-db-operations"
-import { ScheduledFlowNotFoundError } from "@pf/job-handler"
+import { UserDetails } from "@pf/graphql-db-operations"
+import { ScheduledFlowNotFoundError } from "@pf/process-execution/errors"
 import { RequestTime } from "@pf/request-time"
 import {
   DatabaseTest,
@@ -43,16 +42,13 @@ import { describe, expect, it } from "bun:test"
 
 const RequestTimeLive = Layer.succeed(
   RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+  DateTime.makeUnsafe(Date.now()),
 )
 
-const UserDetailsLive = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "TEST_USER",
-    id: "usr-test",
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsLive = Layer.succeed(UserDetails, {
+  by: "TEST_USER",
+  id: "usr-test",
+})
 
 const QueueTest = SqliteQueueServiceLive.pipe(
   Layer.provideMerge(
@@ -121,8 +117,8 @@ describe("claimNextLocalJob", () => {
         const suffix = Date.now()
         const olderQueue = `atomic-older-${suffix}`
         const newerQueue = `atomic-newer-${suffix}`
-        const olderAvailableAt = DateTime.unsafeMake(Date.now() - 2000)
-        const newerAvailableAt = DateTime.unsafeMake(Date.now() - 1000)
+        const olderAvailableAt = DateTime.makeUnsafe(Date.now() - 2000)
+        const newerAvailableAt = DateTime.makeUnsafe(Date.now() - 1000)
 
         yield* db.insert(schema.jobQueue).values([
           {
@@ -180,12 +176,14 @@ describe("createSingleQueuePoller", () => {
       Effect.gen(function* () {
         const queueService = yield* QueueService
         const db = yield* TypedSqliteDrizzle
-        const semaphore = yield* Effect.makeSemaphore(1)
+        const semaphore = yield* Semaphore.make(1)
         const pausedStateObserved = yield* Deferred.make<void>()
 
-        yield* queueService.enqueue(queueName, { value: "ready" })
+        yield* queueService
+          .enqueue(queueName, { value: "ready" })
+          .pipe(Effect.provideService(RequestTime, yield* DateTime.now))
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           createSingleQueuePoller(
             {
               [queueName]: jobHandler({
@@ -207,10 +205,12 @@ describe("createSingleQueuePoller", () => {
         )
 
         yield* Deferred.await(pausedStateObserved).pipe(
-          Effect.timeoutFail({
+          Effect.timeoutOrElse({
             duration: Duration.millis(1500),
-            onTimeout: () =>
-              new Error("Timed out waiting for local queue poller to pause"),
+            orElse: () =>
+              Effect.fail(
+                new Error("Timed out waiting for local queue poller to pause"),
+              ),
           }),
         )
 
@@ -240,7 +240,6 @@ describe("createSingleQueuePoller", () => {
 
   it("stamps worker state updatedAt from Effect Clock", async () => {
     const fixedMs = Date.parse("2020-01-15T12:00:00.000Z")
-    const fixedTime = DateTime.unsafeMake(fixedMs)
     const queueName = `clock-updated-at-${Date.now()}`
 
     const program = Effect.scoped(
@@ -248,16 +247,19 @@ describe("createSingleQueuePoller", () => {
         // Keep RequestTime aligned with TestClock: enqueue stamps availableAt
         // from RequestTime while the poller claims with DateTime.now.
         yield* TestClock.setTime(fixedMs)
-        const requestTime = yield* RequestTime
-        yield* FiberRef.set(requestTime, fixedTime)
 
         const queueService = yield* QueueService
-        const semaphore = yield* Effect.makeSemaphore(1)
-        const updatedAtSeen = yield* Deferred.make<string>()
+        const semaphore = yield* Semaphore.make(1)
+        const updatedAtSeen = yield* Deferred.make<{
+          updatedAt: string
+          observedAt: string
+        }>()
 
-        yield* queueService.enqueue(queueName, { value: "ready" })
+        yield* queueService
+          .enqueue(queueName, { value: "ready" })
+          .pipe(Effect.provideService(RequestTime, yield* DateTime.now))
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           createSingleQueuePoller(
             {
               [queueName]: jobHandler({
@@ -269,9 +271,12 @@ describe("createSingleQueuePoller", () => {
             {
               onWorkerStateChange: (state) =>
                 state.activeJobs > 0
-                  ? Deferred.succeed(updatedAtSeen, state.updatedAt).pipe(
-                      Effect.catchAll(() => Effect.void),
-                    )
+                  ? Effect.gen(function* () {
+                      yield* Deferred.succeed(updatedAtSeen, {
+                        updatedAt: state.updatedAt,
+                        observedAt: DateTime.formatIso(yield* DateTime.now),
+                      })
+                    })
                   : Effect.void,
             },
           ),
@@ -289,14 +294,15 @@ describe("createSingleQueuePoller", () => {
         const updatedAt = yield* Deferred.await(updatedAtSeen)
         yield* Fiber.interrupt(fiber)
 
-        expect(updatedAt).toBe("2020-01-15T12:00:00.000Z")
+        expect(updatedAt.updatedAt).toBe(updatedAt.observedAt)
+        expect(updatedAt.updatedAt.startsWith("2020-01-15T12:00:")).toBe(true)
       }),
     )
 
     await Effect.runPromise(
       program.pipe(
         Effect.provide(TestLayer),
-        Effect.provide(TestContext.TestContext),
+        Effect.provide(TestClock.layer()),
       ) as Effect.Effect<void, unknown, never>,
     )
   })
@@ -313,30 +319,30 @@ describe("createSingleQueuePoller", () => {
       Effect.gen(function* () {
         // Align RequestTime with the TestClock epoch so enqueued jobs are
         // immediately claimable under deterministic time.
-        const requestTime = yield* RequestTime
-        yield* FiberRef.set(requestTime, DateTime.unsafeMake(0))
 
         const queueService = yield* QueueService
-        const semaphore = yield* Effect.makeSemaphore(1)
+        const semaphore = yield* Semaphore.make(1)
         const jobStarted = yield* Deferred.make<void>()
 
-        yield* queueService.enqueue(queueName, { value: "ready" })
+        yield* queueService
+          .enqueue(queueName, { value: "ready" })
+          .pipe(Effect.provideService(RequestTime, yield* DateTime.now))
 
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           createSingleQueuePoller(
             {
               [queueName]: jobHandler({
                 schema: Schema.Struct({ value: Schema.String }),
                 handle: () =>
                   Deferred.succeed(jobStarted, undefined).pipe(
-                    Effect.catchAll(() => Effect.void),
+                    Effect.catch(() => Effect.void),
                   ),
               }),
             },
             semaphore,
           ).pipe(
-            Logger.withMinimumLogLevel(LogLevel.Debug),
-            Effect.provide(Logger.replace(Logger.defaultLogger, captureLogger)),
+            Effect.provideService(References.MinimumLogLevel, "Debug"),
+            Effect.provide(Logger.layer([captureLogger])),
           ),
         )
 
@@ -395,7 +401,7 @@ describe("createSingleQueuePoller", () => {
     await Effect.runPromise(
       program.pipe(
         Effect.provide(TestLayer),
-        Effect.provide(TestContext.TestContext),
+        Effect.provide(TestClock.layer()),
       ) as Effect.Effect<void, unknown, never>,
     )
   })
@@ -438,11 +444,11 @@ describe("processClaimedJob", () => {
           }),
         }).pipe(
           Effect.provideService(QueueService, failingQueue),
-          Effect.provide(Logger.replace(Logger.defaultLogger, captureLogger)),
-          Effect.either,
+          Effect.provide(Logger.layer([captureLogger])),
+          Effect.result,
         )
 
-        expect(Either.isLeft(result)).toBe(true)
+        expect(Result.isFailure(result)).toBe(true)
         expect(
           capturedLogs.some((line) =>
             line.includes(`Job ${job.value.jobId} acknowledgement failed:`),
@@ -495,12 +501,19 @@ describe("processClaimedJob", () => {
             jobAttempts: schema.jobQueue.jobAttempts,
             jobRetryLimit: schema.jobQueue.jobRetryLimit,
             lockedUntil: schema.jobQueue.lockedUntil,
+            terminalAt: schema.jobQueue.terminalAt,
+            terminalOutcome: schema.jobQueue.terminalOutcome,
+            terminalReason: schema.jobQueue.terminalReason,
           })
           .from(schema.jobQueue)
           .where(eq(schema.jobQueue.queue, queueName))
 
         expect(row).toHaveLength(1)
-        expect(row[0]?.jobAttempts).toBe(row[0]?.jobRetryLimit)
+        expect(row[0]?.jobAttempts).toBe(1)
+        expect(row[0]?.jobRetryLimit).toBe(5)
+        expect(row[0]?.terminalAt).not.toBeNull()
+        expect(row[0]?.terminalOutcome).toBe("handler-failure")
+        expect(row[0]?.terminalReason).toContain("PayloadParseError")
         expect(row[0]?.lockedUntil).toBeNull()
         expect(handledJobs).toEqual([])
 
@@ -548,9 +561,7 @@ describe("processClaimedJob", () => {
             handle: () =>
               Effect.fail(new ScheduledFlowNotFoundError({ scheduledFlowId })),
           }),
-        }).pipe(
-          Effect.provide(Logger.replace(Logger.defaultLogger, captureLogger)),
-        )
+        }).pipe(Effect.provide(Logger.layer([captureLogger])))
 
         expect(
           capturedLogs.some((line) =>

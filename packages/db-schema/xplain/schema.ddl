@@ -26,7 +26,11 @@ base oauth key (A2048). # Key for oauth storage
 base key kind (A64). # Type of stored data: authorization_code, refresh_token, signing_key, etc.
 base key value (J). # JSON value stored
 base key expiry (D). # Expiry date for oauth storage
-base last logged in (D).
+base audit kind (A16).
+base occurred at (D).
+base audit details (J).
+# Append-only authentication evidence. IDs survive delivery retries; no expiry.
+type audit event "aud" = audit kind, occurred at, audit details.
 base finished at (D).
 base abandoned at (D).
 base abandoned reason (T).
@@ -35,6 +39,8 @@ base business duration (I8). # Duration in business hours, stored as millisecond
 base sla target at (D). # When todo is due (calculated from step SLA)
 base sla warning at (D). # Warning threshold time for todo
 base failure reason (T).
+base external write attempt id (A36). # Durable identity renewed only after a confirmed rejected external write.
+base restart attempt id (A36). # Fences old deliveries after an explicit Todo or system-start restart without rotating external-write keys.
 base not started reason (T). # Work was refused before its job attempt started.
 base correction required at (D). # Public Completion is waiting for provider-user correction.
 base correction failure reason (T). # Delivery failure details that triggered correction.
@@ -62,6 +68,13 @@ base sla unit (A16).
 base sla warning (I3).
 
 type process "prc" = org unit, name, path, purpose, optional sla value, optional sla unit, optional sla warning.
+
+# Server-observed replication entitlement, scoped to a verified principal and role set.
+# Kept after revocation: permits only a removal marker, never protected content.
+base replication scope (A64).
+type process visibility "pvis" = process, replication scope.
+unique index process visibility its scopeprocessidx = replication scope, process.
+
 unique index process its pathidx = path.
 extend process with no drafts = nil process execution per process state its process.
 
@@ -99,6 +112,7 @@ type step "step" = name, path, purpose, process, optional role, optional form fi
 default step its has for each = false.
 default step its embedded = false.
 unique index step its pathidx = path.
+index step its processidx = process.
 
 # Supporting roles for a step — additional roles that can complete the
 # form beyond the primary role. The primary role lives on step.role.
@@ -111,11 +125,15 @@ unique index step supporting role its steproleidx = step, role.
 # If the step is scheduled, "schedule" is a human-readable description of
 # when the transition should trigger.
 base schedule (T).
-type flow "flow" = flow key, source_step, target_step, optional condition, optional schedule, fallback branch, error branch, optional error tags.
+base deadline name (A100).
+base interrupting (B).
+type flow "flow" = flow key, source_step, target_step, optional condition, optional schedule, fallback branch, error branch, optional error tags, optional deadline name, interrupting.
+default flow its interrupting = false.
 default flow its fallback branch = false.
 default flow its error branch = false.
 unique index flow its flowkeyidx = flow key.
 index flow its sourcetargetidx = source_step, target_step.
+index flow its targetidx = target_step.
 
 # A step can start a process if it never is mentioned as a target in a flow.
 extend step with can start process = nil flow per target_step.
@@ -137,14 +155,16 @@ unique index external participant its emailidx = email.
 # started_by_external_participant tracks embedded-form starts by external people.
 # started_by_role tracks the authorizing role and may coexist with either starter.
 type process state "pst" = process, start_step, state, optional started by_user, optional started by_external participant, optional started by_role.
+index process state its processidx = process.
 assert process state its single starter (true) = started by_user == nil or started by_external participant == nil.
 extend process state with is draft = nil process execution per process state.
 
 # A process which actually has started.
 # business_duration stores the elapsed business hours (in ms) when execution completes.
 base without waiting (B).
-type process execution "pex" = without waiting, process state, optional finished at, optional business duration, optional abandoned at, optional abandoned reason, optional not started reason.
+type process execution "pex" = without waiting, process state, optional finished at, optional business duration, optional abandoned at, optional abandoned reason, optional not started reason, optional restart attempt id.
 default process execution its without waiting = false.
+index process execution its processstateidx = process state.
 
 # Where we currently are stopped or working in the flow.
 # A to do is either for a role (system or provider user), or assigned to a specific user.
@@ -161,7 +181,11 @@ default process execution its without waiting = false.
 base item data (J).
 base for each barrier (B).
 base barrier scheduled flow id (A41). # References scheduled_flow.id for forEach barrier pattern (no FK to allow barrier deletion)
-type to do "todo" = process execution, flow, optional completed by_user, optional completed by_external participant, optional assigned to_provider user, optional business duration, optional sla target at, optional sla warning at, optional failure reason, optional correction required at, optional correction failure reason, optional correction invitation attempt id, optional item data, optional barrier scheduled flow id, optional completed by_role, optional not started reason.
+base interrupted at (D).
+# A chat completion can replay only the same caller's original submission.
+base completion fingerprint (A64).
+type to do "todo" = process execution, flow, optional completed by_user, optional completed by_external participant, optional assigned to_provider user, optional business duration, optional sla target at, optional sla warning at, optional failure reason, optional correction required at, optional correction failure reason, optional correction invitation attempt id, optional item data, optional barrier scheduled flow id, optional completed by_role, optional not started reason, optional external write attempt id, optional restart attempt id, optional interrupted at, optional completion fingerprint.
+index to do its executionidx = process execution.
 assert to do its single completer (true) = completed by_user == nil or completed by_external participant == nil.
 
 # Public completion invitation attempts track each externally sent public to-do link.
@@ -199,10 +223,18 @@ extend process with active processes = count to do its process execution per pro
 # When target_step is set, only evaluate the specific flow to that target.
 # When scheduled_at is set, the flow should execute at that time (for deferred flows).
 type scheduled flow "sf" = process execution, source_step, optional target_step, optional scheduled at, for each barrier, optional completed by_role.
+
+# A durable one-shot attachment belongs to a Todo activation, not a step definition.
+# Its id is also its scheduled-flow handoff id; history survives handoff consumption.
+base triggered at (D).
+base disarmed at (D).
+type task deadline "tdl" = owner_to do, flow, deadline name, scheduled at, optional triggered at, optional disarmed at, interrupting.
+default task deadline its interrupting = false.
+unique index task deadline its activationname = owner_to do, deadline name.
 default scheduled flow its for each barrier = false.
 
 # A user (or application) who can authenticate and use the system
-type user "usr" = provider, sub, last logged in.
+type user "usr" = provider, sub.
 unique index user its uniquesub = provider, sub.
 
 # Application-owned WebAuthn credential linked to its backing identity.
@@ -238,8 +270,6 @@ base notification preference (J).
 
 type user settings "us" = [user], notification preference.
 
-# Permitted roles for role switching (validated by Cedar, consumed by auth server)
-# These are ephemeral - deleted and recreated when permittedRoles is queried
 type permitted role "pr" = provider user, role.
 unique index permitted role its provideruserroleidx = provider user, role.
 
@@ -247,11 +277,6 @@ unique index permitted role its provideruserroleidx = provider user, role.
 # Same as permitted role but for oauth clients (service accounts)
 type permitted client role "pcr" = oauth client, role.
 unique index permitted client role its oauthclientroleidx = oauth client, role.
-
-# M2M roles can swap out their service token for a provider user token, if
-# permitted by Cedar. This is used for frontend e2e testing.
-type permitted client email "pce" = oauth client, email.
-unique index permitted client email its oauthclientemailidx = oauth client, email.
 
 # An invitation for a user to join the organisation with pre-assigned roles.
 # Lifecycle: pending -> accepted (first verified human-provider bootstrap) or
@@ -329,21 +354,26 @@ base client id (A128).
 base client secret hash (A256). # Argon2 hash of the client secret
 base audience (A128). # Audience claim for tokens issued to this client
 
-type oauth client "ocl" = client id, client secret hash, audience.
+base workload trust (J). # Code-configured secretless workload admission bindings
+base aws role bindings (J). # Explicit pinned AWS identities for direct GraphQL requests, independent of GitHub trust
+type oauth client "ocl" = client id, client secret hash, audience, optional workload trust, optional aws role bindings.
 unique index oauth client its clientididx = client id.
 
 # Queue jobs for background processing
 base queue (A512). # Type of job (e.g., "send_email", "process_webhook")
 base job payload (J). # JSON payload for job
-#base job status (A32). # Status: pending, processing, completed, failed, dead_letter
-#base job error (T). # Error message if processing failed
 base job attempts (I4). # Number of processing attempts so far
 base job retry limit (I4). # Maximum number of retry attempts
 base available at (D). # When is job available for pickup? Allows delayed scheduling
 base locked until (D). # When job becomes visible again (for retries with visibility timeout)
 base claim receipt (A64). # Opaque token identifying the current claim lease
 
-type job queue "qjob" = queue, job payload, job attempts, job retry limit, available at, optional locked until, optional claim receipt.
+base terminal at (D). # Recorded queue disposition; null means active, including exhausted work awaiting recovery
+base terminal reason (T).
+base terminal outcome (A32). # handler-failure or unknown
+base redriven from (A64). # Prior retained terminal job ID; not a business execution relationship
+
+type job queue "qjob" = queue, job payload, job attempts, job retry limit, available at, optional locked until, optional claim receipt, optional terminal at, optional terminal reason, optional terminal outcome, optional redriven from.
 default job queue its job attempts = 0.
 default job queue its job retry limit = 5.
 default job queue its available at = systemdate.
@@ -362,6 +392,12 @@ unique index completed job its job id ix = queue, job id.
 # Refused job occurrences remain distinct from successfully completed jobs.
 type not started job "nsj" = queue, job id, not started reason.
 unique index not started job its job id ix = queue, job id.
+
+# Operational lifecycle, not a business result. Retired evidence is never reset by polling.
+base job lifecycle (J).
+type queue job lifecycle "qjl" = queue, job id, job lifecycle, optional terminal at.
+unique index queue job lifecycle its job id ix = queue, job id.
+index queue job lifecycle its terminal idx = terminal at.
 
 # Business Calendar - weekly schedules, periods, exceptions, and holidays
 # Design principle: "Closed by default" - only store when open, no non_working_day table needed.

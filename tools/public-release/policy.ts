@@ -1,6 +1,5 @@
 import type { NxReleaseConfiguration } from "nx/src/config/nx-json"
 
-// #2483 started with ten packages. pforg and Xero joined for 0.1.0-next.1.
 export const RELEASE_PACKAGES: readonly string[] = [
   "processfocus",
   "@processfocus/runtime",

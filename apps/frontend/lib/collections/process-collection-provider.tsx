@@ -6,6 +6,7 @@ import {
   deletedField,
   pullQueryBuilder,
   pullStreamQueryBuilder,
+  replicationIdentifier,
 } from "./process"
 
 const {
@@ -14,8 +15,10 @@ const {
   cleanup: cleanupProcessCollection,
 } = createCollectionProvider<ProcessDocType>({
   name: "Process",
+  streamMode: "resync",
   pullQueryBuilder,
   pullStreamQueryBuilder,
+  replicationIdentifier,
   deletedField,
   appSyncChannel: "/rxdb/collection/process",
   pullResultKey: "pullProcess",

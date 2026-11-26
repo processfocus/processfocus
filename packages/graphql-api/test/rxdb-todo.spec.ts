@@ -1,9 +1,8 @@
-import { Effect, FiberRef, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import {
   TodoQueries,
   type TodoRow,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { TodoCollectionOps, TodoCollectionOpsLive } from "../src/lib/rxdb/todo"
 import { describe, expect, it } from "bun:test"
@@ -50,10 +49,7 @@ describe("TodoCollectionOps", () => {
         return yield* todoOps.pull(null, 10_000)
       }).pipe(
         Effect.provide(TestLayer),
-        Effect.provideService(
-          UserDetails,
-          FiberRef.unsafeMake<UserDetailsValue>({ by: "test", id: null }),
-        ),
+        Effect.provideService(UserDetails, { by: "test", id: null }),
       ),
     )
 

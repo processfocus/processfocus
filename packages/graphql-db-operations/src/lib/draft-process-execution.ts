@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type DateTime, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { UpdateDeletedDocumentError } from "@pf/graphql-schema"
 import type { RequestTime } from "@pf/request-time"
 import type { ProcessState, StepNotFoundError } from "./process-execution"
@@ -36,9 +36,7 @@ export interface DraftProcessExecutionMaster {
 /**
  * Service providing draft process execution query operations for RxDB replication.
  */
-export class DraftProcessExecutionQueries extends Context.Tag(
-  "@pf/graphql-db-operations/DraftProcessExecutionQueries",
-)<
+export class DraftProcessExecutionQueries extends Context.Service<
   DraftProcessExecutionQueries,
   {
     /**
@@ -102,4 +100,4 @@ export class DraftProcessExecutionQueries extends Context.Tag(
       processStateIds: string[],
     ) => Effect.Effect<DraftProcessExecutionRow[], SqlError, UserDetails>
   }
->() {}
+>()("@pf/graphql-db-operations/DraftProcessExecutionQueries") {}

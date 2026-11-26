@@ -1,0 +1,29 @@
+---
+title: pforg
+---
+
+`pforg` operates against one organisation environment using your Dashboard
+identity. Log in to that environment before managing Invitations:
+
+```bash
+pforg auth login https://your-dashboard.example.com
+pforg invitation list
+pforg invitation delete invitation-id
+```
+
+Copy the exact `id` from the list output into the delete command. Both commands
+require the organisation's `administerUsers` permission.
+
+`invitation list` follows all pages and prints one JSON array containing pending,
+accepted and legacy-closed Invitations. Each item includes `id`, `email`,
+`roles` (`id`, `name`, `path`), `status` and `registrationLinkStatus`. Deleted
+Invitations are excluded. The output contains no Registration Links or tokens.
+
+`invitation delete` soft-deletes a pending Invitation and its role grants and
+invalidates its Registration Link. Success prints
+`{"id":"invitation-id","success":true}`. Accepted and legacy-closed Invitations
+are immutable history. A missing, deleted or inaccessible Invitation produces
+a JSON error on stderr and a nonzero exit code.
+
+Use `pforg invitation --help` for available commands. The installed npm package
+also includes `dist/command-reference.md`, generated from the command definitions.

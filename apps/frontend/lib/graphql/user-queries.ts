@@ -8,6 +8,7 @@ const userDetailQuery = graphql(`
       provider
       sub
       lastLoggedIn
+      taskAssignmentEmailAvailable
       providerUser {
         id
         email
@@ -48,12 +49,16 @@ const saveProviderUserMutation = graphql(`
     $providerUserId: ID!
     $userId: ID!
     $roleIds: [ID!]!
+    $firstName: String
+    $lastName: String
     $preferences: NotificationPreferencesInput!
   ) {
     updateProviderUser(
       providerUserId: $providerUserId
       input: {
         roleIds: $roleIds
+        firstName: $firstName
+        lastName: $lastName
       }
     ) {
       __typename
@@ -113,18 +118,20 @@ export const saveProviderUser = async (
   providerUserId: string,
   userId: string,
   roleIds: string[],
-  taskAssignmentEmailEnabled: boolean,
+  taskAssignmentEmailEnabled: boolean | undefined,
   executionFailureEmailEnabled: boolean,
+  names?: { firstName: string; lastName: string },
 ) => {
   const data = await client.request(saveProviderUserMutation, {
     providerUserId,
     userId,
     roleIds,
+    ...names,
     preferences: {
       notifications: {
-        todoAssignment: {
-          email: taskAssignmentEmailEnabled,
-        },
+        ...(taskAssignmentEmailEnabled !== undefined && {
+          todoAssignment: { email: taskAssignmentEmailEnabled },
+        }),
         executionFailure: {
           email: executionFailureEmailEnabled,
         },

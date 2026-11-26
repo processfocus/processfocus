@@ -21,9 +21,7 @@ export class ProcessFromJobPublishError extends Data.TaggedError(
  * - AWS: Delegates to ProcessEvents which publishes to AppSync with Cedar auth
  * - Local: HTTP POST to GraphQL server (fire-and-forget)
  */
-export class ProcessFromJobPublisher extends Context.Tag(
-  "@pf/job-handler/ProcessFromJobPublisher",
-)<
+export class ProcessFromJobPublisher extends Context.Service<
   ProcessFromJobPublisher,
   {
     /**
@@ -41,4 +39,4 @@ export class ProcessFromJobPublisher extends Context.Tag(
       processId: string,
     ) => Effect.Effect<FromJobPublishOutcome, ProcessFromJobPublishError, never>
   }
->() {}
+>()("@pf/job-handler/ProcessFromJobPublisher") {}

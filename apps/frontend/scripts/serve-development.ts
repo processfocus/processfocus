@@ -6,6 +6,7 @@ export const buildDevelopmentEnv = (
   sourceEnv: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv => ({
   ...sourceEnv,
+  PF_RUNTIME_MODE: "local",
   NX_WORKSPACE_ROOT: workspaceRoot,
 })
 

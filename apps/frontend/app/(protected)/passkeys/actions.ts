@@ -1,11 +1,7 @@
 "use server"
 
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-} from "@effect/platform"
-import { Effect, Either, Schema } from "effect"
+import { Effect, Exit, Schema } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
 import { getIssuerUrl } from "@/lib/auth/issuer"
 import {
   PasskeyEnrollmentOptions,
@@ -54,7 +50,7 @@ function requestPasskeys<
 }: {
   method: "GET" | "PATCH" | "POST" | "DELETE"
   body?: unknown
-  schema: Schema.Schema<A, I>
+  schema: Schema.Codec<A, I>
   kind: K
   message: string
   statuses?: Readonly<Record<number, Failure | NoInfer<Extra>>>
@@ -73,12 +69,13 @@ function requestPasskeys<
     if (response.status < 200 || response.status >= 300)
       return statuses[response.status] ?? { kind: "error" as const, message }
     const data = yield* response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknown(schema)),
+      Effect.flatMap(Schema.decodeUnknownEffect(schema)),
     )
     return { kind, ...data }
   }).pipe(
-    Effect.catchAll(() => Effect.succeed({ kind: "error" as const, message })),
+    Effect.catch(() => Effect.succeed({ kind: "error" as const, message })),
     Effect.provide(FetchHttpClient.layer),
+    Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
     Effect.provideService(FetchHttpClient.RequestInit, {
       cache: "no-store",
       redirect: "error",
@@ -101,15 +98,15 @@ export async function listPasskeys(): Promise<Listed | Failure> {
 }
 
 export async function renamePasskey(input: unknown): Promise<Listed | Failure> {
-  const parsed = Schema.decodeUnknownEither(RenamePasskey)(input)
-  if (Either.isLeft(parsed)) return { kind: "error", message: nameError }
+  const parsed = Schema.decodeUnknownExit(RenamePasskey)(input)
+  if (Exit.isFailure(parsed)) return { kind: "error", message: nameError }
   return requestPasskeys<
     typeof PasskeyList.Type,
     typeof PasskeyList.Encoded,
     "success"
   >({
     method: "PATCH",
-    body: parsed.right,
+    body: parsed.value,
     schema: PasskeyList,
     kind: "success",
     message: "Unable to rename this Passkey.",
@@ -120,15 +117,15 @@ export async function renamePasskey(input: unknown): Promise<Listed | Failure> {
 export async function startPasskeyEnrollment(
   input: unknown,
 ): Promise<Enrollment | Failure> {
-  const parsed = Schema.decodeUnknownEither(StartPasskeyEnrollment)(input)
-  if (Either.isLeft(parsed)) return { kind: "error", message: nameError }
+  const parsed = Schema.decodeUnknownExit(StartPasskeyEnrollment)(input)
+  if (Exit.isFailure(parsed)) return { kind: "error", message: nameError }
   return requestPasskeys<
     typeof PasskeyEnrollmentOptions.Type,
     typeof PasskeyEnrollmentOptions.Encoded,
     "options"
   >({
     method: "POST",
-    body: parsed.right,
+    body: parsed.value,
     schema: PasskeyEnrollmentOptions,
     kind: "options",
     message: "Unable to start Passkey registration.",
@@ -165,8 +162,8 @@ export async function verifyPasskeyEnrollment(
 }
 
 export async function removePasskey(input: unknown): Promise<Listed | Failure> {
-  const parsed = Schema.decodeUnknownEither(RemovePasskey)(input)
-  if (Either.isLeft(parsed))
+  const parsed = Schema.decodeUnknownExit(RemovePasskey)(input)
+  if (Exit.isFailure(parsed))
     return { kind: "error", message: "Unable to remove this Passkey." }
   return requestPasskeys<
     typeof PasskeyList.Type,
@@ -174,7 +171,7 @@ export async function removePasskey(input: unknown): Promise<Listed | Failure> {
     "success"
   >({
     method: "DELETE",
-    body: parsed.right,
+    body: parsed.value,
     schema: PasskeyList,
     kind: "success",
     message: "Unable to remove this Passkey.",

@@ -1,21 +1,14 @@
 # @processfocus/plugin-aws-lambda
 
-Official Process Focus plugin for invoking AWS Lambda functions from a
-`SystemStep`.
+Invoke AWS Lambda functions from a Process Focus system step using
+`AwsFunctionStep`:
 
 ```ts
 import { AwsFunctionStep } from "@processfocus/plugin-aws-lambda"
 ```
 
-The package root is authoring-safe. It contains no private AWS runtime stacks,
-account configuration, or operator tooling.
+The organisation defines the function invocation and its input. The runtime host
+supplies AWS credentials, region and invocation routing.
 
-## Build
-
-Run `bun scripts/nx-quiet.ts run @processfocus/plugin-aws-lambda:build` from the
-workspace root.
-
-## Test
-
-Run `bun scripts/nx-quiet.ts run @processfocus/plugin-aws-lambda:test` from the
-workspace root.
+See [plugin configuration](../CONFIGURATION.md) for how plugins fit into an
+organisation.

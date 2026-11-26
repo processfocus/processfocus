@@ -11,8 +11,14 @@ describe("frontend development environment", () => {
   it("preserves the selected organisation", () => {
     const env = buildDevelopmentEnv("/repo", {
       PF_ORG: "/org-a",
+      PF_RUNTIME_MODE: "deployed",
+      PF_STAGE: "production",
+      PF_ENV: "dev",
     })
 
     expect(env["PF_ORG"]).toBe("/org-a")
+    expect(env["PF_RUNTIME_MODE"]).toBe("local")
+    expect(env["PF_STAGE"]).toBe("production")
+    expect(env["PF_ENV"]).toBe("dev")
   })
 })

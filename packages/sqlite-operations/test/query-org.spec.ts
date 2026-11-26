@@ -1,6 +1,6 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
 import { eq, not } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
 import { OrgQueries } from "@pf/graphql-db-operations"
 import { storeOrganisation } from "@pf/org-to-db"
@@ -17,7 +17,7 @@ import { describe, expect, it } from "bun:test"
 describe("query-org", () => {
   const RequestTimeTest = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
 
   const TestLayer = Layer.provideMerge(
@@ -29,7 +29,7 @@ describe("query-org", () => {
     DatabaseTest,
   )
 
-  type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+  type TestRequirements = Layer.Success<typeof TestLayer>
 
   const runTest = <A, E>(
     test: Effect.Effect<A, E, TestRequirements>,

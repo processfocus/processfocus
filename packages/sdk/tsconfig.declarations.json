@@ -16,7 +16,6 @@
     "src/**/*.ts",
     "../frontend-plugin-host/src/**/*.ts",
     "../frontend-plugin-host/src/**/*.tsx",
-    "../form-client-representation/src/**/*.ts",
     "../form-submission-schema/src/**/*.ts"
   ],
   "exclude": ["../**/*.spec.ts", "../**/*.spec.tsx"]

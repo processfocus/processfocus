@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, Data, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Error thrown when a process lookup by path fails to find a matching record.
@@ -42,6 +42,7 @@ export interface WorkflowFlowRow {
   condition: string | null
   isElse: boolean
   isOnError: boolean
+  deadlineName?: string | null
   taggedErrors: readonly string[] | null
   schedule: string | null
 }
@@ -74,9 +75,7 @@ export interface WorkflowData {
 /**
  * Service providing workflow query operations.
  */
-export class WorkflowQueries extends Context.Tag(
-  "@pf/graphql-db-operations/WorkflowQueries",
-)<
+export class WorkflowQueries extends Context.Service<
   WorkflowQueries,
   {
     /**
@@ -90,4 +89,4 @@ export class WorkflowQueries extends Context.Tag(
       processPath: string,
     ) => Effect.Effect<WorkflowData, SqlError | ProcessNotFoundError>
   }
->() {}
+>()("@pf/graphql-db-operations/WorkflowQueries") {}

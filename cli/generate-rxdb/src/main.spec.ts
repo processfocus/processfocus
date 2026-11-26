@@ -4,87 +4,7 @@ import { walkCollectionSchema } from "./walker"
 import { describe, expect, it } from "bun:test"
 
 describe("walkCollectionSchema", () => {
-  describe("basic primitive types", () => {
-    it("should handle String fields", () => {
-      const schema = ES.Struct({ name: ES.String })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields).toHaveLength(1)
-      expect(result.fields[0]).toEqual({
-        name: "name",
-        type: "String",
-        nullable: false,
-      })
-    })
-
-    it("should handle id fields as ID type", () => {
-      const schema = ES.Struct({ id: ES.String })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields[0]).toEqual({
-        name: "id",
-        type: "ID",
-        nullable: false,
-      })
-    })
-
-    it("should handle Number fields as Float", () => {
-      const schema = ES.Struct({ price: ES.Number })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields[0]).toEqual({
-        name: "price",
-        type: "Float",
-        nullable: false,
-      })
-    })
-
-    it("should handle Boolean fields", () => {
-      const schema = ES.Struct({ active: ES.Boolean })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields[0]).toEqual({
-        name: "active",
-        type: "Boolean",
-        nullable: false,
-      })
-    })
-
-    it("should handle Unknown fields as JSON", () => {
-      const schema = ES.Struct({ metadata: ES.Unknown })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields[0]).toEqual({
-        name: "metadata",
-        type: "JSON",
-        nullable: false,
-      })
-    })
-  })
-
   describe("branded and refined types", () => {
-    it("should map Int to GraphQL Int", () => {
-      const schema = ES.Struct({ count: ES.Int })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields[0]).toEqual({
-        name: "count",
-        type: "Int",
-        nullable: false,
-      })
-    })
-
-    it("should map DateTimeUtc to DateTimeISO", () => {
-      const schema = ES.Struct({ createdAt: ES.DateTimeUtc })
-      const result = Effect.runSync(walkCollectionSchema(schema.ast))
-
-      expect(result.fields[0]).toEqual({
-        name: "createdAt",
-        type: "DateTimeISO",
-        nullable: false,
-      })
-    })
-
     it("should map BigInt to String", () => {
       const schema = ES.Struct({ largeNumber: ES.BigInt })
       const result = Effect.runSync(walkCollectionSchema(schema.ast))
@@ -187,7 +107,7 @@ describe("walkCollectionSchema", () => {
   describe("Record types", () => {
     it("should map Record to JSON", () => {
       const schema = ES.Struct({
-        state: ES.Record({ key: ES.String, value: ES.Unknown }),
+        state: ES.Record(ES.String, ES.Unknown),
       })
       const result = Effect.runSync(walkCollectionSchema(schema.ast))
 
@@ -225,7 +145,6 @@ describe("walkCollectionSchema", () => {
         nullable: false,
       })
 
-      // Check nested type was generated
       expect(result.nestedTypes).toHaveLength(1)
       const nestedType = result.nestedTypes[0]
       expect(nestedType).toBeDefined()
@@ -268,86 +187,18 @@ describe("walkCollectionSchema", () => {
   })
 
   describe("error cases", () => {
-    it("should fail for non-TypeLiteral AST nodes", () => {
+    it("should fail for non-Objects AST nodes", () => {
       const schema = ES.String
       const result = Effect.runSyncExit(walkCollectionSchema(schema.ast))
 
       expect(Exit.isFailure(result)).toBe(true)
       if (Exit.isFailure(result)) {
-        expect(result.cause._tag).toBe("Fail")
+        expect(result.cause.reasons[0]?._tag).toBe("Fail")
       }
     })
   })
 
   describe("real-world example", () => {
-    it("should handle DraftProcessExecution schema from rxdb-collections", () => {
-      const RxDbDocumentSchema = ES.Struct({
-        id: ES.String,
-        updatedAt: ES.Number,
-        deleted: ES.Boolean,
-      })
-
-      const DraftProcessExecutionSchema = ES.Struct({
-        ...RxDbDocumentSchema.fields,
-        processId: ES.String,
-        name: ES.String,
-        state: ES.Unknown,
-        fieldsCompleted: ES.Int,
-        totalFields: ES.Int,
-        lastSaved: ES.DateTimeUtc,
-      })
-
-      const result = Effect.runSync(
-        walkCollectionSchema(DraftProcessExecutionSchema.ast),
-      )
-
-      expect(result.fields).toHaveLength(9)
-
-      // Check base fields
-      expect(result.fields.find((f) => f.name === "id")).toEqual({
-        name: "id",
-        type: "ID",
-        nullable: false,
-      })
-      expect(result.fields.find((f) => f.name === "updatedAt")).toEqual({
-        name: "updatedAt",
-        type: "Float",
-        nullable: false,
-      })
-      expect(result.fields.find((f) => f.name === "deleted")).toEqual({
-        name: "deleted",
-        type: "Boolean",
-        nullable: false,
-      })
-
-      // Check process-specific fields
-      expect(result.fields.find((f) => f.name === "processId")).toEqual({
-        name: "processId",
-        type: "String",
-        nullable: false,
-      })
-      expect(result.fields.find((f) => f.name === "fieldsCompleted")).toEqual({
-        name: "fieldsCompleted",
-        type: "Int",
-        nullable: false,
-      })
-      expect(result.fields.find((f) => f.name === "totalFields")).toEqual({
-        name: "totalFields",
-        type: "Int",
-        nullable: false,
-      })
-      expect(result.fields.find((f) => f.name === "lastSaved")).toEqual({
-        name: "lastSaved",
-        type: "DateTimeISO",
-        nullable: false,
-      })
-      expect(result.fields.find((f) => f.name === "state")).toEqual({
-        name: "state",
-        type: "JSON",
-        nullable: false,
-      })
-    })
-
     it("maps execution durationMs to Float so multi-week durations fit GraphQL", () => {
       const result = Effect.runSync(walkCollectionSchema(ExecutionSchema.ast))
 

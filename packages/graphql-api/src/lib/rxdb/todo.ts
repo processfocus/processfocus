@@ -37,12 +37,10 @@ const mapTodoRowToGraphql = (row: TodoRow): Effect.Effect<Todo, never> =>
  *
  * Phase 1: Push operations are noop (read-only collection).
  */
-export class TodoCollectionOps extends Context.Tag(
-  "@pf/graphql-api/TodoCollectionOps",
-)<
+export class TodoCollectionOps extends Context.Service<
   TodoCollectionOps,
   RxDbCollectionOps<TodoRow, Todo, TodoInputPushRowT0NewDocumentStateT0>
->() {}
+>()("@pf/graphql-api/TodoCollectionOps") {}
 
 /**
  * Live implementation that delegates to TodoQueries.

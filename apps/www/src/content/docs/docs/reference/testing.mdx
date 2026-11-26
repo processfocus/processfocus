@@ -1,0 +1,77 @@
+---
+title: Testing
+description: Reference for testing processes and permissions.
+---
+
+Process Focus offers various ways of testing code:
+
+- Writing unit tests.
+- Running the project locally with the [local runtime](/docs/concepts/runtime/). This allows for E2E and manual testing.
+- Deploying to a test environment in the Process Focus Cloud
+For an overview of what to check when testing a process, see
+[Process Testing](/docs/concepts/process-testing/).
+
+## Unit tests
+
+Use `runProcess` from `@pf/process-test-runner` to submit form data and
+check a process's outcome without starting the Dashboard. This Bun test
+uses the [web order process with a system step](/docs/reference/process-steps/#example-system-step).
+Save that process in `src/web-order.ts` and the test in
+`test/web-order.test.ts`.
+
+```typescript
+import { expect, test } from "bun:test"
+import { createTestLayers, runProcess } from "@pf/process-test-runner"
+import { Effect } from "effect"
+import { org } from "../src/web-order"
+
+test("normalises the SKU from the submitted order", async () => {
+  const result = await Effect.runPromise(
+    runProcess({
+      org,
+      processPath: "/web-order",
+      forms: [
+        {
+          stepPath: "web-order/Capture order",
+          data: { sku: "  abc-123  ", quantity: 2 },
+        },
+      ],
+    }).pipe(Effect.provide(createTestLayers(org))),
+  )
+
+  expect(result.finished).toBe(true)
+  expect(result.finalState).toMatchObject({ normalisedSku: "ABC-123" })
+})
+```
+
+Run it from your project directory with `bun test test/web-order.test.ts`.
+The input checks both trimming and uppercasing. Checking the final process
+state also catches a step that runs but fails to save its output. This test
+doesn't check the browser UI or user permissions.
+
+## Local testing
+
+Run your organisation model in the [local runtime](/docs/concepts/runtime/)
+to test processes during development. Check the resulting tasks, process data, and
+automated actions against the expected outcome.
+
+### Submit without waiting
+
+When starting a process, an authorized user can select **Submit without
+waiting**. The selection requires permission to start the process and the
+`skipScheduleWaits` permission for that process.
+
+| Behaviour | Submit without waiting |
+| --- | --- |
+| Authored schedule delays | Eligible work does not wait for its scheduled date. Schedules must still resolve. |
+| Human tasks, conditions, and dependencies | Still apply. Conditions use actual data and time. |
+| Emails and integrations | Run normally; this is not a dry run. |
+| Queue delays and retry backoff | Unchanged. |
+| Execution mode | Applies to the entire execution and cannot be changed after submission. |
+
+Test ordinary submission separately when scheduled timing matters.
+
+## Permissions
+
+The frontend provides role switching, when permitted, and a Cedar policy
+permission checker. See [Testing permissions](/docs/reference/authorisation/testing-permissions/).

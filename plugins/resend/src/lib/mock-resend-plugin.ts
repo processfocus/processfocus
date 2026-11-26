@@ -1,10 +1,10 @@
-import { Effect, Layer } from "effect"
 import {
   type EmailMessage,
   EmailSender,
   NotificationDeliveryConfig,
   NotificationDeliverySendError,
-} from "@pf/job-handler"
+} from "@processfocus/runtime"
+import { Effect, Layer } from "effect"
 import {
   ResendClient,
   ResendDeferredDelivery,
@@ -249,6 +249,9 @@ const cloneTemplate = (template: ResendEmailTemplate): ResendEmailTemplate => ({
 })
 
 const cloneRequest = (request: ResendEmailRequest): ResendEmailRequest => ({
+  ...(request.idempotencyKey !== undefined && {
+    idempotencyKey: request.idempotencyKey,
+  }),
   to: cloneStringOrArray(request.to),
   ...(request.subject !== undefined && { subject: request.subject }),
   ...(request.html !== undefined && { html: request.html }),

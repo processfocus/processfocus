@@ -47,6 +47,7 @@ export function GithubProvider(config: GithubConfig) {
       authorization: "https://github.com/login/oauth/authorize",
       token: "https://github.com/login/oauth/access_token",
     },
+    supportsVerifiedHumanIdentity: true,
     resolveHumanIdentity: async (tokenset) => {
       const profile = await fetchProviderJson(
         "https://api.github.com/user",

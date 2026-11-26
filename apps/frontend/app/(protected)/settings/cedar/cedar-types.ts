@@ -35,6 +35,8 @@ export interface AuthorizationEvalInput {
   processPath: string | null
   entity: AuthorizationEntityType | null
   attrValues: Record<string, boolean | string>
+  /** Hypothetical instance facts for the policy explorer, never live authority. */
+  completionContext?: { todoId: string; assignedTo?: string }
 }
 
 interface HandbookItem {
@@ -73,7 +75,16 @@ export interface AuthorizationEvalResult {
     principal: { type: string; id: string }
     action: { type: string; id: string }
     resource: { type: string; id: string }
-    context: { nodeEnv: string; requestTime: string }
+    context: {
+      nodeEnv: string
+      requestTime: string
+      weekday: string
+      runtimeMode: string
+      stage: string
+      environment: string
+      todoId?: string
+      assignedTo?: string
+    }
     entityCount: number
   }
 }

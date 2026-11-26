@@ -3,13 +3,17 @@ import { randomUUID } from "node:crypto"
 import { When } from "@cucumber/cucumber"
 import { Schema } from "effect"
 import { decodeJwt } from "jose"
-import { getEffectiveAuthUrl } from "@pf/frontend-endpoints/port-files"
+import {
+  getEffectiveAuthUrl,
+  getEffectiveGraphqlEndpoint,
+} from "@pf/frontend-endpoints/port-files"
 import {
   runAuthenticate,
   runAuthenticateAsFrontend,
   runAuthenticateAsProviderUser,
   runAuthenticateWithRole,
 } from "../support/auth-helpers"
+import { providerUser } from "../support/provider-user"
 import { sleep } from "../support/sleep"
 import type { TestWorld } from "../support/world"
 
@@ -24,12 +28,12 @@ const secretBody = Schema.decodeUnknownSync(
   Schema.Struct({ secret: Schema.String }),
 )
 
-const authPost = async (
-  path: string,
+const post = async (
+  url: URL,
   token: string,
   body: unknown,
 ): Promise<unknown> => {
-  const response = await fetch(`${getEffectiveAuthUrl()}${path}`, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -39,8 +43,8 @@ const authPost = async (
   })
   assert.equal(
     response.status,
-    path === "/delegations" ? 201 : 200,
-    `${path} must succeed`,
+    url.pathname === "/delegations" ? 201 : 200,
+    `${url.pathname} must succeed`,
   )
   return response.json()
 }
@@ -83,7 +87,7 @@ const withCaller = async (
     await run({ token, userId: properties.userId })
     return
   }
-  const email =
+  const persona =
     scope === "exact"
       ? "employee@example.com"
       : scope === "hierarchy"
@@ -91,26 +95,32 @@ const withCaller = async (
         : scope === "broad"
           ? "procurement-manager@example.com"
           : "ci@example.com"
-  tokenValue(await runAuthenticateAsProviderUser(email))
+  const human = await providerUser(persona)
+  const email = human.email
+  const user = Schema.decodeUnknownSync(
+    Schema.Struct({ userId: Schema.String }),
+  )(decodeJwt(await human.credentials())["properties"])
   world.accessToken = adminToken
   const data = await world.executeGraphQL<{
     allRoles: { items: { id: string; path: string }[] }
-    allUsers: { items: { id: string; providerUserEmail: string }[] }
-  }>(
-    `query { allRoles(limit: 100) { items { id path } } allUsers(limit: 100) { items { id providerUserEmail } } }`,
-  )
-  const user = data.allUsers.items.find(
-    (item) => item.providerUserEmail === email,
-  )
-  assert.ok(user)
+  }>(`query { allRoles(limit: 100) { items { id path } } }`)
   const detail = await world.executeGraphQL<{
     userDetail: { providerUser: { id: string; roleIds: string[] } }
   }>(
     `query($id: ID!) { userDetail(userId: $id) { providerUser { id roleIds } } }`,
-    { id: user.id },
+    { id: user.userId },
   )
   const provider = detail.userDetail.providerUser
   const wanted = startRole ? ["/Employee", "/hr/HR"] : ["/finance/Manager"]
+  wanted.push(
+    ...data.allRoles.items
+      .filter(
+        (role) =>
+          role.path.startsWith("/GraphQLE2E") &&
+          provider.roleIds.includes(role.id),
+      )
+      .map((role) => role.path),
+  )
   if (scope === "default" || scope === "none") wanted.push("/Administrator")
   const update = async (roleIds: string[]) => {
     world.accessToken = adminToken
@@ -131,21 +141,30 @@ const withCaller = async (
       .map((role) => role.id),
   )
   try {
-    let token = tokenValue(await runAuthenticate(`email:${email}`))
+    await human.context.clearCookies()
+    let token = await human.credentials()
     let delegationName: string | undefined
     if (kind === "delegation") {
       delegationName = `schedule-${randomUUID()}`
       const issued = secretBody(
-        await authPost("/delegations", token, {
-          name: delegationName,
-          lifetimeDays: 1,
-        }),
+        await post(
+          new URL("/delegations", getEffectiveGraphqlEndpoint()),
+          token,
+          {
+            name: delegationName,
+            lifetimeDays: 1,
+          },
+        ),
       )
       const frontend = tokenValue(await runAuthenticateAsFrontend())
       token = tokenBody(
-        await authPost("/oauth/delegation", frontend, {
-          secret: issued.secret,
-        }),
+        await post(
+          new URL("/oauth/delegation", getEffectiveAuthUrl()),
+          frontend,
+          {
+            secret: issued.secret,
+          },
+        ),
       ).access_token
     }
     const payload = decodeJwt(token)
@@ -160,7 +179,7 @@ const withCaller = async (
       }),
     )(payload["properties"])
     assert.equal(properties.email, email)
-    assert.equal(properties.userId, user.id)
+    assert.equal(properties.userId, user.userId)
     assert.equal(properties.delegation?.name, delegationName)
     await run({
       token,

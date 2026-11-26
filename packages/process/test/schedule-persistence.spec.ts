@@ -1,4 +1,4 @@
-import { DateTime, Effect, Either, Schema } from "effect"
+import { DateTime, Effect, Result, Schema } from "effect"
 import {
   Form,
   Organisation,
@@ -19,7 +19,7 @@ const makeProcess = () => {
   })
   const start = new Form(process, "start", {
     role,
-    form: () => ({ startDate: Schema.DateTimeUtc }),
+    form: () => ({ startDate: Schema.DateTimeUtcFromString }),
   })
   const next = new Form(process, "next", { role, form: () => ({}) })
   process.start(start).end(next, {
@@ -40,7 +40,7 @@ describe("Schedules after JSON persistence", () => {
         start.node.path,
         next.node.path,
         state,
-        buildFlowContext("execution", DateTime.unsafeMake("2026-09-14"), []),
+        buildFlowContext("execution", DateTime.makeUnsafe("2026-09-14"), []),
       ),
     )
     expect(Schedule.isScheduleMarker(result)).toBe(false)
@@ -51,17 +51,17 @@ describe("Schedules after JSON persistence", () => {
   it("rejects an invalid persisted date instead of releasing scheduled work", async () => {
     const { org, start, next } = makeProcess()
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         makeScheduleEvaluator(org).evaluate(
           start.node.path,
           next.node.path,
           { startDate: "invalid" },
-          buildFlowContext("execution", DateTime.unsafeMake("2026-09-14"), []),
+          buildFlowContext("execution", DateTime.makeUnsafe("2026-09-14"), []),
         ),
       ),
     )
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result))
-      expect(result.left._tag).toBe("ScheduleEvaluationError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result))
+      expect(result.failure._tag).toBe("ScheduleEvaluationError")
   })
 })

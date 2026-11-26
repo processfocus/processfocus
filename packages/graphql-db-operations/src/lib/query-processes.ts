@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { PullCheckpoint } from "./draft-process-execution"
 
 export interface DbProcess {
@@ -34,9 +34,7 @@ export interface ProcessListQuery {
 /**
  * Service providing process query operations.
  */
-export class ProcessQueries extends Context.Tag(
-  "@pf/graphql-db-operations/ProcessQueries",
-)<
+export class ProcessQueries extends Context.Service<
   ProcessQueries,
   {
     /**
@@ -52,7 +50,7 @@ export class ProcessQueries extends Context.Tag(
       query: ProcessListQuery,
     ) => Effect.Effect<ProcessListRow[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/ProcessQueries") {}
 
 /**
  * Database row type for Process collection in RxDB replication.
@@ -80,15 +78,34 @@ export interface ProcessCollectionRow {
   maxDurationMs: number | null
 }
 
+/** Current Process content and visibility inputs, without execution statistics. */
+export type ProcessMetadataRow = Omit<
+  ProcessCollectionRow,
+  "activeInstances" | "minDurationMs" | "maxDurationMs"
+>
+
 /**
  * Service providing Process collection operations for RxDB replication.
  * Pull-only for now as Process documents are server-managed.
  */
-export class ProcessCollectionQueries extends Context.Tag(
-  "@pf/graphql-db-operations/ProcessCollectionQueries",
-)<
+export class ProcessCollectionQueries extends Context.Service<
   ProcessCollectionQueries,
   {
+    /** Advance past the collection head before notification, in a caller-owned transaction. */
+    readonly advanceProcessRevision: (
+      id: string,
+    ) => Effect.Effect<void, SqlError>
+
+    /** Server-owned entitlement history; callers must authorize before recording. */
+    readonly observeProcesses: (
+      scope: string,
+      ids: readonly string[],
+    ) => Effect.Effect<void, SqlError>
+    readonly getObservedProcessIds: (
+      scope: string,
+      ids: readonly string[],
+    ) => Effect.Effect<string[], SqlError>
+
     /**
      * Pull processes from database for RxDB replication.
      *
@@ -101,13 +118,14 @@ export class ProcessCollectionQueries extends Context.Tag(
       limit: number,
     ) => Effect.Effect<ProcessCollectionRow[], SqlError>
 
-    /**
-     * Get processes by their IDs.
-     *
-     * @param ids - Process IDs to fetch
-     */
+    /** Fresh metadata for recipient authorization; never reads execution statistics. */
+    readonly getProcessMetadata: (
+      ids: string[],
+    ) => Effect.Effect<ProcessMetadataRow[], SqlError>
+
+    /** Get full Process documents, including display statistics, by ID. */
     readonly getProcesses: (
       ids: string[],
     ) => Effect.Effect<ProcessCollectionRow[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/ProcessCollectionQueries") {}

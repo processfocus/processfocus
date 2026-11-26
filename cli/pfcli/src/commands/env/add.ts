@@ -1,10 +1,12 @@
 import { Console, Effect } from "effect"
 import { CliError } from "../../errors"
+import { acquireAccessToken } from "../../utils/credentials"
 import {
   buildExecutionEventSource,
   closeExecutionEventSource,
 } from "../../utils/execution-event-source"
 import { formatExecutionLogMessage } from "../../utils/execution-log-format"
+import { workloadExecutionPoll } from "../../utils/execution-snapshot"
 import { createExecutionEventSource } from "../../utils/execution-subscription"
 import {
   extractExecutionFailureMessage,
@@ -55,15 +57,15 @@ export const runEnvAdd = (
     dependencies.createExecutionEventSource ?? createExecutionEventSource
 
   return Effect.gen(function* () {
-    yield* ensureKnownStageNames(projectId, [stageId])
+    yield* ensureKnownStageNames(projectId, [stageId], "create-environment")
 
-    const credentials = yield* readCredentialsOrFail()
+    const credentials = yield* readCredentialsOrFail("create-environment")
     const endpoint = resolveGraphqlEndpoint(credentials.baseUrl)
 
     const subscriptionTransport =
       yield* graphqlRequest<SubscriptionTransportResponse>(
         endpoint,
-        credentials.accessToken,
+        acquireAccessToken(credentials),
         SUBSCRIPTION_TRANSPORT_QUERY,
         {},
       )
@@ -85,7 +87,7 @@ export const runEnvAdd = (
       const addEnvironmentResult =
         yield* graphqlRequest<StartAddEnvironmentResponse>(
           endpoint,
-          credentials.accessToken,
+          acquireAccessToken(credentials),
           START_ADD_ENVIRONMENT_MUTATION,
           {
             projectId,
@@ -115,6 +117,11 @@ export const runEnvAdd = (
         executionEventSource,
         addEnvironmentResult.startOperationsAddEnvironment.executionId,
         {
+          ...workloadExecutionPoll(
+            endpoint,
+            credentials,
+            addEnvironmentResult.startOperationsAddEnvironment.executionId,
+          ),
           executionLabel: "environment creation",
           timeoutMs: ENV_ADD_WAIT_TIMEOUT_MS,
           heartbeatMs: ENV_ADD_WAIT_HEARTBEAT_MS,

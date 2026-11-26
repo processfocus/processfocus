@@ -27,7 +27,7 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "publishConfig": {
     "access": "public",

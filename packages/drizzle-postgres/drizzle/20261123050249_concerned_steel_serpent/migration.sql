@@ -1,0 +1,1 @@
+ALTER TABLE "pf_to_do" ADD COLUMN "completion_fingerprint" varchar(64);

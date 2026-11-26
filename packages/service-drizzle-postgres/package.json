@@ -19,18 +19,15 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
-    "@effect/sql-pg": "^0.53.0",
+    "@effect/sql-pg": "4.1.4",
     "@pf/db-info": "workspace:*",
     "@pf/drizzle-postgres": "*",
     "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@effect/experimental": "^0.61.1",
-    "@effect/platform": "^0.97.2",
-    "@effect/vitest": "^0.30.0",
-    "@testcontainers/postgresql": "^12.1.0"
+    "@effect/vitest": "4.1.4",
+    "@testcontainers/postgresql": "^12.2.1"
   },
   "module": "./dist/index.js",
   "license": "SEE LICENSE IN LICENSE.md"

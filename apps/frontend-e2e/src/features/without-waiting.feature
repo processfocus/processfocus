@@ -16,10 +16,10 @@ Feature: Without Waiting submission
     When I open the onboarding start form
     Then the main Submit action still starts an ordinary execution
 
-  Scenario: Reopened drafts keep normal Submit as the default
+  Scenario: Reopened forms keep normal Submit as the default
     Given I use the disposable onboarding browser account with Administrator permission
     When I open the onboarding start form
     Then Without Waiting submits only after validation
     When I fill a future onboarding form
-    And I save and reopen the onboarding draft
+    And I reopen the onboarding start form with my saved values
     Then the main Submit action still starts an ordinary execution

@@ -30,7 +30,7 @@ export interface NotificationSenderIdentity {
 }
 
 /**
- * Shared notification-delivery contracts used by official plugins.
+ * Canonical notification-delivery contracts used by runtime adapters and plugins.
  * Identifiers stay stable so workspace implementations and published plugins
  * resolve the same Effect services.
  */
@@ -42,9 +42,11 @@ export class NotificationDeliverySendError extends Data.TaggedError(
   readonly cause?: unknown
 }> {}
 
-export class EmailSender extends Context.Tag("@pf/job-handler/EmailSender")<
+export class EmailSender extends Context.Service<
   EmailSender,
   {
+    /** The fallback records a log, but cannot deliver email. */
+    readonly loggingOnly?: true
     readonly send: (
       message: EmailMessage,
       options?: { readonly idempotencyKey?: string },
@@ -54,15 +56,13 @@ export class EmailSender extends Context.Tag("@pf/job-handler/EmailSender")<
       never
     >
   }
->() {}
+>()("@pf/job-handler/EmailSender") {}
 
-export class NotificationDeliveryConfig extends Context.Tag(
-  "@pf/job-handler/NotificationDeliveryConfig",
-)<
+export class NotificationDeliveryConfig extends Context.Service<
   NotificationDeliveryConfig,
   {
     readonly getFrontendBaseUrl: () => string
     readonly getSenderIdentity: () => NotificationSenderIdentity | undefined
     readonly getEnvironment: () => string | undefined
   }
->() {}
+>()("@pf/job-handler/NotificationDeliveryConfig") {}

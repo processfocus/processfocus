@@ -3,7 +3,6 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useCallback } from "react"
-import type { JsonSchemaRoot } from "@pf/form"
 import { CompleteTodoForm } from "../../components/complete-todo-form"
 import { FormSkeleton } from "@/app/(protected)/processes/components/start-process-form"
 import { useFormMetadata } from "@/hooks/use-form-metadata"
@@ -26,7 +25,6 @@ export default function CompleteTodoClient({
 
   const defaultValues =
     (formMetadata?.defaultValues as Record<string, unknown> | null) ?? null
-  const jsonSchema = (formMetadata?.jsonSchema as JsonSchemaRoot | null) ?? null
 
   const handleClose = useCallback(() => {
     router.push("/to-dos")
@@ -120,8 +118,8 @@ export default function CompleteTodoClient({
             inputTypeName={formMetadata.inputTypeName}
             completeMutationName={formMetadata.completeMutationName}
             defaultValues={defaultValues}
-            formDefinition={formMetadata.formDefinition}
-            jsonSchema={jsonSchema}
+            requestData={formMetadata.requestData}
+            pluginConfiguration={formMetadata.pluginConfiguration}
             onClose={handleClose}
           />
         </div>

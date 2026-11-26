@@ -1,7 +1,7 @@
-import { SqlClient, type SqlError } from "@effect/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { Context, Effect, Layer } from "effect"
-import type { ConfigError } from "effect/ConfigError"
+import type { ConfigError } from "effect/Config"
+import { SqlClient, type SqlError } from "effect/sql"
 import { DatabaseConnectionInfo } from "@pf/db-info"
 
 /**
@@ -9,7 +9,6 @@ import { DatabaseConnectionInfo } from "@pf/db-info"
  *
  * Only `PRAGMA foreign_keys = ON` is needed for in-memory databases.
  * busy_timeout is not relevant for :memory: databases since they're single-connection.
- * WAL mode is enabled by default by Bun's sqlite driver.
  *
  * Note: Pragmas run at layer construction because Bun's sqlite driver opens
  * connections eagerly - there's no benefit to deferring.

@@ -15,7 +15,7 @@ import {
 import Image from "next/image"
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { DelegationExpiry } from "./delegation-expiry"
+import { DelegationExpiryMenuItem } from "./delegation-expiry"
 import { useMocks } from "./mocks-provider"
 import { NotificationBell } from "./notification-bell"
 import { listDelegations } from "@/app/(protected)/act-on-behalf/actions"
@@ -168,8 +168,8 @@ export const navigation: ShellNavigationItem[] = [
   },
   {
     id: "settings",
-    label: "Profile & Settings",
-    description: "Preferences, notifications, and roles",
+    label: "Users & Sign-in",
+    description: "Manage users, invitations, roles, and sign-in providers.",
   },
   {
     id: "authorization",
@@ -233,12 +233,10 @@ export function Header({
     retry: false,
   })
 
-  // Calculate initials from firstName and lastName
   const initials = providerUser
     ? getInitials(providerUser.firstName, providerUser.lastName)
     : "?"
 
-  // Use provider user data or fallback to default
   const displayName = providerUser?.name ?? "Loading..."
   const delegation = "email" in session ? session.delegation : undefined
   const providerEmail = "email" in session ? session.email : providerUser?.email
@@ -418,9 +416,7 @@ export function Header({
                   <Copy className="h-4 w-4 shrink-0" aria-hidden="true" />
                 </DropdownMenuItem>
                 {delegation && (
-                  <div className="max-w-80 px-2 py-2 text-xs text-muted-foreground">
-                    <DelegationExpiry expiresAt={delegation.expiresAt} />
-                  </div>
+                  <DelegationExpiryMenuItem expiresAt={delegation.expiresAt} />
                 )}
                 <DropdownMenuSeparator />
               </>

@@ -5,6 +5,7 @@
     "types": ["bun"]
   },
   "include": [
+    "test/**/*.ts",
     "vite.config.ts",
     "vite.config.mts",
     "vitest.config.ts",

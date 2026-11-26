@@ -7,8 +7,8 @@
  * @packageDocumentation
  */
 
-import { HttpServerResponse } from "@effect/platform"
 import { Effect } from "effect"
+import { HttpServerResponse } from "effect/http"
 
 /**
  * Create a JSON response, handling serialization errors internally.
@@ -25,7 +25,7 @@ export const json = <T>(
   options?: HttpServerResponse.Options.WithContentType,
 ) =>
   HttpServerResponse.json(data, options).pipe(
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.succeed(
         HttpServerResponse.text("Internal Server Error", { status: 500 }),
       ),

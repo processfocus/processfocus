@@ -14,12 +14,8 @@ const serverBoundaryScript = `
       formMetadata: {
         stepPath: "/enrolment/Upload documents",
         processName: "Enrolment",
-        formDefinition: {
-          components: { secret: ["private metadata"] },
-          rules: [],
-        },
+        requestData: { presentation: {}, originalValues: {}, inaccessible: [] },
         defaultValues: {},
-        jsonSchema: {},
       },
     },
     })
@@ -40,7 +36,7 @@ const serverBoundaryScript = `
 `
 
 describe("public todo server boundary", () => {
-  test("preserves malformed form metadata for fail-closed reporting", () => {
+  test("loads request data without serialized form definitions", () => {
     const result = Bun.spawnSync({
       cmd: ["bun", "--eval", serverBoundaryScript],
       cwd: resolve(import.meta.dir, ".."),
@@ -57,12 +53,17 @@ describe("public todo server boundary", () => {
     expect(output.todo).toEqual(
       expect.objectContaining({
         formMetadata: expect.objectContaining({
-          formDefinition: null,
-          formDefinitionStatus: "malformed",
+          requestData: {
+            presentation: {},
+            originalValues: {},
+            inaccessible: [],
+          },
         }),
       }),
     )
-    expect(output.requestedDocument).toContain("formDefinition")
+    expect(output.requestedDocument).toContain("requestData")
+    expect(output.requestedDocument).not.toContain("formDefinition")
+    expect(output.requestedDocument).not.toContain("jsonSchema")
     expect(output.requestedDocument).not.toContain("clientRepresentation")
     expect(output.requestedDocument).not.toMatch(/^\s*rules\s*$/m)
   })

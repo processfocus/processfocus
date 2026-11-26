@@ -30,7 +30,7 @@ const TokenResponseSchema = Schema.Struct({
  * Schema for Google Directory API user response.
  */
 const DirectoryUserResponseSchema = Schema.Struct({
-  orgUnitPath: Schema.optionalWith(Schema.String, { exact: true }),
+  orgUnitPath: Schema.optionalKey(Schema.String),
 })
 
 /**
@@ -51,8 +51,8 @@ export const fetchUserOrgUnitPath = (
 ): Effect.Effect<string | undefined, GoogleDirectoryError> =>
   Effect.gen(function* () {
     // Decode base64 service account key
-    const keyJson = yield* Schema.decodeUnknown(
-      Schema.parseJson(Schema.Unknown),
+    const keyJson = yield* Schema.decodeUnknownEffect(
+      Schema.fromJsonString(Schema.Unknown),
     )(atob(serviceAccountKeyBase64)).pipe(
       Effect.mapError(
         (e) =>
@@ -63,7 +63,7 @@ export const fetchUserOrgUnitPath = (
       ),
     )
 
-    const key = yield* Schema.decodeUnknown(ServiceAccountKeySchema)(
+    const key = yield* Schema.decodeUnknownEffect(ServiceAccountKeySchema)(
       keyJson,
     ).pipe(
       Effect.mapError(
@@ -124,7 +124,7 @@ export const fetchUserOrgUnitPath = (
         }),
     })
 
-    const token = yield* Schema.decodeUnknown(TokenResponseSchema)(
+    const token = yield* Schema.decodeUnknownEffect(TokenResponseSchema)(
       tokenResponse,
     ).pipe(
       Effect.mapError(
@@ -157,7 +157,7 @@ export const fetchUserOrgUnitPath = (
         }),
     })
 
-    const user = yield* Schema.decodeUnknown(DirectoryUserResponseSchema)(
+    const user = yield* Schema.decodeUnknownEffect(DirectoryUserResponseSchema)(
       userResponse,
     ).pipe(
       Effect.mapError(

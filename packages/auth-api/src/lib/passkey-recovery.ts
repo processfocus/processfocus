@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
-import { SqlClient } from "@effect/sql"
 import { DateTime, Effect, Option, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import { StorageService } from "@pf/openauth"
 import { AuthenticationDatabase } from "./authentication-database.js"
 import { getPasskeyUserHandle } from "./passkey-user-handle.js"

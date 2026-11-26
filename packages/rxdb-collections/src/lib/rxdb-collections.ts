@@ -1,11 +1,16 @@
 import { Schema as ES } from "effect"
 
+// Preserve named date definitions used by the existing RxDB schema exporter.
+const DateTimeUtcFromString = ES.DateTimeUtcFromString.annotate({
+  identifier: "DateTimeUtc",
+})
+
 /**
  * Base schema that all RxDB documents must implement.
  * Provides the required fields for RxDB replication protocol.
  */
 export const RxDbDocumentSchema = ES.Struct({
-  id: ES.String.pipe(ES.maxLength(41)), // RxDB requires maxLength on primary key
+  id: ES.String.check(ES.isMaxLength(41)), // RxDB requires maxLength on primary key
   updatedAt: ES.Number, // Unix timestamp in milliseconds
   // Soft deletes are handled internally by RxDb and should not be part of our schema
   // deleted: ES.Boolean,
@@ -29,10 +34,10 @@ export const DraftProcessExecutionSchema = ES.Struct({
   processId: ES.String,
   name: ES.String,
   startStepPath: ES.String, // Path to the start step
-  state: ES.Record({ key: ES.String, value: ES.Unknown }), // Record<string, unknown>
+  state: ES.Record(ES.String, ES.Unknown), // Record<string, unknown>
   fieldsCompleted: ES.Int,
   totalFields: ES.Int,
-  lastSaved: ES.DateTimeUtc, // ISO date-time string
+  lastSaved: DateTimeUtcFromString, // ISO date-time string
 })
 
 /**
@@ -65,7 +70,7 @@ export const TodoSummaryItemSchema = ES.Struct({
 /**
  * Task priority levels for todos.
  */
-export const TaskPrioritySchema = ES.Literal("High", "Medium", "Low")
+export const TaskPrioritySchema = ES.Literals(["High", "Medium", "Low"])
 export type TaskPriority = typeof TaskPrioritySchema.Type
 
 /**
@@ -86,12 +91,12 @@ export const TodoSchema = ES.Struct({
   description: ES.String,
 
   // Status and priority
-  status: ES.Literal("Active", "Completed", "Correction Required"),
+  status: ES.Literals(["Active", "Completed", "Correction Required"]),
   priority: TaskPrioritySchema,
 
   // Timestamps (frontend computes display strings)
-  assignedAt: ES.DateTimeUtc,
-  dueAt: ES.optional(ES.DateTimeUtc),
+  assignedAt: DateTimeUtcFromString,
+  dueAt: ES.optional(DateTimeUtcFromString),
 
   // Form metadata
   formComplexity: ES.String, // Simple, Medium, Complex
@@ -123,17 +128,19 @@ export const RoleSchema = ES.Struct({
  * - Future (somewhat hypothetical as we cannot predict all paths for complex processes).
  */
 export const ExecutionStepSchema = ES.Struct({
+  deadlineActivity: ES.optional(ES.String),
   id: ES.String,
   name: ES.String,
   path: ES.String,
-  status: ES.Literal(
+  status: ES.Literals([
     "Completed",
     "Waiting",
     "Potential",
     "Failed",
     "Correction Required",
     "Not started",
-  ),
+    "Interrupted",
+  ]),
   failureReason: ES.optional(ES.String),
   notStartedReason: ES.optional(ES.String),
   role: ES.optional(RoleSchema),
@@ -141,8 +148,8 @@ export const ExecutionStepSchema = ES.Struct({
   externalSubmitterEmail: ES.optional(ES.String),
   assignedProviderUserEmail: ES.optional(ES.String),
   providerUser: ES.optional(ProviderUserSchema),
-  startedAt: ES.optional(ES.DateTimeUtc), // ISO date-time string (todo created_at)
-  completedAt: ES.optional(ES.DateTimeUtc), // ISO date-time string (todo updated_at when completed)
+  startedAt: ES.optional(DateTimeUtcFromString), // ISO date-time string (todo created_at)
+  completedAt: ES.optional(DateTimeUtcFromString), // ISO date-time string (todo updated_at when completed)
 })
 
 /**
@@ -157,25 +164,25 @@ export const ExecutionSchema = ES.Struct({
   processPath: ES.String,
   canAbandonExecution: ES.optional(ES.Boolean),
   canRestartExecution: ES.optional(ES.Boolean),
-  status: ES.Literal(
+  status: ES.Literals([
     "Running",
     "Completed",
     "Failed",
     "Abandoned",
     "Not started",
-  ),
+  ]),
   failureReason: ES.optional(ES.String),
   abandonedReason: ES.optional(ES.String),
   notStartedReason: ES.optional(ES.String),
-  startedAt: ES.DateTimeUtc, // ISO date-time string
-  finishedAt: ES.optional(ES.DateTimeUtc), // ISO date-time string
+  startedAt: DateTimeUtcFromString, // ISO date-time string
+  finishedAt: ES.optional(DateTimeUtcFromString), // ISO date-time string
   durationMs: ES.optional(ES.Number),
   steps: ES.Array(ExecutionStepSchema),
   completedSteps: ES.Int, // Count of completed todos
   totalSteps: ES.Int, // Count of total flows in process
-  estimatedCompletionAt: ES.optional(ES.DateTimeUtc), // Calculated from typical duration midpoint
-  slaWarningAt: ES.optional(ES.DateTimeUtc), // Calculated from process SLA warning threshold
-  slaTargetAt: ES.optional(ES.DateTimeUtc), // Calculated from process SLA settings
+  estimatedCompletionAt: ES.optional(DateTimeUtcFromString), // Calculated from typical duration midpoint
+  slaWarningAt: ES.optional(DateTimeUtcFromString), // Calculated from process SLA warning threshold
+  slaTargetAt: ES.optional(DateTimeUtcFromString), // Calculated from process SLA settings
 })
 
 /**

@@ -1,11 +1,11 @@
-import { SqlClient } from "@effect/sql"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-sqlite"
+import type { UserDetailsValue } from "@pf/graphql-db-operations"
 import {
   ProcessExecutionOperations,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { RequestTime } from "@pf/request-time"
 import {
@@ -16,20 +16,14 @@ import { SqliteProcessExecutionOperationsLive } from "../src/lib/process-executi
 import { describe, expect, it } from "bun:test"
 
 describe("process-execution", () => {
-  const fixedRequestTime = DateTime.unsafeMake("2026-04-06T10:00:00.000Z")
+  const fixedRequestTime = DateTime.makeUnsafe("2026-04-06T10:00:00.000Z")
 
-  const RequestTimeTest = Layer.succeed(
-    RequestTime,
-    FiberRef.unsafeMake(fixedRequestTime),
-  )
+  const RequestTimeTest = Layer.succeed(RequestTime, fixedRequestTime)
 
-  const UserDetailsTest = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "usr-test-process-execution",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsTest = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "usr-test-process-execution",
+  } as UserDetailsValue)
 
   const TestLayer = Layer.provideMerge(
     Layer.mergeAll(
@@ -40,7 +34,7 @@ describe("process-execution", () => {
     DatabaseTest,
   )
 
-  type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+  type TestRequirements = Layer.Success<typeof TestLayer>
 
   const runTest = <A, E>(
     test: Effect.Effect<A, E, TestRequirements>,
@@ -67,7 +61,7 @@ describe("process-execution", () => {
         id: "usr-test-process-execution",
         provider: `test-provider-${suffix}`,
         sub: `test-sub-${suffix}`,
-        lastLoggedIn: fixedRequestTime,
+        createdAt: fixedRequestTime,
       })
     })
 
@@ -183,7 +177,7 @@ describe("process-execution", () => {
           executionId,
         )
 
-        const duplicateInsert = yield* Effect.either(
+        const duplicateInsert = yield* Effect.result(
           sqlClient.withTransaction(
             Effect.gen(function* () {
               const duplicateProcessState =
@@ -201,7 +195,7 @@ describe("process-execution", () => {
           ),
         )
 
-        expect(duplicateInsert._tag).toBe("Left")
+        expect(duplicateInsert._tag).toBe("Failure")
 
         const existingExecution =
           yield* operations.getProcessExecutionStartInfo(executionId)

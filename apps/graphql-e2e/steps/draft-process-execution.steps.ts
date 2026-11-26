@@ -58,10 +58,11 @@ Then(
 )
 
 When(
-  "I push a new draft process execution",
+  "I push a new draft process execution for {string}",
   { timeout: 30000 },
-  async function (this: TestWorld) {
-    // First, query for an existing process to get valid processId and startStepPath
+  async function (this: TestWorld, processPath: string) {
+    // Replication order changes with activity. Pick the scenario's draftable
+    // process: demo Employees can start HR processes without permission to draft them.
     const processResult = await this.executeGraphQL<{
       pullProcess: {
         documents: Array<{
@@ -74,7 +75,7 @@ When(
     }>(
       `
     query GetProcess {
-      pullProcess(checkpoint: null, limit: 1) {
+      pullProcess(checkpoint: null, limit: 100) {
         documents {
           id
           name
@@ -86,14 +87,14 @@ When(
   `,
     )
 
-    assert.ok(
-      processResult.pullProcess.documents.length > 0,
-      "Should have at least one process",
+    const process = processResult.pullProcess.documents.find(
+      (document) => document.path === processPath,
     )
-    // biome-ignore lint/style/noNonNullAssertion: checked above
-    const process = processResult.pullProcess.documents[0]!
+    assert.ok(
+      process,
+      `Expected draft process ${processPath} in the demo catalog`,
+    )
 
-    // Generate a unique ID for this draft
     const draftId = `draft-e2e-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`
     this.pushedDraftId = draftId
     this.pushedProcessName = process.name
@@ -173,7 +174,6 @@ Then(
       "Event should contain documents array",
     )
 
-    // Find our pushed draft in the documents
     const pushedDoc = streamData.documents.find(
       (doc) => doc.id === this.pushedDraftId,
     )

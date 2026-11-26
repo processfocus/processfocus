@@ -1,3 +1,6 @@
+import { makeRouter } from "../router"
+import { formValues } from "../util"
+
 /**
  * Configures a provider that supports username and password authentication. This is usually
  * paired with the `PasswordUI`.
@@ -38,13 +41,9 @@
  * @packageDocumentation
  */
 
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import type { StandardSchemaV1 } from "@standard-schema/spec"
-import { Effect, Runtime } from "effect"
+import { Effect } from "effect"
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { UnknownStateError } from "../error.js"
 import { generateUnbiasedDigits, timingSafeCompare } from "../random.js"
 import { getRelativeUrl } from "../request.js"
@@ -307,12 +306,9 @@ export function PasswordProvider(
       const authorizePostHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const urlParams = yield* request.urlParamsBody.pipe(
-          Effect.catchAll(() => Effect.succeed([] as const)),
+          Effect.catch(() => Effect.succeed([] as const)),
         )
-        const fd = new Map<string, string>()
-        for (const [key, value] of urlParams) {
-          fd.set(key, value)
-        }
+        const fd = formValues(urlParams)
 
         const error = (err: PasswordLoginError) =>
           Effect.gen(function* () {
@@ -326,8 +322,8 @@ export function PasswordProvider(
         const email = fd.get("email")?.toLowerCase()
         if (!email) return yield* error({ type: "invalid_email" })
         const storage = yield* StorageService
-        const runtime = yield* Effect.runtime<never>()
-        const runPromise = Runtime.runPromise(runtime)
+        const runtime = yield* Effect.context<never>()
+        const runPromise = Effect.runPromiseWith(runtime)
         const hash = yield* storage.get<HashedPassword>([
           "email",
           email,
@@ -380,12 +376,9 @@ export function PasswordProvider(
       const registerPostHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const urlParams = yield* request.urlParamsBody.pipe(
-          Effect.catchAll(() => Effect.succeed([] as const)),
+          Effect.catch(() => Effect.succeed([] as const)),
         )
-        const fd = new Map<string, string>()
-        for (const [key, value] of urlParams) {
-          fd.set(key, value)
-        }
+        const fd = formValues(urlParams)
 
         const email = fd.get("email")?.toLowerCase()
         const action = fd.get("action")
@@ -535,12 +528,9 @@ export function PasswordProvider(
       const changePostHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const urlParams = yield* request.urlParamsBody.pipe(
-          Effect.catchAll(() => Effect.succeed([] as const)),
+          Effect.catch(() => Effect.succeed([] as const)),
         )
-        const fd = new Map<string, string>()
-        for (const [key, value] of urlParams) {
-          fd.set(key, value)
-        }
+        const fd = formValues(urlParams)
 
         const action = fd.get("action")
         const provider =
@@ -664,14 +654,14 @@ export function PasswordProvider(
         return yield* transition({ type: "start", redirect: provider.redirect })
       })
 
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", authorizeGetHandler),
-        HttpRouter.post("/authorize", authorizePostHandler),
-        HttpRouter.get("/register", registerGetHandler),
-        HttpRouter.post("/register", registerPostHandler),
-        HttpRouter.get("/change", changeGetHandler),
-        HttpRouter.post("/change", changePostHandler),
-      )
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", authorizeGetHandler),
+        HttpRouter.route("POST", "/authorize", authorizePostHandler),
+        HttpRouter.route("GET", "/register", registerGetHandler),
+        HttpRouter.route("POST", "/register", registerPostHandler),
+        HttpRouter.route("GET", "/change", changeGetHandler),
+        HttpRouter.route("POST", "/change", changePostHandler),
+      ])
     },
   }
 }

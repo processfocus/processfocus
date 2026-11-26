@@ -1,20 +1,18 @@
-# Process Focus Local Runtime
+# Process Focus local runtime
 
-An installable local Process Focus stack containing the Dashboard,
-authentication server, GraphQL API, job worker, and organisation import watcher.
+Run an organisation on your machine with the Dashboard, authentication,
+GraphQL API, background jobs, and an organisation import watcher.
 
-## Run from an external organisation repository
+## Run an organisation project
 
-Use Bun 1.4.2 and Node.js 26 (verified on Linux with Node 26.3.1).
-Install the fixed release group in your organisation project:
+Install Bun and Node.js, then add the local runtime to your organisation project.
+Use matching releases of the Process Focus packages:
 
 ```bash
-bun add @processfocus/cli@0.1.0-next.2 \
-  @processfocus/runtime-local@0.1.0-next.2 \
-  processfocus@0.1.0-next.2
+bun add @processfocus/cli@next @processfocus/runtime-local@next processfocus@next
 ```
 
-Define standard project scripts:
+Add these project scripts:
 
 ```json
 {
@@ -25,266 +23,63 @@ Define standard project scripts:
 }
 ```
 
-Run `bun install`, `bun run build`, then `bun run start`. No Nx, Git checkout,
-shell preparation script, or manually started support server is required.
-`--build` imports/builds the organisation, starts auth and GraphQL with readiness
-checks, refreshes the Dashboard JWT, validates and stages browser plugins,
-manifests, docs and branding, materializes Tailwind source candidates inside the
-ignored build tree, and runs Next.js. It stops its support processes
-on success, failure, or interruption. Organisation credentials required to
-initialize those services must be available during the build, just as at start.
+Run `bun run build`, then `bun run start`. The build starts the supporting
+services temporarily, so organisation credentials must be available during
+both build and startup.
 
-The package contains compiled backend JavaScript and a self-contained generic
-Dashboard **source** payload, including the internal source modules needed by
-Next.js and declared npm dependencies. No new public Dashboard package or
-frontend customization API is introduced. Installed package contents are never
-used as a writable build directory.
+The Dashboard defaults to http://localhost:3000, GraphQL to port 4000, and
+authentication to port 4020. Use `--dashboard-port`, `--graphql-port`, and
+`--auth-port` in both scripts to choose other ports. Use `--no-dashboard` to
+run backend services alone.
 
-Dashboard preparation, Next.js output, generated keys, and caches live under
-`.processfocus/dashboard/` in the project. `.processfocus/.gitignore` ignores
-all of that local state. Keep this directory private; do not publish it to npm.
-The existing organisation importer also writes `dist/`, `db/`, and `files/`;
-ignore those organisation/runtime outputs in your project's `.gitignore`.
+### Local state and rebuilding
 
-Start imports the organisation, runs the worker and import watcher, refreshes
-its JWT, and serves the project's production Dashboard build. Normal restarts
-reuse `.next` and its keys. Missing/failed builds, a changed runtime source
-payload, changed package manifest/lockfile, organisation path, or endpoint ports
-require `bun run build` again. Startup also checks fingerprints of organisation
-browser-plugin artifacts, manifests, docs, branding, and the login provider list
-and passkey registration mode; changes require rebuilding. Import watch
-updates database/model state, but does not recompile the Dashboard. Schema
-changes retain the existing restart requirement.
+Dashboard builds, keys, and caches live in `.processfocus/dashboard/`. Keep
+`.processfocus/`, `dist/`, `db/`, and `files/` out of version control and
+published packages. `PF_RUNTIME_ROOT` changes the local state root from the
+current working directory.
 
-Default ports are Dashboard `3000`, GraphQL `4000`, and auth `4020`. Override
-with `--dashboard-port`, `--graphql-port`, and `--auth-port` in **both** scripts.
-Explicit backend ports are strict; omitted backend ports retain automatic
-fallback and port files. If fallback changes the ports, rebuild with the new
-ports before starting. `--no-dashboard` starts backend services alone.
+Startup reuses the Dashboard build. Rebuild after changing runtime dependencies,
+frontend plugins, branding, login configuration, or service ports; startup
+reports when its build inputs no longer match. The import watcher updates
+organisation data but does not rebuild the Dashboard. Changes to the generated
+GraphQL schema also require a backend restart.
 
-`PF_RUNTIME_ROOT` selects the directory for local state (default: current
-working directory). The backend defaults to development mode; `NODE_ENV=production`
-retains production authentication restrictions. Next.js always builds and runs
-in production mode. For local testing only, the existing `PF_BYPASS_AUTH=email`
-uses the dummy identity provider in development; production rejects it.
-Set `INTERNAL_API_SECRET` to a stable secret when signed file routes must survive
-restarts; otherwise the launcher creates a process-local value.
-
-Each fresh build generates its own Next.js Server Actions and preview keys.
-Deploying multiple instances requires the same private build artifact (or a
-coordinated `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` and build/deployment identity).
-Do not independently rebuild replicas and assume their keys match. This local
-workflow does not change the private hosted OpenNext distribution.
+For local testing, `PF_BYPASS_AUTH` can name an existing user's email in
+development mode. Production mode rejects this bypass. The launcher generates
+an `INTERNAL_API_SECRET` when none is supplied; set a stable value if signed
+file links need to survive restarts.
 
 ## Monorepo development
 
-`build` produces only the cacheable server bundle and Cedar/GraphQL resources in
-`out-tsc/runtime`. Static validation can depend on it without starting support
-servers or compiling the Dashboard. Its cache includes source dependencies and
-transitive generated prerequisite outputs. It does not produce an installable
-local runtime.
-
-To assemble the compiled backend and generic Dashboard source distribution:
+Use the tool versions in `mise.toml`. From the repository root:
 
 ```bash
-bun scripts/nx-quiet.ts run @processfocus/runtime-local:distribution-build
+PF_ORG=/path/to/organisation \
+  bun scripts/nx-quiet.ts run @processfocus/runtime-local:serve
 ```
 
-To assemble and inspect the publishable tarball:
+This imports the organisation and checks worker configuration before starting
+the services, import watcher, and Dashboard development server.
+Set a shared `INTERNAL_API_SECRET` for internal callbacks and signed file routes.
+
+See [architecture](ARCHITECTURE.md) for how the services fit together and which
+edits need a restart. Build and packaging targets are defined in
+[`project.json`](project.json).
+
+## Optional support services
+
+The Compose stack provides Grafana and PostgreSQL for local development.
+The default runtime uses a local Turso database; PostgreSQL is not required.
+
+From the repository root:
 
 ```bash
-bun scripts/nx-quiet.ts run @processfocus/runtime-local:pack-check
+docker compose -f runtime/local/docker-compose.yml up -d
+docker compose -f runtime/local/docker-compose.yml logs -f
+docker compose -f runtime/local/docker-compose.yml down
 ```
 
-`pack-check` and `nx-release-publish` require `distribution-build`, which stages
-source and static GraphQL codegen without compiling Next.js. Tarball checks reject
-compiled Dashboard output and generated Next.js secrets. CI's private
-consumer verification also reaches it through `pack-check`. The separate CI
-Dashboard job continues to build generic and hosted Next/OpenNext distributions
-with `bash scripts/ci-frontend-build.sh`; use that command for explicit verification
-of both distributions. The commit hook still runs affected static checks and
-tests with their real prerequisites, without dependency-skipping flags.
-
-After packing the SDK, runtime, CLI, hosting contract, PostHog plugin, and local
-runtime, run `bun scripts/verify-local-dashboard.ts` from the source repository.
-It installs tarballs into a retained temporary organisation project without Nx,
-builds twice, checks plugin composition, starts/restarts, compares key
-fingerprints, and verifies dependency-update/rebuild and package immutability.
-Its retained fixture supports browser passkey and process/Todo acceptance.
-
-Task-graph regression coverage and measurements are recorded in
-[static validation investigation](../../docs/investigations/3113-static-validation.md).
-
-## Services
-
-- **GraphQL Server**: Development GraphQL API server (default port 4000)
-- **PostgreSQL**: Alpine-based PostgreSQL database (port 5434)
-- **Grafana OTEL LGTM**: Grafana with OpenTelemetry, Loki, Tempo, and Prometheus
-  (ports 3030, 4317, 4318, 9090)
-
-## Running all servers
-
-Run all required servers with auto-reload:
-
-```bash
-PF_ORG=examples/demo bun scripts/nx-quiet.ts run @processfocus/runtime-local:serve
-```
-
-`serve` first runs one successful `pfcli import` for `PF_ORG`, then starts the
-GraphQL server, authentication server, job worker and frontend dev server. If the
-bootstrap import fails, dependent services do not start against stale imported
-state. The direct service targets remain available when you intentionally want to
-start one service by itself.
-
-## Environment Variables
-
-- `INTERNAL_API_SECRET` - shared secret for internal API communication between
-  the frontend and GraphQL server (e.g., fetching Cedar policies during auth
-  callback). **Required** - login will be disabled if not set.
-
-## GraphQL Server
-
-Running the server:
-
-```bash
-# Start in development mode (with auto-reload)
-bun scripts/nx-quiet.ts run @processfocus/runtime-local:graphql-server:dev
-```
-
-By default the GraphQL server will be available at
-**http://localhost:4000/graphql** if that port is available. It will
-auto-select a different port if that port is in use.
-
-Use a different port:
-
-```sh
-bun scripts/nx-quiet.ts run @processfocus/runtime-local:graphql-server:dev -- --port 4002
-```
-
-### Localhost Cookie Authentication
-
-When running on localhost, access token cookies are port-suffixed to avoid
-collisions between multiple local instances. For example, a Next.js server on
-port 3001 sets a cookie named `access_token_3001`.
-
-The GraphQL server derives the cookie name from the request's `Origin` header.
-This works automatically when the frontend and GraphQL server share the same
-origin. However, when using GraphiQL (which runs on the GraphQL server's port),
-the origin mismatch means it looks for the wrong cookie name.
-
-To fix this, set `NEXTJS_PORT` to tell the GraphQL server which cookie to use:
-
-```sh
-NEXTJS_PORT=3001 bun scripts/nx-quiet.ts run @processfocus/runtime-local:graphql-server:dev
-```
-
-Now GraphiQL will read `access_token_3001` instead of deriving it from its
-own origin.
-
-## Authentication server
-
-For local development, bypass OAuth by setting the `PF_BYPASS_AUTH` env var to an existing user's email:
-
-```bash
-PF_BYPASS_AUTH=test@example.com bun scripts/nx-quiet.ts run @processfocus/runtime-local:authentication-server:dev
-```
-
-No changes to `project.json` are needed.
-
-## Docker Services Usage
-
-### Via Nx (recommended)
-
-```bash
-# Start all services
-bun nx run local:up
-
-# View logs
-bun nx run local:logs
-
-# Stop services (keeps data)
-bun nx run local:down
-```
-
-### Direct docker compose
-
-```bash
-# Start all services
-docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# Stop services (keeps data)
-docker compose down
-
-# Stop and remove volumes (fresh start)
-docker compose down -v
-```
-
-## PostgreSQL
-
-**Connection**:
-```
-Host: localhost
-Port: 5434
-Database: postgres
-User: postgres
-Password: postgres (or set PGPASSWORD env var)
-```
-
-**Connection string**:
-```
-postgresql://postgres:postgres@localhost:5434/postgres
-```
-
-**Custom password**:
-```bash
-PGPASSWORD=mypassword docker compose up -d
-```
-
-## Grafana
-
-**Access**: http://localhost:3030
-
-**OTLP endpoints**:
-- gRPC: localhost:4317
-- HTTP: localhost:4318
-
-**Prometheus API**: http://localhost:9090
-
-The Compose stack provisions the **Customer business activity** dashboard from
-the repository, including its Loki-backed daily-active-user panel. A detailed
-DAU dashboard is provisioned alongside it. Recreate the Grafana container after
-changing dashboard JSON:
-
-```bash
-docker compose up -d --force-recreate grafana
-```
-
-Its checked-in Prometheus configuration accepts controlled samples up to 72
-hours out of order so the opt-in business-metrics integration test can verify
-adjacent UTC-day buckets deterministically.
-
-Local customer-scope process metrics require `PF_AWS_ACCOUNT_ID`, `PF_PROJECT`,
-and `PF_ENV`. Unclassified local activity is intentionally not recorded as
-customer business activity. See
-[`docs/observability/customer-process-starts.md`](../../docs/observability/customer-process-starts.md).
-
-The local stack also provisions the customer DAU dashboard and Loki resource
-label mapping. See [DAU setup and verification](../../docs/observability/customer-dau.md)
-for the shared identity key, human activity capture, and opt-in export/query tests.
-
-## Volumes
-
-Data persists in Docker-managed volumes:
-- `pf-local-postgres-data`: PostgreSQL data
-- `pf-local-grafana-data`: Grafana data
-
-**Inspect volumes**:
-```bash
-docker volume ls
-docker volume inspect pf-local-postgres-data
-```
-
-**Storage location**: `/var/lib/docker/volumes/`
+Grafana is available at http://localhost:3030, with OTLP on ports 4317 and
+4318. PostgreSQL is available on port 5434. See
+[`docker-compose.yml`](docker-compose.yml) for credentials and persistent volumes.

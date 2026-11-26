@@ -12,8 +12,8 @@ const rawJob = (payload: unknown): RawJob => ({
   payload,
   attempts: 1,
   maxAttempts: 5,
-  availableAt: DateTime.unsafeMake(0),
-  lockedUntil: DateTime.unsafeMake(1_000),
+  availableAt: DateTime.makeUnsafe(0),
+  lockedUntil: DateTime.makeUnsafe(1_000),
 })
 
 describe("runtime", () => {
@@ -22,11 +22,11 @@ describe("runtime", () => {
       Effect.runPromise(validateQueueName("valid.queue-1")),
     ).resolves.toBe("valid.queue-1")
     const invalid = await Effect.runPromise(
-      validateQueueName("not valid").pipe(Effect.either),
+      validateQueueName("not valid").pipe(Effect.result),
     )
     expect(invalid).toMatchObject({
-      _tag: "Left",
-      left: { _tag: "InvalidQueueNameError" },
+      _tag: "Failure",
+      failure: { _tag: "InvalidQueueNameError" },
     })
   })
 
@@ -37,6 +37,7 @@ describe("runtime", () => {
           format: "processfocus/runtime-artifact",
           version: 1,
           organisation: { name: "Example" },
+          configuration: { version: 1, groups: [] },
         }),
       ),
     )
@@ -51,12 +52,12 @@ describe("runtime", () => {
           version: 1,
           organisation: null,
         }),
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
     )
 
     expect(result).toMatchObject({
-      _tag: "Left",
-      left: { _tag: "ArtifactParseError" },
+      _tag: "Failure",
+      failure: { _tag: "ArtifactParseError" },
     })
   })
 
@@ -83,7 +84,7 @@ describe("runtime", () => {
         {
           transaction: (operation) =>
             Effect.sync(() => events.push("transaction")).pipe(
-              Effect.zipRight(operation),
+              Effect.andThen(operation),
             ),
         },
         organisation,
@@ -166,7 +167,7 @@ describe("runtime", () => {
 
     expect(result.kind).toBe("retry")
     if (result.kind !== "acknowledge") {
-      expect(Cause.isInterruptedOnly(result.cause)).toBe(true)
+      expect(Cause.hasInterruptsOnly(result.cause)).toBe(true)
     }
   })
 })

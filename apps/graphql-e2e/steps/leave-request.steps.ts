@@ -38,7 +38,6 @@ When(
 
     this.startProcessResult = result.startHrTimeOffRequest
 
-    // Verify process started successfully
     assert.ok(this.startProcessResult, "Start process result should be defined")
     assert.ok(
       this.startProcessResult.executionId,

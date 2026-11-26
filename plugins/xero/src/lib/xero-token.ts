@@ -114,7 +114,7 @@ export const makeXeroAccessCache = (
             )
           }
 
-          yield* Effect.yieldNow()
+          yield* Effect.yieldNow
           const exit = yield* Effect.exit(restore(fetchAccess))
 
           if (Exit.isSuccess(exit)) {
@@ -133,7 +133,7 @@ export const makeXeroAccessCache = (
               : state,
           )
 
-          return yield* Option.match(Cause.failureOption(exit.cause), {
+          return yield* Option.match(Cause.findErrorOption(exit.cause), {
             onNone: () =>
               Effect.gen(function* () {
                 yield* Deferred.fail(acquired.deferred, "abandoned")

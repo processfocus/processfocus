@@ -41,9 +41,7 @@ export interface ProviderRegistryServiceInterface {
 /**
  * Effect service tag for provider registry.
  */
-export class ProviderRegistryService extends Context.Tag(
-  "@pf/openauth/ProviderRegistryService",
-)<ProviderRegistryService, ProviderRegistryServiceInterface>() {}
+export class ProviderRegistryService extends Context.Service<ProviderRegistryService, ProviderRegistryServiceInterface>()("@pf/openauth/ProviderRegistryService") {}
 
 /**
  * Create a ProviderRegistryService layer from provider configuration.

@@ -1,5 +1,5 @@
-import type { HttpClient } from "@effect/platform"
 import { Console, Effect, Schema } from "effect"
+import type { HttpClient } from "effect/http"
 import { CliError } from "../../errors"
 import { graphqlRequest } from "../../utils/graphql-client"
 
@@ -135,9 +135,9 @@ export const runProcessStart = (
     const query = yield* startMutation(mutationName, input)
     const data = yield* graphqlRequest(query)
     const rawPayload = data[mutationName]
-    const payload = yield* Schema.decodeUnknown(StartProcessPayloadSchema)(
-      rawPayload,
-    ).pipe(
+    const payload = yield* Schema.decodeUnknownEffect(
+      StartProcessPayloadSchema,
+    )(rawPayload).pipe(
       Effect.mapError(
         (cause) =>
           new CliError({

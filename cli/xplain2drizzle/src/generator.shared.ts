@@ -80,7 +80,6 @@ export const generateExistsSubquery = (
     const attrName = perPathSegments[i]
     const isLastSegment = i === perPathSegments.length - 1
 
-    // Find the attribute in the current type with this name
     const currentType = typeMap.get(currentTypeName)
     if (!currentType) {
       continue
@@ -161,7 +160,6 @@ export const generateScalarSubquery = (
     const attrName = perPathSegments[i]
     const isLastSegment = i === perPathSegments.length - 1
 
-    // Find the attribute in the current type with this name
     const currentType = typeMap.get(currentTypeName)
     if (!currentType) {
       continue
@@ -263,7 +261,6 @@ export const generateScalarSubqueryWithWhere = (
     const attrName = perPathSegments[i]
     const isLastSegment = i === perPathSegments.length - 1
 
-    // Find the attribute in the current type with this name
     const currentType = typeMap.get(currentTypeName)
     if (!currentType) {
       continue
@@ -680,7 +677,6 @@ export const generateRelations = (
     // Add "many" relations for self-references (children)
     if (selfReferenceAttrs.length > 0) {
       const relationName = "children"
-      // Only add if we haven't seen this relation name yet
       if (!manyRelations.has(relationName)) {
         manyRelations.add(relationName)
         const firstAttr = selfReferenceAttrs[0]
@@ -691,7 +687,6 @@ export const generateRelations = (
       }
     }
 
-    // Only generate relations if there are any
     if (relations.length > 0) {
       const hasOne = relations.some((r) => r.includes("one("))
       const hasMany = relations.some((r) => r.includes("many("))

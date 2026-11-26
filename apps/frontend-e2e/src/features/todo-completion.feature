@@ -5,7 +5,7 @@ Feature: Authenticated state-aware todo completion
   @timeout:180000
   Scenario Outline: Validate and persist a Purchase Request manager approval in a <surface> form
     Given I observe the authenticated completion journey
-    And I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager" using client "e2e-employee-finance-manager"
+    And I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager"
     When I visit the processes page
     And I wait for RxDB to populate local storage
     And I start the "Purchase Request" process

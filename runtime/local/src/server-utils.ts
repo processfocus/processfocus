@@ -194,7 +194,7 @@ export const writePortFile = (
         )
       }
       const content: PortFileContent = { port }
-      return Schema.encode(PortFileContentJson)(content).pipe(
+      return Schema.encodeEffect(PortFileContentJson)(content).pipe(
         Effect.mapError(
           (cause) => new PortFileWriteError({ filename, port, cause }),
         ),

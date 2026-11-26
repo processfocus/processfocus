@@ -1,0 +1,24 @@
+---
+title: Process state
+description: How form values and system step outputs become available to later steps.
+---
+
+Process state is the data collected and produced during a process execution.
+Each execution has its own state. When a form is submitted, its output values
+become part of that state. A system step adds the values declared in its
+`output` schema.
+
+## Read values from earlier steps
+
+For example, an order form collects `sku` and `quantity`. A later system
+step can read `sku` from state in its `input` callback and add a
+`normalisedSku` field for subsequent steps to use. See the
+[system step example](/docs/reference/process-steps/#example-system-step).
+
+Use the flow path from a preceding step when defining a step that needs
+its output. The path carries the TypeScript types of the values available
+at that point. If a field is produced only on one branch, do not assume
+it is present on another.
+
+State holds business data such as the SKU. [Step context](/docs/reference/process-steps/step-context/)
+holds metadata such as when a step completed.

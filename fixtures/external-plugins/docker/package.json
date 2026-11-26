@@ -8,11 +8,11 @@
   },
   "dependencies": {
     "@processfocus/plugin-docker": "0.1.0-next.0",
-    "effect": "^3.22.1",
+    "effect": "4.1.4",
     "processfocus": "0.1.0-next.0"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

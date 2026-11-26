@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative, resolve } from "node:path"
 import { PRIVATE_SOURCE_PROJECT_ROOTS } from "../tools/project-boundaries/policy"
 import {
   capturePublicWorktree,
@@ -8,6 +8,8 @@ import {
 } from "./create-public-source-snapshot"
 import { expect, test } from "bun:test"
 
+// Exporting the whole public tree also regenerates its lockfile. Allow for
+// contention with the other affected projects in the pre-commit test run.
 test("public export excludes private projects and has self-contained workspace references", async () => {
   const root = await mkdtemp(join(tmpdir(), "pf-public-snapshot-"))
   const destination = join(root, "snapshot")
@@ -33,6 +35,24 @@ test("public export excludes private projects and has self-contained workspace r
     expect(paths).not.toContain(
       "packages/sqlite-operations/test/delegation-management.test.ts",
     )
+    // Hosted identities must not escape in the standalone demo.
+    expect(paths).not.toContain("examples/demo/github-pilot.json")
+    expect(paths).not.toContain("examples/demo/cedar/hosted-ci.cedar")
+    expect(paths).toContain("examples/demo/cedar/ci.cedar")
+    const demoRoot = join(destination, "examples/demo")
+    const demoConfig = await Bun.file(
+      join(demoRoot, "tsconfig.app.json"),
+    ).json()
+    const demoReferences = demoConfig.references.map(
+      ({ path }: { path: string }) =>
+        relative(destination, resolve(demoRoot, path))
+          .split("/")
+          .slice(0, 2)
+          .join("/"),
+    )
+    expect(demoReferences).not.toContain("packages/auth-local-cedar")
+    expect(demoReferences).not.toContain("packages/auth-policy")
+    expect(demoReferences).toContain("packages/process")
     const manifest = await Bun.file(join(destination, "package.json")).json()
     expect(manifest.workspaces).toContain("examples/demo")
     expect(manifest.workspaces).not.toContain("examples/school")
@@ -67,6 +87,14 @@ test("public export excludes private projects and has self-contained workspace r
         await Bun.file(join(destination, path, "tsconfig.json")).exists(),
       ).toBe(true)
     }
+    const nx = await Bun.file(join(destination, "nx.json")).json()
+    for (const entry of nx.plugins) {
+      const plugin = typeof entry === "string" ? entry : entry.plugin
+      if (plugin.startsWith("./"))
+        expect(await Bun.file(join(destination, plugin)).exists(), plugin).toBe(
+          true,
+        )
+    }
     for (const path of [
       "scripts/build-public-dashboard.sh",
       "scripts/ci-frontend-build-lifecycle.sh",
@@ -77,4 +105,4 @@ test("public export excludes private projects and has self-contained workspace r
   } finally {
     await rm(root, { recursive: true, force: true })
   }
-}, 30_000)
+}, 120_000)

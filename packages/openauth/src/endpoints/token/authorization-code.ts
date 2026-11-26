@@ -2,8 +2,9 @@
  * Authorization code grant handler for token endpoint.
  * @packageDocumentation
  */
-import type { HttpServerRequest, HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import type { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { validatePKCE } from "../../pkce"
 import { tryNormalizeRedirectUri } from "../../redirect-uri"
 import { errorJson, noStoreJson } from "../../response"
@@ -55,7 +56,6 @@ export const handleAuthorizationCodeGrant = (
       return yield* errorJson("invalid_request", "Missing redirect_uri", 400)
     }
 
-    // Authenticate client
     const authResult = yield* authenticateClient(form).pipe(
       Effect.catchTag("@pf/openauth/ClientAuthError", (error) =>
         Effect.succeed({ error } as const),
@@ -91,6 +91,7 @@ export const handleAuthorizationCodeGrant = (
         refresh: number
       }
       pkce?: AuthorizationState["pkce"]
+      expiresAt?: number
     }>(key)
 
     if (!payload) {
@@ -159,6 +160,7 @@ export const handleAuthorizationCodeGrant = (
       clientID: payload.clientID,
       audience: payload.audience,
       ttl: payload.ttl,
+      expiresAt: payload.expiresAt,
       timeUsed: undefined,
       nextToken: undefined,
     })

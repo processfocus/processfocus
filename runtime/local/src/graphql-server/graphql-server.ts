@@ -1,5 +1,4 @@
-import * as Otel from "@effect/opentelemetry"
-import { FetchHttpClient } from "@effect/platform"
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
 import { NodeFileSystem } from "@effect/platform-node"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
@@ -13,15 +12,15 @@ import {
   DateTime,
   Effect,
   Exit,
-  FiberRef,
   Layer,
-  LogLevel,
   Logger,
   ManagedRuntime,
   Option,
   Redacted,
+  References,
 } from "effect"
-import { DelegationSessionServiceIsolated } from "@pf/auth-api"
+import { FetchHttpClient } from "effect/http"
+import { AuthenticationDelegationIdentityFactsLive } from "@pf/auth-api/issuer"
 import {
   CedarPoliciesProvider,
   OrgCedarPoliciesProvider,
@@ -33,6 +32,7 @@ import {
 } from "@pf/auth-local-cedar"
 import { CurrentPrincipal, type ProviderUserPrincipal } from "@pf/auth-policy"
 import { LOCAL_SQLITE_BUSY_TIMEOUT_MS } from "@pf/db-info"
+import { DelegationSessionServiceIsolated } from "@pf/delegation/authorization"
 import {
   AppSchemaBuilderLive,
   AuthConfig,
@@ -52,7 +52,7 @@ import {
   makeDashboardActivityLayer,
   resolveBusinessMetricDimensions,
 } from "@pf/graphql-api"
-import { UserDetails, type UserDetailsValue } from "@pf/graphql-db-operations"
+import { UserDetails } from "@pf/graphql-db-operations"
 import {
   OrganisationProvider,
   OrganisationProviderFromPathDev,
@@ -68,10 +68,10 @@ import {
   SqliteGraphqlDbOperationsLive,
   SqliteScheduledFlowOperationsLive,
 } from "@pf/sqlite-operations"
-import { SqliteQueueServiceLive } from "@pf/sqlite-queue-service"
 import { TodoSummaryComputationLive } from "@pf/todo-summary"
 import { warnIgnoredCronDeclarations } from "../cron-warnings"
 import { writePortFile } from "../server-utils"
+import { LocalRuntimeAuditLive } from "../services/audit"
 import { DraftProcessEventsLive } from "../services/draft-process-events"
 import { ExecutionEventsLive } from "../services/execution-events"
 import { HttpCedarReloadNotifierLive } from "../services/http-cedar-reload-notifier"
@@ -79,15 +79,21 @@ import {
   LocalDocumentStoreConfig,
   LocalDocumentStoreServiceLive,
 } from "../services/local-document-store"
+import { LocalQueueServiceLive } from "../services/local-queue-service"
 import { makeLocalSqlClientLayer } from "../services/local-sql-client-layer"
+import { LocalPolicyRevisionPublisherLive } from "../services/policy-revision"
 import { DEFAULT_GRAPHQL_PORT, GRAPHQL_PORT_FILE } from "../services/port-file"
 import { ProcessEventsLive } from "../services/process-events"
+import { ProjectAccountingEventsLive } from "../services/project-accounting-events"
 import { TodoEventsLive } from "../services/todo-events"
 import {
   CallbackSecretLive,
   makeServerEffect,
   parseArgs,
 } from "./graphql-internal-server"
+
+// This entrypoint also runs directly, without the local runtime supervisor.
+process.env["PF_RUNTIME_MODE"] = "local"
 
 /**
  * Create the authorization layer based on CedarPoliciesProvider configuration.
@@ -106,12 +112,18 @@ const makeAuthorizationLayer = (
       policyPaths,
       schemaPaths,
     )
-    return Layer.provideMerge(LocalCedarAuthorizationLive, hotReloadConfig)
+    return LocalCedarAuthorizationLive.pipe(
+      Layer.provide(LocalPolicyRevisionPublisherLive),
+      Layer.provideMerge(hotReloadConfig),
+    )
   }
 
   // No custom policies - use static default config (with optional custom schemas)
   const staticConfig = LocalCedarConfigStatic(undefined, schemaPaths)
-  return Layer.provideMerge(LocalCedarAuthorizationLive, staticConfig)
+  return LocalCedarAuthorizationLive.pipe(
+    Layer.provide(LocalPolicyRevisionPublisherLive),
+    Layer.provideMerge(staticConfig),
+  )
 }
 
 /**
@@ -124,7 +136,7 @@ interface CliConfig {
   readonly org: string
 }
 
-const CliConfig = Context.GenericTag<CliConfig>(
+const CliConfig = Context.Service<CliConfig>(
   "@pf/runtime-local/GraphqlServerCliConfig",
 )
 
@@ -135,10 +147,10 @@ const CliConfigLive = Layer.effect(
   CliConfig,
   parseArgs(process.argv.slice(2)).pipe(
     Effect.map((args) => ({
-      port: Option.fromNullable(args.port),
+      port: Option.fromNullishOr(args.port),
       org: args.org,
     })),
-    Effect.catchAll((error) => {
+    Effect.catch((error) => {
       console.error(
         "Invalid arguments. Usage: bun run main.ts [--port PORT | -p PORT] [--org ORG | -o ORG]",
       )
@@ -152,41 +164,35 @@ const CliConfigLive = Layer.effect(
 )
 
 /**
- * Layer providing the RequestTime FiberRef for database operations.
+ * Layer providing the RequestTime for database operations.
  *
- * The FiberRef is initialized with a default value and updated at the start of
+ * The is initialized with a default value and updated at the start of
  * each GraphQL request in executeWithSpan. All resolver effects inherit the
  * per-request timestamp via fiber inheritance.
  */
-const RequestTimeLive = Layer.succeed(
-  RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(0)),
-)
+const RequestTimeLive = Layer.succeed(RequestTime, DateTime.makeUnsafe(0))
 
 /**
- * Layer providing the UserDetails FiberRef for database operations.
+ * Layer providing the UserDetails for database operations.
  *
- * The FiberRef is initialized with a default value and updated at the start of
+ * The is initialized with a default value and updated at the start of
  * each GraphQL request. All resolver effects inherit the per-request user
  * details via fiber inheritance.
  */
-const UserDetailsLive = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "SYSTEM",
-    id: null,
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsLive = Layer.succeed(UserDetails, {
+  by: "SYSTEM",
+  id: null,
+})
 
 /**
- * Layer providing the CurrentPrincipal FiberRef for authorization checks.
+ * Layer providing the CurrentPrincipal for authorization checks.
  *
- * The FiberRef is initialized with null and updated per-request in wrapResolver.
+ * The is initialized with null and updated per-request in wrapResolver.
  * Cloud/org code can read the current principal without needing context.
  */
 const CurrentPrincipalLive = Layer.succeed(
   CurrentPrincipal,
-  FiberRef.unsafeMake(null as ProviderUserPrincipal | null),
+  null as ProviderUserPrincipal | null,
 )
 
 /**
@@ -212,16 +218,16 @@ const DashboardActivityLive = process.env["PF_ANALYTICS_IDENTITY_KEY"]
     })
   : Layer.empty
 
-const NodeSdkLive = Layer.unwrapEffect(
+const NodeSdkLive = Layer.unwrap(
   Effect.gen(function* () {
-    const otlpMetricsUrl = yield* Config.string("OTLP_METRICS_URL").pipe(
+    const otlpMetricsUrl = yield* Config.String("OTLP_METRICS_URL").pipe(
       Config.withDefault("http://127.0.0.1:4318/v1/metrics"),
     )
-    const otlpTracesUrl = yield* Config.string("OTLP_TRACES_URL").pipe(
+    const otlpTracesUrl = yield* Config.String("OTLP_TRACES_URL").pipe(
       Config.withDefault("http://127.0.0.1:4318/v1/traces"),
     )
 
-    return Otel.NodeSdk.layer(() => ({
+    return NodeSdk.layer(() => ({
       resource: {
         serviceName: "graphql-server",
         attributes: {
@@ -257,18 +263,14 @@ const main = Effect.gen(function* () {
   // which can cause Cedar WASM initialization issues when multiple parses happen
   // in rapid succession before the module is fully loaded.
   // Uses Dev variant which provides empty org on load failure (for bun --watch).
-  const OrgProviderLayer = yield* Layer.memoize(
-    OrganisationProviderFromPathDev(cliConfig.org).pipe(
-      Layer.provide(NodeFileSystem.layer),
-    ),
+  const OrgProviderLayer = OrganisationProviderFromPathDev(cliConfig.org).pipe(
+    Layer.provide(NodeFileSystem.layer),
   )
 
-  // Create CedarPoliciesProvider layer that depends on OrganisationProvider
   const CedarPoliciesLayer = OrgCedarPoliciesProvider.pipe(
     Layer.provide(OrgProviderLayer),
   )
 
-  // Get organisation provider service to build authorization layer
   const orgProvider = yield* OrganisationProvider.pipe(
     Effect.provide(OrgProviderLayer),
   )
@@ -283,7 +285,6 @@ const main = Effect.gen(function* () {
     yield* Effect.log(`📦 Custom database layer available from organisation`)
   }
 
-  // Get cedar policies provider to get policy paths
   const cedarPolicies = yield* CedarPoliciesProvider.pipe(
     Effect.provide(CedarPoliciesLayer),
   )
@@ -292,7 +293,6 @@ const main = Effect.gen(function* () {
     `📜 Loaded ${cedarPolicies.policyPaths.length} Cedar policy files`,
   )
 
-  // Create layer for dynamic schema configuration using provider's schema path
   const DynamicSchemaConfigLive = Layer.succeed(DynamicSchemaConfig, {
     schemaPath: orgProvider.schemaPath,
   })
@@ -312,7 +312,6 @@ const main = Effect.gen(function* () {
     maxFileSize: 100 * 1024 * 1024,
   })
 
-  // Create authorization layer using cedar policy paths and schema paths
   const AuthorizationLive = makeAuthorizationLayer(
     cedarPolicies.policyPaths,
     cedarPolicies.schemaPaths,
@@ -341,7 +340,6 @@ const main = Effect.gen(function* () {
     Layer.provide(LocalDocumentStoreConfigLive),
     Layer.provide(AuthorizationLive),
   )
-  // Merge all layers into a single application layer
   // CustomDbLayer from org needs SqlClient plus runtime-owned services.
   // Type assertion needed because CustomDbLayer is typed as Layer<unknown, unknown, unknown>
   // but at runtime is properly constructed with only these requirements.
@@ -370,15 +368,21 @@ const main = Effect.gen(function* () {
   const HttpCedarReloadNotifierWithDeps = HttpCedarReloadNotifierLive.pipe(
     Layer.provide(FetchHttpClient.layer),
   )
-  const SqliteQueueWithRequestContext = SqliteQueueServiceLive.pipe(
+  const SqliteQueueWithRequestContext = LocalQueueServiceLive.pipe(
     Layer.provide(Layer.merge(RequestTimeLive, UserDetailsLive)),
   )
 
   const AppLayer = Layer.mergeAll(
+    LocalRuntimeAuditLive,
+    AuthenticationDelegationIdentityFactsLive.pipe(
+      Layer.provideMerge(SqliteAuthenticationDatabaseLive),
+    ),
     DelegationSessionServiceIsolated.pipe(
       Layer.provide(
         Layer.mergeAll(
-          SqliteAuthenticationDatabaseLive,
+          AuthenticationDelegationIdentityFactsLive.pipe(
+            Layer.provide(SqliteAuthenticationDatabaseLive),
+          ),
           SqliteDelegationDatabaseLive,
         ),
       ),
@@ -397,6 +401,9 @@ const main = Effect.gen(function* () {
     DraftProcessEventsLive,
     TodoEventsLive,
     ProcessEventsLive,
+    ProjectAccountingEventsLive.pipe(
+      Layer.provide(SqliteQueueWithRequestContext),
+    ),
     ExecutionEventsLive,
     RequestTimeLive,
     UserDetailsLive,
@@ -424,8 +431,7 @@ const main = Effect.gen(function* () {
     Layer.provideMerge(FetchHttpClient.layer),
   )
 
-  // Server layer
-  const ServerLive = Layer.scopedDiscard(
+  const ServerLive = Layer.effectDiscard(
     Effect.gen(function* () {
       const authConfig = yield* AuthConfig
       yield* Effect.log(`🔐 Authentication server: ${authConfig.issuerUrl}`)
@@ -450,6 +456,9 @@ const main = Effect.gen(function* () {
     DraftProcessEventsLive,
     TodoEventsLive,
     ProcessEventsLive,
+    ProjectAccountingEventsLive.pipe(
+      Layer.provide(SqliteQueueWithRequestContext),
+    ),
     ExecutionEventsLive,
   ).pipe(Layer.provide(AppLayer))
 
@@ -485,8 +494,8 @@ const main = Effect.gen(function* () {
     logging: {
       decorate: (effect) =>
         effect.pipe(
-          Logger.withMinimumLogLevel(LogLevel.Debug),
-          Effect.provide(Logger.pretty),
+          Effect.provideService(References.MinimumLogLevel, "Debug"),
+          Effect.provide(Logger.layer([Logger.consolePretty()])),
         ),
     },
   })
@@ -497,10 +506,7 @@ Effect.runPromiseExit(
   main.pipe(Effect.scoped, Effect.provide(CliConfigLive)),
 ).then((exit) => {
   if (Exit.isFailure(exit)) {
-    console.error(
-      "GraphQL server failed to start:",
-      Cause.pretty(exit.cause, { renderErrorCause: true }),
-    )
+    console.error("GraphQL server failed to start:", Cause.pretty(exit.cause))
     process.exit(1)
   }
 })

@@ -23,9 +23,6 @@ import {
   toTableName,
 } from "./generator.shared.js"
 
-/**
- * Generator error types
- */
 class UnknownBaseTypeError extends Data.TaggedError("UnknownBaseType")<{
   readonly attribute: string
   readonly baseName: string
@@ -119,7 +116,6 @@ const generateDefaultExpression = (
       return { useSql: false, value: String(expr.value) }
     }
   }
-  // For now, only support literal defaults (Phase 1)
   return null
 }
 
@@ -136,7 +132,6 @@ const generateColumn = (
     const camelName = toCamelCase(attr.name)
     const notNull = !attr.optional
 
-    // Check if this is a type reference (foreign key)
     const referencedType = typeMap.get(attr.baseName)
     if (referencedType) {
       // This is a foreign key - length matches ID column
@@ -162,7 +157,6 @@ const generateColumn = (
       return `  ${camelName}Id: ${columnDef},`
     }
 
-    // Regular attribute - look up the base type
     const dataType = baseMap.get(attr.baseName)
     if (!dataType) {
       return yield* new UnknownBaseTypeError({
@@ -175,7 +169,6 @@ const generateColumn = (
 
     let comment = ""
 
-    // Add default value if present
     if (attr.default) {
       const defaultExpr = generateDefaultExpression(attr.default)
       if (defaultExpr) {
@@ -189,7 +182,6 @@ const generateColumn = (
       }
     }
 
-    // Add init value if present (with comment)
     if (attr.init) {
       const initExpr = generateDefaultExpression(attr.init)
       if (initExpr) {
@@ -233,7 +225,6 @@ const generateIndexes = (
       return `table.${toCamelCase(attrName)}`
     }
 
-    // Check if this is a foreign key reference
     const referencedType = typeMap.get(attr.baseName)
     if (referencedType) {
       return `table.${toCamelCase(attrName)}Id`
@@ -329,7 +320,6 @@ const generateTable = (
     const tableName = toTableName(type.name, prefix)
     const constName = toCamelCase(type.name)
 
-    // Generate ID column with optional prefix
     const idColumn = type.idPrefix
       ? `  id: text("id", { length: ${ID_COLUMN_LENGTH} }).primaryKey().$defaultFn(() => \`${type.idPrefix}-\${ulid()}\`),`
       : `  id: text("id", { length: ${ID_COLUMN_LENGTH} }).primaryKey().$defaultFn(() => ulid()),`
@@ -341,7 +331,6 @@ const generateTable = (
       columns.push(column)
     }
 
-    // Add audit columns
     columns.push(
       "  createdAt: effectDateTime(\"created_at\").notNull().default(sql`(julianday('now'))`),",
     )
@@ -393,7 +382,6 @@ const generateExtendViews = (
 
       const retrieval = extend.expression
 
-      // Handle supported retrieval functions
       if (
         retrieval.function !== "nil" &&
         retrieval.function !== "any" &&
@@ -406,7 +394,6 @@ const generateExtendViews = (
         continue
       }
 
-      // Common view setup
       const viewName = `${tableName}_its_${toSnakeCase(extend.attributeName)}`
       const attrCamelCase = toCamelCase(extend.attributeName)
       const attrPascalCase =
@@ -414,7 +401,6 @@ const generateExtendViews = (
       const viewConstName = `${tableConstName}Its${attrPascalCase}`
       const virtualAttrName = toSnakeCase(extend.attributeName)
 
-      // Check if perPath has segments
       if (retrieval.perPath.segments.length === 0) {
         continue // Skip if perPath is empty
       }
@@ -434,7 +420,6 @@ const generateExtendViews = (
         const existsClause =
           retrieval.function === "nil" ? "not exists" : "exists"
 
-        // Generate the view definition
         const viewDef = `export const ${viewConstName} = sqliteView("${viewName}", {
   id: text("id", { length: ${ID_COLUMN_LENGTH} }).notNull(),
   ${attrCamelCase}: integer("${virtualAttrName}", { mode: "boolean" }).notNull(),
@@ -453,7 +438,6 @@ const generateExtendViews = (
         // 2. some type where predicate per ... - has wherePredicate but no expression (returns id)
         // 3. some type its attribute where predicate per ... - has both
 
-        // Find the target type
         const targetType = typeMap.get(retrieval.typeName)
         if (!targetType) {
           continue
@@ -461,7 +445,6 @@ const generateExtendViews = (
 
         const childTableName = toTableName(retrieval.typeName, prefix)
 
-        // Determine what column to select and the column definition for the view
         let columnName: string
         let columnDef: string
 
@@ -480,7 +463,6 @@ const generateExtendViews = (
             continue
           }
 
-          // Determine the column name and data type
           const isTypeReference = typeMap.has(targetAttr.baseName)
           columnName = isTypeReference
             ? targetAttr.baseName === targetAttr.name
@@ -491,12 +473,9 @@ const generateExtendViews = (
           // Prefix with table name for clarity in subquery
           columnName = `${childTableName}.${columnName}`
 
-          // Generate column definition for the view
           if (isTypeReference) {
-            // It's a foreign key
             columnDef = `text("${virtualAttrName}", { length: ${ID_COLUMN_LENGTH} })`
           } else {
-            // It's a base type - look up the data type from baseMap
             const dataType = baseMap.get(targetAttr.baseName)
             if (!dataType) {
               continue // Skip if base type not found
@@ -511,7 +490,6 @@ const generateExtendViews = (
           columnDef = `text("${virtualAttrName}", { length: ${ID_COLUMN_LENGTH} })`
         }
 
-        // Generate the scalar subquery
         let subquery: string
         if (retrieval.wherePredicate) {
           // Has 'where' clause - need to join with virtual attribute view
@@ -543,7 +521,6 @@ const generateExtendViews = (
           )
         }
 
-        // Generate the view definition
         const viewDef = `export const ${viewConstName} = sqliteView("${viewName}", {
   id: text("id", { length: ${ID_COLUMN_LENGTH} }).notNull(),
   ${attrCamelCase}: ${columnDef},
@@ -567,7 +544,6 @@ const generateExtendViews = (
           prefix,
         )
 
-        // Generate the view definition
         const viewDef = `export const ${viewConstName} = sqliteView("${viewName}", {
   id: text("id", { length: ${ID_COLUMN_LENGTH} }).notNull(),
   ${attrCamelCase}: integer("${virtualAttrName}").notNull(),
@@ -599,7 +575,6 @@ const generateExtendViews = (
         const attributeName = retrieval.expression.name
         const aggregateColumn = `${childTableName}.${toSnakeCase(attributeName)}`
 
-        // Map retrieval function to SQL aggregate
         const sqlFunction =
           retrieval.function === "total" ? "sum" : retrieval.function
 
@@ -620,7 +595,6 @@ const generateExtendViews = (
         // For simplicity, use real for all numeric aggregates
         const columnDef = "real"
 
-        // Generate the view definition
         const viewDef = `export const ${viewConstName} = sqliteView("${viewName}", {
   id: text("id", { length: ${ID_COLUMN_LENGTH} }).notNull(),
   ${attrCamelCase}: ${columnDef}("${virtualAttrName}"),
@@ -718,13 +692,11 @@ export const generateDrizzleSchema = (
   prefix = "",
 ): Effect.Effect<string, GeneratorError> =>
   Effect.gen(function* () {
-    // Build a map of base names to data types
     const baseMap = new Map<string, DataType>()
     for (const base of program.bases) {
       baseMap.set(base.name, base.dataType)
     }
 
-    // Build a map of type names to type declarations
     const typeMap = new Map<string, TypeDeclaration>()
     for (const type of program.types) {
       typeMap.set(type.name, type)
@@ -755,10 +727,8 @@ export const generateDrizzleSchema = (
       }
     }
 
-    // Determine which imports we need
     const imports = new Set<string>(["sqliteTable", "text", "integer"])
 
-    // Check if we need customType for JSON columns
     let needsJsonColumn = false
     let needsCitextColumn = false
     for (const type of program.types) {
@@ -877,10 +847,8 @@ export const generateDrizzleSchema = (
     const relationDefs = generateRelations(program, typeMap)
     const needsRelations = relationDefs.length > 0
 
-    // Generate the file
     const lines: string[] = []
 
-    // Add imports
     if (needsSql) {
       lines.push('import { sql } from "drizzle-orm"')
     }
@@ -917,7 +885,6 @@ export const generateDrizzleSchema = (
     lines.push("// Auto-generated - DO NOT EDIT")
     lines.push("")
 
-    // Generate citext custom type if needed
     if (needsCitextColumn) {
       lines.push(
         "// Custom type for case-insensitive text columns (SQLite COLLATE NOCASE)",
@@ -933,7 +900,6 @@ export const generateDrizzleSchema = (
       lines.push("")
     }
 
-    // Generate non-null JSON column customType if needed
     if (needsJsonColumn) {
       lines.push("// Custom type for JSON columns")
       lines.push(
@@ -956,7 +922,6 @@ export const generateDrizzleSchema = (
       lines.push("")
     }
 
-    // Generate custom datetime type if needed
     if (hasDateTimeColumns) {
       lines.push("// Custom type for Effect DateTime columns")
       lines.push(
@@ -974,26 +939,23 @@ export const generateDrizzleSchema = (
       )
       lines.push("  fromDriver(value: number): DateTime.Utc {")
       lines.push("    const millis = (value - 2440587.5) * 86400000")
-      lines.push("    return DateTime.unsafeMake(millis)")
+      lines.push("    return DateTime.makeUnsafe(millis)")
       lines.push("  },")
       lines.push("})")
       lines.push("")
     }
 
-    // Generate tables
     for (const type of program.types) {
       const table = yield* generateTable(type, baseMap, typeMap, prefix)
       lines.push(table)
     }
 
-    // Generate views for extends
     if (needsViews) {
       lines.push("// Views for virtual attributes")
       const extendViews = generateExtendViews(program, baseMap, typeMap, prefix)
       lines.push(...extendViews)
     }
 
-    // Generate type exports
     lines.push("// Type exports")
     for (const type of program.types) {
       const typeExports = generateTypeExports(type)
@@ -1001,7 +963,6 @@ export const generateDrizzleSchema = (
     }
     lines.push("")
 
-    // Generate relations
     if (relationDefs.length > 0) {
       lines.push("// Relations")
       lines.push(...relationDefs)

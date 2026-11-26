@@ -67,10 +67,10 @@
       "path": "../../packages/aws-common"
     },
     {
-      "path": "../../packages/frontend-manifest"
+      "path": "../../packages/frontend-plugin-host"
     },
     {
-      "path": "../../packages/frontend-plugin-host"
+      "path": "../../packages/frontend-manifest"
     },
     {
       "path": "../../packages/request-time"
@@ -82,7 +82,13 @@
       "path": "../../packages/effect-json-logger"
     },
     {
+      "path": "../../packages/project-accounting"
+    },
+    {
       "path": "../../packages/frontend-endpoints"
+    },
+    {
+      "path": "../../packages/realtime-client"
     },
     {
       "path": "../../packages/openauth"
@@ -94,7 +100,10 @@
       "path": "../../packages/rxdb-collections"
     },
     {
-      "path": "../../packages/form-client-representation"
+      "path": "../../packages/form-submission-schema"
+    },
+    {
+      "path": "../../packages/form-schema"
     },
     {
       "path": "../../packages/form"
@@ -104,6 +113,9 @@
     },
     {
       "path": "../../packages/shadcn-components"
+    },
+    {
+      "path": "../../packages/runtime"
     }
   ]
 }

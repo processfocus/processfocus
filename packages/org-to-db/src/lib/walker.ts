@@ -2,12 +2,14 @@ import { Effect, type Schema } from "effect"
 import type * as AST from "effect/SchemaAST"
 import type { DirectedGraph } from "graphology"
 import {
+  type AwsRoleBinding,
   type OAuthProviderConfig,
   type OAuthProviderName,
   type PasskeyProviderConfig,
+  type WorkloadClientConfig,
   isAuthenticationConfig,
 } from "@pf/auth-config"
-import { FormFileInput, fieldInputAst } from "@pf/form-schema"
+import { FormFileInput, fieldAnnotation, fieldInputAst } from "@pf/form-schema"
 import {
   type Form,
   type GraphEdge,
@@ -135,10 +137,8 @@ const extractOrgUnitDataRecursive = (
   Effect.gen(function* () {
     const orgUnitPath = normalizePath(orgUnit.node.path)
 
-    // Extract processes from this org unit
     const processes = yield* extractProcessesFromOrgUnit(orgUnit)
 
-    // Extract roles from this org unit
     const roles = extractRolesFromOrgUnit(orgUnit, orgUnitPath)
 
     // Recursively extract child org units (inherit timezone and startDayOfWeek from root)
@@ -294,13 +294,10 @@ const extractProcessData = (
     // Get the org unit path from the process
     const orgUnitPath = normalizePath(process.orgUnit.node.path)
 
-    // Extract steps from graph nodes
     const steps = yield* extractSteps(graph, processPath)
 
-    // Extract flows from graph edges
     const flows = yield* extractFlows(graph)
 
-    // Extract role responsibilities
     const responsibilities = extractResponsibilitiesFromProcess(process)
 
     // Extract phases from steps (order determined by first appearance)
@@ -477,6 +474,10 @@ const extractFlowData = (
       ...(schedule && { schedule }),
       isElse: edgeAttributes.isElse ?? false,
       isOnError: edgeAttributes.isOnError ?? false,
+      ...(edgeAttributes.deadlineName && {
+        deadlineName: edgeAttributes.deadlineName,
+        interrupting: edgeAttributes.interrupting ?? false,
+      }),
       taggedErrors: edgeAttributes.taggedErrors ?? null,
     }
     return data
@@ -571,6 +572,25 @@ export const walkAuthenticationConfig = (
     : { inviteOnly, delegatedAccess, identityProviders }
 }
 
+export const walkWorkloadClients = (
+  org: Organisation,
+): readonly (WorkloadClientConfig & { readonly clientId: string })[] =>
+  org.node.children.flatMap((child) =>
+    isAuthenticationConfig(child)
+      ? Object.entries(child.workloadClients).map(([clientId, config]) => ({
+          clientId,
+          ...config,
+        }))
+      : [],
+  )
+
+export const walkAwsRoleBindings = (
+  org: Organisation,
+): readonly AwsRoleBinding[] =>
+  org.node.children.flatMap((child) =>
+    isAuthenticationConfig(child) ? [...child.awsRoleBindings] : [],
+  )
+
 /**
  * Walk the organisation tree and extract secret client configurations.
  *
@@ -610,7 +630,7 @@ const extractDocumentStoreReferencesFromSchema = (
 
   const walk = (ast: AST.AST): void => {
     // Check for FormFileInput annotation on this AST node
-    const metadata = ast.annotations[FormFileInput]
+    const metadata = fieldAnnotation(ast, FormFileInput)
     if (
       typeof metadata === "object" &&
       metadata !== null &&
@@ -624,13 +644,13 @@ const extractDocumentStoreReferencesFromSchema = (
     }
 
     // Preserve annotations on every wrapper while following the encoded schema.
-    if (ast._tag === "Refinement" || ast._tag === "Transformation") {
-      walk(ast.from)
+    if (ast.encoding) {
+      for (const link of ast.encoding) walk(link.to)
       return
     }
 
     // Recursively walk into struct fields
-    if (ast._tag === "TypeLiteral") {
+    if (ast._tag === "Objects") {
       for (const prop of ast.propertySignatures) {
         walk(prop.type)
       }

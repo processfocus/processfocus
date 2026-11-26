@@ -11,6 +11,7 @@ import {
   isList,
   isOrgUnit,
   isProcess,
+  normalizePath,
   pathToPascalCase,
 } from "@pf/process"
 import { walkOutputAST } from "./output-walker"
@@ -507,23 +508,13 @@ const generateMutationsForProcess = (
   process: Process,
 ): Effect.Effect<string[], NoStartNodeError | InvalidProcessGraph> =>
   Effect.gen(function* () {
-    // Get the first start node
     const startNode = yield* getFirstStartNode(process)
 
-    // Get mutation name from the process
     const mutationName = process.startMutationName()
-    const startForm = startNode.isForm
-      ? (startNode as unknown as Form<
-          Record<string, never>,
-          Record<string, never>,
-          Schema.Struct.Fields
-        >)
-      : null
-    const authTag = startForm?.embed
-      ? ' @auth(tag: "embed")'
-      : process.props.cron && startNode.isSystemStep
+    const authTag =
+      process.props.cron && startNode.isSystemStep
         ? ' @auth(tag: "cron")'
-        : ""
+        : ` @step(path: ${JSON.stringify(normalizePath(startNode.node.path))}) @processPermission`
 
     // Only Form start nodes produce GraphQL input types.
     // System steps (e.g. AwsFunctionStep) may have output fields but those
@@ -556,7 +547,6 @@ const generateCompleteMutationsForProcess = (
   process: Process,
 ): Effect.Effect<string[], InvalidProcessGraph> =>
   Effect.gen(function* () {
-    // Get the process graph
     const graph = yield* Effect.try({
       try: () => process.getGraph(),
       catch: (error) =>
@@ -594,12 +584,14 @@ const generateCompleteMutationsForProcess = (
 
         if (submittableFieldCount === 0) {
           // No submittable fields: only todoId parameter
-          mutations.push(`  ${mutationName}(todoId: ID!): CompleteStepPayload!`)
+          mutations.push(
+            `  ${mutationName}(todoId: ID!): CompleteStepPayload! @processPermission`,
+          )
         } else {
           // Has submittable fields: todoId and input parameters
           const inputTypeName = pathToInputTypeName(step.node.path)
           mutations.push(
-            `  ${mutationName}(todoId: ID!, input: ${inputTypeName}!): CompleteStepPayload!`,
+            `  ${mutationName}(todoId: ID!, input: ${inputTypeName}!): CompleteStepPayload! @processPermission`,
           )
         }
       }
@@ -622,6 +614,9 @@ const generateLookupQueriesForProcess = (
   const queryFields: string[] = []
 
   for (const { form } of process.forms()) {
+    if (form.prefillQuery()) {
+      queryFields.push(`  ${form.prefillQueryName()}(value: String!): JSON!`)
+    }
     const overrides = form.lookupOverrides()
 
     for (const [fieldName, override] of overrides) {
@@ -641,10 +636,8 @@ const generateLookupQueriesForProcess = (
         `input ${inputTypeName} {\n  filter: String\n${depFields}\n}`,
       )
 
-      const embedTag = form.embed ? ' @auth(tag: "embed")' : ""
-
       queryFields.push(
-        `  ${queryName}(input: ${inputTypeName}!, limit: Int): [LookupItem!]!${embedTag}`,
+        `  ${queryName}(input: ${inputTypeName}!, limit: Int): [LookupItem!]! @step(path: ${JSON.stringify(normalizePath(form.node.path))})`,
       )
     }
   }
@@ -689,10 +682,8 @@ export const buildDynamicSchema = (): Effect.Effect<
     const { organisation: org, customGraphqlSchema } =
       yield* OrganisationProvider
 
-    // Collect all forms from the organization
     const forms = yield* collectFormsFromOrgUnit(org)
 
-    // Generate input type definitions
     const generatedTypes = yield* Effect.forEach(forms, (form) =>
       generateInputType(form),
     )
@@ -708,20 +699,16 @@ export const buildDynamicSchema = (): Effect.Effect<
       }
     }
 
-    // Collect all processes from the organization
     const processes = yield* collectProcessesFromOrgUnit(org)
 
-    // Generate start mutations for each process
     const startMutationArrays = yield* Effect.forEach(processes, (process) =>
       generateMutationsForProcess(process),
     )
 
-    // Generate complete mutations for each process
     const completeMutationArrays = yield* Effect.forEach(processes, (process) =>
       generateCompleteMutationsForProcess(process),
     )
 
-    // Flatten mutation arrays into a single array
     const allMutations = [
       ...startMutationArrays.flat(),
       ...completeMutationArrays.flat(),
@@ -738,10 +725,8 @@ export const buildDynamicSchema = (): Effect.Effect<
       lookupQueryFields.push(...queryFields)
     }
 
-    // Collect all lists from the organization
     const lists = yield* collectListsFromOrgUnit(org)
 
-    // Generate schema parts for each list
     const listSchemas = yield* Effect.forEach(lists, (list) =>
       generateSchemaForList(list),
     )
@@ -756,7 +741,6 @@ export const buildDynamicSchema = (): Effect.Effect<
       for (const aux of listSchema.itemTypes.auxiliary) {
         listOutputTypes.push(aux)
       }
-      // Add page type
       listOutputTypes.push(listSchema.pageType)
       // Add detail type and its auxiliary types if present
       if (listSchema.detailType) {
@@ -780,35 +764,31 @@ export const buildDynamicSchema = (): Effect.Effect<
           listOutputTypes.push(aux)
         }
       }
-      // Add query
       listQueries.push(listSchema.query)
-      // Add item query if present
       if (listSchema.itemQuery) {
         listQueries.push(listSchema.itemQuery)
       }
-      // Add update mutation if present
       if (listSchema.updateMutation) {
         allMutations.push(listSchema.updateMutation)
       }
-      // Add delete mutation if present
       if (listSchema.deleteMutation) {
         allMutations.push(listSchema.deleteMutation)
       }
     }
 
     // Build the final schema
-    const schemaParts: string[] = []
+    const schemaParts: string[] = [
+      '"Binds a generated operation to its domain Step for Cedar authorization."\ndirective @step(path: String!) on FIELD_DEFINITION',
+      '"Authorizes an eligible generated mutation through its process command."\ndirective @processPermission on FIELD_DEFINITION',
+    ]
 
-    // Add the payload types
     schemaParts.push(START_PROCESS_PAYLOAD_TYPE)
     schemaParts.push(COMPLETE_STEP_PAYLOAD_TYPE)
 
-    // Add auxiliary input types
     if (auxiliarySet.size > 0) {
       schemaParts.push(...auxiliarySet)
     }
 
-    // Add main input types
     if (mainTypes.length > 0) {
       schemaParts.push(...mainTypes)
     }
@@ -818,12 +798,10 @@ export const buildDynamicSchema = (): Effect.Effect<
       schemaParts.push(...lookupInputTypes)
     }
 
-    // Add list output types
     if (listOutputTypes.length > 0) {
       schemaParts.push(...listOutputTypes)
     }
 
-    // Add mutations block if there are any mutations
     if (allMutations.length > 0) {
       const mutationsBlock = `type Mutation {\n${allMutations.join("\n")}\n}`
       schemaParts.push(mutationsBlock)
@@ -840,6 +818,5 @@ export const buildDynamicSchema = (): Effect.Effect<
       schemaParts.push(customGraphqlSchema.typeDefs)
     }
 
-    // Join all parts with double newlines
     return schemaParts.join("\n\n")
   })

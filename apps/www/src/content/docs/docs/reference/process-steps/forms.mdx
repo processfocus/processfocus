@@ -1,0 +1,128 @@
+---
+title: Forms
+---
+
+A `Form` step collects information from a person. This can be an
+employee or someone outside the organisation.
+
+Use `role` to specify who is responsible for the step and `form` to
+define its fields. See [Adding steps](/docs/reference/processes/#adding-steps)
+for how to connect the form to a process.
+
+## Form example
+
+In this single-step process, the **Sales** role enters the SKU and
+quantity from the [Web order form example](/docs/reference/process-steps/#example-web-order-form).
+
+```typescript
+import { NumberField, TextField } from "@pf/form-schema"
+import { Form, Organisation, Process, Role } from "@pf/process"
+import { Schema } from "effect"
+
+export const org = new Organisation({ name: "Demo Store" })
+const sales = new Role(org, "Sales")
+
+const webOrder = new Process(org, "web-order", {
+  name: "Web order",
+  purpose: "Capture an order from the website",
+})
+
+const orderForm = Schema.Struct({
+  sku: TextField({ label: "SKU" }),
+  quantity: NumberField({ label: "Quantity" }),
+})
+
+const captureOrder = new Form(webOrder, "Capture order", {
+  role: sales,
+  form: orderForm,
+})
+
+webOrder.start(captureOrder).end()
+```
+
+## Forms are Effect TS schemas
+
+Note that forms are actually [Effect TS Schemas](https://effect.website/docs/v4/schema/introduction).
+
+```typescript
+const orderForm = Schema.Struct({
+  sku: TextField({ label: "SKU" }),
+  quantity: NumberField({ label: "Quantity" }),
+})
+```
+
+In Process Focus we start with the shape of the data we want to send
+to the API, then work backward to derive a user data entry form.
+
+See [Form components](/docs/reference/process-steps/form-components/) for
+common fields and ways to organise them.
+
+## Add validation
+
+As our form is a schema, it's easy to add validation. Below we trim
+the SKU and make sure it is not blank. The quantity is required and
+must be a positive whole number. The process and role stay the same.
+
+```typescript
+import { NumberFieldFrom, NumberFromString, TextFieldFrom } from "@pf/form-schema"
+
+const orderForm = Schema.Struct({
+  sku: TextFieldFrom(
+    Schema.Trim.pipe(Schema.check(Schema.isMinLength(1))),
+    { label: "SKU" },
+  ),
+  quantity: NumberFieldFrom(
+    NumberFromString.pipe(
+      Schema.check(Schema.isInt()),
+      Schema.check(Schema.isGreaterThan(0)),
+    ),
+    { label: "Quantity", required: true },
+  ),
+})
+```
+
+## Default values
+
+Set `default` on a field to prefill it when the form opens. For example,
+start the order quantity at `1` so the person only needs to change it
+when the customer orders more than one:
+
+```typescript
+const orderForm = Schema.Struct({
+  sku: TextField({ label: "SKU" }),
+  quantity: NumberField({ label: "Quantity", default: 1 }),
+})
+```
+
+The default must match the field's value type. Here, use the number `1`,
+not the string `"1"`.
+
+## Form rules
+
+Use a [Form Rule](/docs/concepts/forms/#form-rules) to change a field's
+behaviour based on what the person enters. For example, show and require
+a delivery address only when the order will be shipped:
+
+```typescript
+import { BooleanField, TextArea } from "@pf/form-schema"
+import { withFormRules } from "@pf/form-submission-schema"
+import { Schema } from "effect"
+
+const deliveryForm = withFormRules(
+  Schema.Struct({
+    shipOrder: BooleanField({ label: "Ship this order", default: false }),
+    deliveryAddress: Schema.optional(TextArea({ label: "Delivery address" })),
+  }),
+  ({ shipOrder }) => ({
+    deliveryAddress: {
+      hidden: shipOrder !== true,
+      required: shipOrder === true,
+    },
+  }),
+)
+```
+
+`Schema.optional` lets the address be absent for pickup, when the field is
+hidden and not submitted. When the person selects **Ship this order**, the
+rule shows the field and requires an address. The server checks the rule
+again on submission.

@@ -8,6 +8,8 @@ OUTPUT_PATH="${FRONTEND_ROOT}/lib/generated/frontend-manifest.json"
 OUTPUT_ORGANISATION_PLUGIN_MODULE="${FRONTEND_ROOT}/lib/generated/organisation-plugin-loaders.tsx"
 OUTPUT_ORGANISATION_PLUGIN_PREPARATION_MODULE="${FRONTEND_ROOT}/lib/generated/organisation-plugin-preparation.ts"
 OUTPUT_ORGANISATION_PLUGIN_REPORT="${FRONTEND_ROOT}/lib/generated/organisation-plugin-composition.json"
+OUTPUT_ORGANISATION_FORM_MODULE="${FRONTEND_ROOT}/lib/generated/organisation-form-loaders.ts"
+OUTPUT_BROWSER_FORM_DIR="${FRONTEND_ROOT}/lib/generated/browser-forms"
 OUTPUT_BROWSER_PLUGIN_DIR="${FRONTEND_ROOT}/lib/generated/browser-plugins"
 OUTPUT_DOCS_DIR="${FRONTEND_ROOT}/lib/generated/docs"
 OUTPUT_APP_ICONS_DIR="${FRONTEND_ROOT}/public/_pf/app-icons"
@@ -24,6 +26,7 @@ log() {
 
 remove_generated_files() {
   rm -f \
+    "$OUTPUT_ORGANISATION_FORM_MODULE" \
     "$OUTPUT_PATH" \
     "$OUTPUT_ORGANISATION_PLUGIN_MODULE" \
     "$OUTPUT_ORGANISATION_PLUGIN_PREPARATION_MODULE" \
@@ -32,6 +35,7 @@ remove_generated_files() {
     "$LEGACY_PLUGIN_OUTPUT_PATH" \
     "$LEGACY_PLUGIN_GLUE_PATH"
   rm -rf \
+    "$OUTPUT_BROWSER_FORM_DIR" \
     "$OUTPUT_DOCS_DIR" \
     "$OUTPUT_APP_ICONS_DIR" \
     "$OUTPUT_PUBLIC_FORM_BRANDING_DIR" \
@@ -39,6 +43,11 @@ remove_generated_files() {
     "$LEGACY_ASSET_DIR" \
     "$LEGACY_PLUGIN_BUNDLE_DIR"
 }
+
+# One identity per prepared frontend artifact, including organisation-only builds.
+# Next serializes it into the standalone/OpenNext server and browser bundles.
+mkdir -p "$FRONTEND_ROOT/lib/generated"
+bun -e 'await Bun.write(process.argv[1], crypto.randomUUID())' "$FRONTEND_ROOT/lib/generated/deployment-id"
 
 if [[ -z "${PF_ORG:-}" ]]; then
   remove_generated_files
@@ -72,6 +81,7 @@ bun "${FRONTEND_ROOT}/scripts/generate-organisation-plugin-composition.ts" \
   "$OUTPUT_ORGANISATION_PLUGIN_MODULE" \
   "$OUTPUT_ORGANISATION_PLUGIN_PREPARATION_MODULE" \
   "$OUTPUT_ORGANISATION_PLUGIN_REPORT"
+bun "${FRONTEND_ROOT}/scripts/generate-organisation-form-loaders.ts" "$SOURCE_DIST_DIR" "$OUTPUT_ORGANISATION_FORM_MODULE"
 
 rm -rf "$OUTPUT_DOCS_DIR" "$OUTPUT_APP_ICONS_DIR" "$OUTPUT_PUBLIC_FORM_BRANDING_DIR" "$LEGACY_ASSET_DIR"
 if [[ -d "$SOURCE_DOCS_DIR" ]]; then

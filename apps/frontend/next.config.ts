@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import bundleAnalyzer from "@next/bundle-analyzer"
 import type { NextConfig } from "next"
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants"
 import {
   buildEmbedFrameAncestorsPolicy,
   getEmbedRoutePath,
@@ -23,6 +24,14 @@ const workspaceRoot =
   process.env["PF_DASHBOARD_SOURCE_ROOT"] ??
   process.env["NX_WORKSPACE_ROOT"] ??
   join(process.cwd(), "../..")
+const generatedOrganisationFormModule = join(
+  workspaceRoot,
+  "apps/frontend/lib/generated/organisation-form-loaders.ts",
+)
+const organisationFormModule = existsSync(generatedOrganisationFormModule)
+  ? generatedOrganisationFormModule
+  : join(workspaceRoot, "apps/frontend/lib/organisation-form-loaders.ts")
+const turbopackOrganisationFormModule = `./${relative(join(workspaceRoot, "apps/frontend"), organisationFormModule)}`
 const localOrganisationPluginModule = join(
   workspaceRoot,
   "apps/frontend/lib/organisation-plugin-loaders.ts",
@@ -67,14 +76,26 @@ const turbopackOrganisationPluginPreparationModule =
 /**
  * @type {import("@nx/next/plugins/with-nx").WithNxOptions}
  **/
-const nextConfig: NextConfig = {
+const nextConfig = (phase: string): NextConfig => ({
   ...(configuredBuildId === undefined
     ? {}
     : { generateBuildId: async () => configuredBuildId }),
+  deploymentId: existsSync(
+    join(import.meta.dirname, "lib/generated/deployment-id"),
+  )
+    ? readFileSync(
+        join(import.meta.dirname, "lib/generated/deployment-id"),
+        "utf8",
+      ).trim()
+    : undefined,
   env: {
     NEXT_PUBLIC_PROCESS_FOCUS_VERSION: packageJson.version,
   },
   cacheComponents: true,
+  // Keep Cedar's Node loader and WASM together in production. Bundling its ESM
+  // WASM import makes Turbopack 16.4 trace unrelated workspace dependencies.
+  serverExternalPackages:
+    phase === PHASE_DEVELOPMENT_SERVER ? [] : ["@cedar-policy/cedar-wasm"],
   partialPrefetching: true,
   reactCompiler: {
     compilationMode: "infer",
@@ -90,10 +111,12 @@ const nextConfig: NextConfig = {
       ? { root: process.env["PF_RUNTIME_ROOT"] }
       : {}),
     resolveAlias: {
-      // Cedar's CommonJS nodejs entry reads the wasm file from __dirname.
-      // In Turbopack cold compiles that gets externalized under a hashed
-      // package name, which fails on the first request from a clean .next.
-      "@cedar-policy/cedar-wasm/nodejs": "@cedar-policy/cedar-wasm",
+      // Bun cannot resolve Turbopack's hashed Node external on a cold dev boot.
+      // Bundle Cedar's ESM loader only in development; never in Lambda builds.
+      ...(phase === PHASE_DEVELOPMENT_SERVER
+        ? { "@cedar-policy/cedar-wasm/nodejs": "@cedar-policy/cedar-wasm" }
+        : {}),
+      "@/lib/organisation-form-loaders": turbopackOrganisationFormModule,
       "@/lib/organisation-plugin-loaders": turbopackOrganisationPluginModule,
       "@/lib/organisation-plugin-preparation":
         turbopackOrganisationPluginPreparationModule,
@@ -114,6 +137,7 @@ const nextConfig: NextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       "@cedar-policy/cedar-wasm/nodejs": "@cedar-policy/cedar-wasm",
+      "@/lib/organisation-form-loaders": organisationFormModule,
       "@/lib/organisation-plugin-loaders": organisationPluginModule,
       "@/lib/organisation-plugin-preparation":
         organisationPluginPreparationModule,
@@ -170,7 +194,7 @@ const nextConfig: NextConfig = {
             "frame-ancestors 'none'",
             "img-src 'self' data:",
             "style-src 'self' 'unsafe-inline'",
-            "script-src 'self' 'unsafe-inline'",
+            `script-src 'self' 'unsafe-inline'${process.env["NODE_ENV"] === "development" ? " 'unsafe-eval'" : ""}`,
             "connect-src 'self'",
             "object-src 'none'",
           ].join("; "),
@@ -218,7 +242,6 @@ const nextConfig: NextConfig = {
       "node_modules/@rspack",
       "node_modules/sass",
       "node_modules/sharp",
-      //"node_modules/@swc",
       "node_modules/typescript",
     ],
   },
@@ -230,9 +253,6 @@ const nextConfig: NextConfig = {
       "./public/_pf/public-form-branding/**/*",
     ],
   },
-  // Use this to set Nx-specific options
-  // See: https://nx.dev/recipes/next/next-config-setup
-  // nx: {},
-}
+})
 
-export default withBundleAnalyzer(nextConfig)
+export default (phase: string) => withBundleAnalyzer(nextConfig(phase))

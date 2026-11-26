@@ -1,4 +1,4 @@
-import { Either, Schema } from "effect"
+import { Exit, Schema } from "effect"
 
 // The prior signed access token binds a ceremony to its initiating identity.
 const ReauthenticationState = Schema.Struct({
@@ -9,8 +9,8 @@ const ReauthenticationState = Schema.Struct({
 export function readReauthenticationState(
   value: string | undefined,
 ): typeof ReauthenticationState.Type | null {
-  const parsed = Schema.decodeUnknownEither(
-    Schema.parseJson(ReauthenticationState),
+  const parsed = Schema.decodeUnknownExit(
+    Schema.fromJsonString(ReauthenticationState),
   )(value)
-  return Either.isRight(parsed) ? parsed.right : null
+  return Exit.isSuccess(parsed) ? parsed.value : null
 }

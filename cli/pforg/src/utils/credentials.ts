@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import { Either, Schema } from "effect"
+import { Exit, Schema } from "effect"
 
 const CredentialsSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -38,10 +38,10 @@ export const readCredentials = (): Credentials | null => {
     const parsed: unknown = JSON.parse(
       readFileSync(getCredentialsPath(), "utf8"),
     )
-    const result = Schema.decodeUnknownEither(CredentialsSchema)(parsed)
-    return Either.match(result, {
-      onLeft: () => null,
-      onRight: (credentials) => credentials,
+    const result = Schema.decodeUnknownExit(CredentialsSchema)(parsed)
+    return Exit.match(result, {
+      onFailure: () => null,
+      onSuccess: (credentials) => credentials,
     })
   } catch {
     return null

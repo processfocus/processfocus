@@ -1,0 +1,62 @@
+---
+title: Authentication
+description: Identities, invitations, and passkeys in Process Focus.
+---
+
+Configure authentication for users and systems using the methods below.
+For an introduction, see [Authentication concepts](/docs/concepts/authentication/).
+
+Authentication is always a two-step process:
+
+1. Verifying the identity through an identity provider.
+2. Verifying that the identity is allowed to authenticate.
+
+Only when both pass is a user or system considered authenticated.
+
+## Verifying identities
+
+### User identities
+
+Process Focus supports the following methods to identify users:
+
+- **Single-Sign-On**: recommended for businesses with a centralised
+  user directory. Should work with all directories implementing
+  OAuth2, such as Google Workspace or Active Directory.
+- **Passkeys**: use if there is no central user directory. Users sign in
+  with a credential stored on their device or in a password manager.
+
+### System identities
+
+Process Focus supports the following method to identify systems:
+
+- **Secrets**: a secret token provides access for service-to-service
+  communication.
+
+See [System identities](/docs/reference/authentication/system-identities/) for
+other authentication methods and how system access is authorised.
+
+### Delegated identities
+
+See [Delegated identities](/docs/reference/authentication/delegated-identities/)
+to let an agent sign in and act on behalf of an existing user.
+
+## Verifying that an identity can authenticate
+
+If the identity is verified, Process Focus checks if the identity can
+authenticate. This involves a few steps:
+
+1. Has the identity logged in before? Then yes, proceed.
+2. If the identity is new, is there an invitation waiting for the user to proceed?
+3. Otherwise, the identity is blocked.
+
+Note that "log in frontend" is seen as an action and is a separate
+check a user must pass. Actions are subject to authorisation checks.
+
+### Inviting users
+
+Process Focus does not have a mechanism to create users. Instead, you
+create an invitation. The user is created when the invitation is
+accepted and the recipient has logged in via the enabled
+identification mechanism.
+
+You can create invitations via the frontend or [in code](/docs/reference/authentication/invitations/#invitations-in-code).

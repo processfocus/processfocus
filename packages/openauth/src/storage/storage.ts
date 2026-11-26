@@ -31,9 +31,7 @@ export class StorageError extends Data.TaggedError("@pf/openauth/StorageError")<
  * Provides key-value storage with TTL support and prefix scanning.
  * Implementations should handle expiry/TTL at the storage level.
  */
-export class StorageService extends Context.Tag("@pf/openauth/StorageService")<
-  StorageService,
-  {
+export class StorageService extends Context.Service<StorageService, {
     /**
      * Get a value by key. Returns undefined if not found or expired.
      */
@@ -56,8 +54,7 @@ export class StorageService extends Context.Tag("@pf/openauth/StorageService")<
      * Returns a stream of [key, value] pairs.
      */
     readonly scan: <T>(prefix: string[]) => Stream.Stream<[string[], T], StorageError>
-  }
->() {}
+  }>()("@pf/openauth/StorageService") {}
 
 /**
  * Helper namespace for common storage operations with key encoding.

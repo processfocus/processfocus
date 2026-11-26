@@ -1,4 +1,3 @@
-// components/config-provider.tsx
 "use client"
 
 import { type ReactNode, createContext, useContext } from "react"

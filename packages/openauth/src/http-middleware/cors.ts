@@ -13,12 +13,8 @@
  * @packageDocumentation
  */
 
-import {
-  HttpMiddleware,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import { Effect } from "effect"
+import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/http"
 
 /**
  * CORS configuration options.
@@ -41,7 +37,6 @@ const buildCorsHeaders = (
 ): Record<string, string> => {
   const headers: Record<string, string> = {}
 
-  // Handle Origin header
   if (options.origin === "*") {
     headers["Access-Control-Allow-Origin"] = "*"
   } else if (typeof options.origin === "string") {
@@ -53,27 +48,22 @@ const buildCorsHeaders = (
     }
   }
 
-  // Handle Credentials
   if (options.credentials) {
     headers["Access-Control-Allow-Credentials"] = "true"
   }
 
-  // Handle Allow-Methods
   if (options.allowMethods && options.allowMethods.length > 0) {
     headers["Access-Control-Allow-Methods"] = options.allowMethods.join(", ")
   }
 
-  // Handle Allow-Headers
   if (options.allowHeaders && options.allowHeaders.length > 0) {
     headers["Access-Control-Allow-Headers"] = options.allowHeaders.join(", ")
   }
 
-  // Handle Expose-Headers
   if (options.exposeHeaders && options.exposeHeaders.length > 0) {
     headers["Access-Control-Expose-Headers"] = options.exposeHeaders.join(", ")
   }
 
-  // Handle Max-Age
   if (options.maxAge !== undefined) {
     headers["Access-Control-Max-Age"] = options.maxAge.toString()
   }

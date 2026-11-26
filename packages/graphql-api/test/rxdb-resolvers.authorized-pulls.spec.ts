@@ -1,11 +1,10 @@
+import type { Context } from "effect"
 /// <reference types="bun" />
 
-import { FileSystem } from "@effect/platform"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, FileSystem, Layer } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
 import {
   type DraftProcessExecutionRow,
-  type ProcessCollectionRow,
   type PullCheckpoint,
   StepRoleQueries,
   TodoQueries,
@@ -16,7 +15,6 @@ import { TodoSummaryComputation } from "@pf/todo-summary"
 import { ResolverRuntime } from "../src/lib/graphql-api"
 import { ProcessDurationService } from "../src/lib/process-duration-service"
 import { DraftProcessExecutionCollectionOps } from "../src/lib/rxdb/draft-process-execution"
-import { ProcessCollectionOps } from "../src/lib/rxdb/process"
 import { TodoCollectionOps } from "../src/lib/rxdb/todo"
 import { rxdbSchema } from "../src/lib/rxdb-resolvers"
 import type { UserContext } from "../src/lib/types"
@@ -72,23 +70,20 @@ const commonLayers = Layer.mergeAll(
   }),
   Layer.succeed(AuthorizationService, {
     canIssueDelegationSecret: () => Effect.succeed(false),
+    canViewEmbeddedForm: () => Effect.succeed(false),
     canListDelegationTokens: () => Effect.succeed(false),
     canManageDelegation: () => Effect.succeed(false),
     canLogin: () => Effect.succeed(false),
+    policyVersion: Effect.succeed("test-policy"),
     canCompleteStep: (_principal, resource) =>
       Effect.succeed(resource.uid.id.includes("allowed")),
-    canCompleteTodo: (_principal, resource) =>
-      Effect.succeed(resource.uid.id.includes("allowed")),
     canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-    canCompletePublicTodo: () => Effect.succeed(false),
     canRequestRole: () => Effect.succeed(false),
-    canRequestProviderUserPermissions: () => Effect.succeed(false),
     canActOnBehalfOf: () => Effect.succeed(false),
     canViewExecution: () => Effect.succeed(false),
     canRestartExecution: () => Effect.succeed(false),
     canAbandonStep: () => Effect.succeed(false),
-    canDraftStep: (_principal, resource) =>
-      Effect.succeed(resource.uid.id.includes("allowed")),
+    canDraftStep: () => Effect.succeed(false),
     canModifyField: () => Effect.succeed(false),
     canAccessField: () => Effect.succeed(false),
     canAccessFeature: () => Effect.succeed(false),
@@ -153,7 +148,7 @@ const makeTodoRow = (
 })
 
 interface TodoLayerOptions {
-  readonly pullTodo: TodoQueries["Type"]["pullTodo"]
+  readonly pullTodo: Context.Service.Shape<typeof TodoQueries>["pullTodo"]
   readonly getTodos: (ids: readonly string[]) => TodoRow[]
   readonly getReplicationHead: () => PullCheckpoint | null
 }
@@ -235,7 +230,7 @@ describe("authorized pull resolvers", () => {
       name: id,
       startStepPath: `/process/${id}`,
       state: {},
-      lastSaved: DateTime.unsafeMake(updatedAt),
+      lastSaved: DateTime.makeUnsafe(updatedAt),
       updatedAt,
       deleted: false,
     })
@@ -246,7 +241,9 @@ describe("authorized pull resolvers", () => {
       pull: makePagedPull(denied, allowed, checkpoints),
       mapToGraphql: (row: DraftProcessExecutionRow) =>
         Effect.succeed({ id: row.id, updatedAt: row.updatedAt }),
-    } as unknown as DraftProcessExecutionCollectionOps["Type"])
+    } as unknown as Context.Service.Shape<
+      typeof DraftProcessExecutionCollectionOps
+    >)
 
     const result = await runPull<{
       documents: Array<{ id: string }>
@@ -264,42 +261,6 @@ describe("authorized pull resolvers", () => {
       checkpoint: PullCheckpoint | null
     }>("pullDraftProcessExecution", layer, result.checkpoint ?? undefined)
     expect(finalResult).toEqual({ documents: [], checkpoint: null })
-  })
-
-  it("pullProcess scans beyond an unauthorized raw page", async () => {
-    const makeRow = (id: string, updatedAt: number): ProcessCollectionRow => ({
-      id,
-      name: id,
-      path: `/process/${id}`,
-      purpose: "Test pagination",
-      updatedAt,
-      deleted: false,
-      orgUnit: { id: "ou-root", name: "Root", orgUnitLevel: "organisation" },
-      startStepPath: `/process/${id}`,
-      formFieldCount: 0,
-      activeInstances: 0,
-      minDurationMs: null,
-      maxDurationMs: null,
-    })
-    const denied = [makeRow("denied-1", 1), makeRow("denied-2", 2)]
-    const allowed = makeRow("allowed-1", 3)
-    const checkpoints: Array<PullCheckpoint | null> = []
-    const layer = Layer.succeed(ProcessCollectionOps, {
-      pull: makePagedPull(denied, allowed, checkpoints),
-      mapToGraphql: (row: ProcessCollectionRow) =>
-        Effect.succeed({ id: row.id, updatedAt: row.updatedAt }),
-    } as unknown as ProcessCollectionOps["Type"])
-
-    const result = await runPull<{
-      documents: Array<{ id: string }>
-      checkpoint: PullCheckpoint | null
-    }>("pullProcess", layer)
-
-    expect(checkpoints).toEqual([null, { id: "denied-2", updatedAt: 2 }])
-    expect(result.documents.map((document) => document.id)).toEqual([
-      "allowed-1",
-    ])
-    expect(result.checkpoint).toEqual({ id: "allowed-1", updatedAt: 3 })
   })
 
   it("pullTodo scans beyond an unauthorized raw page", async () => {

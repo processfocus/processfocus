@@ -2,6 +2,7 @@ import {
   aliasedTable,
   and,
   eq,
+  gt,
   inArray,
   isNull,
   lte,
@@ -36,7 +37,7 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
     const sourceStep = aliasedTable(schema.step, "source_step")
     const targetStep = aliasedTable(schema.step, "target_step")
 
-    return {
+    const operations: FlowExecutionOperations["Service"] = {
       queryFlowById: (flowId: string) =>
         Effect.gen(function* () {
           const result = yield* db
@@ -49,6 +50,7 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
               targetStepPath: targetStep.path,
               fallbackBranch: schema.flow.fallbackBranch,
               isOnError: schema.flow.errorBranch,
+              deadlineName: schema.flow.deadlineName,
               taggedErrors: schema.flow.errorTags,
             })
             .from(schema.flow)
@@ -168,7 +170,6 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
           const requestTime = yield* getRequestTime()
           const userDetails = yield* getUserDetails()
 
-          // Insert the todo and return the ID
           const insertResult = yield* db
             .insert(schema.toDo)
             .values({
@@ -234,6 +235,7 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
               targetStepPath: targetStep.path,
               fallbackBranch: schema.flow.fallbackBranch,
               isOnError: schema.flow.errorBranch,
+              deadlineName: schema.flow.deadlineName,
               taggedErrors: schema.flow.errorTags,
             })
             .from(schema.flow)
@@ -381,14 +383,31 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
         lockedUntil,
         receipt,
       ) =>
+        operations.claimFlowDispatchJobsBatch(
+          [sourceScheduledFlowId],
+          now,
+          lockedUntil,
+          receipt,
+        ),
+
+      claimFlowDispatchJobsBatch: (
+        sourceScheduledFlowIds,
+        now,
+        lockedUntil,
+        receipt,
+      ) =>
         Effect.gen(function* () {
+          if (sourceScheduledFlowIds.length === 0) return []
           const rows = yield* db
             .update(schema.jobQueue)
             .set({ lockedUntil, claimReceipt: receipt })
             .where(
               and(
                 eq(schema.jobQueue._deleted, false),
-                sql`${schema.jobQueue.jobPayload}->>'sourceScheduledFlowId' = ${sourceScheduledFlowId}`,
+                inArray(
+                  sql<string>`${schema.jobQueue.jobPayload}->>'sourceScheduledFlowId'`,
+                  [...sourceScheduledFlowIds],
+                ),
                 or(
                   isNull(schema.jobQueue.lockedUntil),
                   lte(schema.jobQueue.lockedUntil, now),
@@ -398,13 +417,39 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
             .returning({
               id: schema.jobQueue.id,
               payload: schema.jobQueue.jobPayload,
+              sourceScheduledFlowId: sql<string>`${schema.jobQueue.jobPayload}->>'sourceScheduledFlowId'`,
             })
           return rows
-            .map(({ id, payload }) => ({
+            .map(({ id, payload, sourceScheduledFlowId }) => ({
               id,
+              sourceScheduledFlowId,
               ...(payload as Omit<FlowDispatchJob, "id">),
             }))
-            .sort((left, right) => left.sequence - right.sequence)
+            .sort(
+              (left, right) =>
+                sourceScheduledFlowIds.indexOf(left.sourceScheduledFlowId) -
+                  sourceScheduledFlowIds.indexOf(right.sourceScheduledFlowId) ||
+                left.sequence - right.sequence,
+            )
+        }),
+
+      deleteFlowDispatchJobs: (claims) =>
+        Effect.gen(function* () {
+          if (claims.length === 0) return []
+          const rows = yield* db
+            .delete(schema.jobQueue)
+            .where(
+              or(
+                ...claims.map(({ id, receipt }) =>
+                  and(
+                    eq(schema.jobQueue.id, id),
+                    eq(schema.jobQueue.claimReceipt, receipt),
+                  ),
+                ),
+              ),
+            )
+            .returning({ id: schema.jobQueue.id })
+          return rows.map((row) => row.id)
         }),
 
       releaseFlowDispatchJobs: (sourceScheduledFlowId, receipt) =>
@@ -432,6 +477,23 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
               ),
             )
             .returning({ id: schema.jobQueue.id })
+          return rows.length > 0
+        }),
+
+      ownsFlowDispatchJob: (id, receipt, now) =>
+        Effect.gen(function* () {
+          const rows = yield* db
+            .select({ id: schema.jobQueue.id })
+            .from(schema.jobQueue)
+            .where(
+              and(
+                eq(schema.jobQueue.id, id),
+                eq(schema.jobQueue._deleted, false),
+                eq(schema.jobQueue.claimReceipt, receipt),
+                gt(schema.jobQueue.lockedUntil, now),
+              ),
+            )
+            .limit(1)
           return rows.length > 0
         }),
 
@@ -521,6 +583,7 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
         Effect.gen(function* () {
           const result = yield* db
             .select({
+              restartAttemptId: schema.processExecution.restartAttemptId,
               // PostgreSQL: Extract epoch in milliseconds
               createdAtMs:
                 sql<number>`EXTRACT(EPOCH FROM ${schema.processExecution.createdAt}) * 1000`.as(
@@ -586,7 +649,6 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
             return null // Flow not found
           }
 
-          // If roleId is not null, the step has a role
           return result[0].roleId !== null
         }),
 
@@ -771,5 +833,6 @@ export const PostgresFlowExecutionOperationsLive = Layer.effect(
           return result.map(mapNotificationRecipientRow)
         }),
     }
+    return operations
   }),
 )

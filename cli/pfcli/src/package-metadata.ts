@@ -5,7 +5,7 @@ import { Schema } from "effect"
 const PackageMetadata = Schema.Struct({
   name: Schema.String,
   version: Schema.String,
-  dependencies: Schema.Record({ key: Schema.String, value: Schema.String }),
+  dependencies: Schema.Record(Schema.String, Schema.String),
 })
 
 const packageJson: unknown = JSON.parse(
@@ -31,6 +31,7 @@ export const CLI_PACKAGE_VERSION = metadata.version
 export const CLI_ORGANISATION_SDK_VERSION =
   requiredDependencyVersion("processfocus")
 export const CLI_ORGANISATION_RUNTIME_DEPENDENCIES = {
+  "@processfocus/runtime": requiredDependencyVersion("@processfocus/runtime"),
   "@cedar-policy/cedar-wasm": requiredDependencyVersion(
     "@cedar-policy/cedar-wasm",
   ),

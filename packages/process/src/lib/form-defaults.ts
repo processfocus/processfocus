@@ -8,10 +8,9 @@ import {
   fieldInputAst,
 } from "@pf/form-schema"
 
-const nestedAst = (ast: SchemaAST.AST): SchemaAST.TypeLiteral | undefined => {
-  if (ast._tag === "TypeLiteral") return ast
-  if (ast._tag === "Transformation" || ast._tag === "Refinement")
-    return nestedAst(ast.from)
+const nestedAst = (ast: SchemaAST.AST): SchemaAST.Objects | undefined => {
+  if (ast._tag === "Objects") return ast
+  if (ast.encoding) return nestedAst(SchemaAST.toEncoded(ast))
   if (ast._tag === "Union") {
     for (const type of ast.types) {
       const nested = nestedAst(type)
@@ -60,9 +59,7 @@ export const resolveFormFieldDefaults = (
           Object.fromEntries(
             nested.propertySignatures.map((property) => [
               property.name,
-              Schema.make(
-                SchemaAST.annotations(property.type, property.annotations),
-              ),
+              Schema.make(property.type),
             ]),
           ),
           currentProviderUser,

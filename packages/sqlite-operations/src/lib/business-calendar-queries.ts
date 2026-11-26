@@ -10,7 +10,10 @@ import {
   type TimeRange,
   type WeeklyScheduleRow,
 } from "@pf/graphql-db-operations"
-import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
+import {
+  TypedSqliteDrizzle,
+  batchSqliteReads,
+} from "@pf/service-drizzle-sqlite"
 
 /**
  * Live implementation of BusinessCalendarQueries for SQLite.
@@ -27,108 +30,105 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
             return new Map()
           }
 
-          // A session executes serially; avoid reporting queue wait as query time.
+          // These five reads are independent; the driver may send them together.
           const [orgUnits, weeklySchedules, dateExceptions, holidays, periods] =
-            yield* Effect.all(
-              [
-                // Org units with timezone
-                db
-                  .select({
-                    id: schema.orgUnit.id,
-                    timezone: schema.orgUnit.timezone,
-                  })
-                  .from(schema.orgUnit)
-                  .where(
-                    and(
-                      inArray(schema.orgUnit.id, orgUnitIds),
-                      eq(schema.orgUnit._deleted, false),
-                    ),
+            yield* batchSqliteReads(db, [
+              // Org units with timezone
+              db
+                .select({
+                  id: schema.orgUnit.id,
+                  timezone: schema.orgUnit.timezone,
+                })
+                .from(schema.orgUnit)
+                .where(
+                  and(
+                    inArray(schema.orgUnit.id, orgUnitIds),
+                    eq(schema.orgUnit._deleted, false),
                   ),
+                ),
 
-                // Weekly schedules
-                db
-                  .select({
-                    orgUnitId: schema.weeklySchedule.orgUnitId,
-                    dayOfWeek: schema.weeklySchedule.dayOfWeek,
-                    timeRanges: schema.weeklySchedule.timeRanges,
-                  })
-                  .from(schema.weeklySchedule)
-                  .where(
-                    and(
-                      inArray(schema.weeklySchedule.orgUnitId, orgUnitIds),
-                      eq(schema.weeklySchedule._deleted, false),
-                    ),
+              // Weekly schedules
+              db
+                .select({
+                  orgUnitId: schema.weeklySchedule.orgUnitId,
+                  dayOfWeek: schema.weeklySchedule.dayOfWeek,
+                  timeRanges: schema.weeklySchedule.timeRanges,
+                })
+                .from(schema.weeklySchedule)
+                .where(
+                  and(
+                    inArray(schema.weeklySchedule.orgUnitId, orgUnitIds),
+                    eq(schema.weeklySchedule._deleted, false),
                   ),
+                ),
 
-                // Date exceptions
-                db
-                  .select({
-                    orgUnitId: schema.dateException.orgUnitId,
-                    // Convert Julian Day to epoch ms
-                    exceptionDate:
-                      sql<number>`(${schema.dateException.exceptionDate} - 2440587.5) * 86400000`.as(
-                        "exception_date_ms",
-                      ),
-                    exceptionSlots: schema.dateException.exceptionSlots,
-                    exceptionNote: schema.dateException.exceptionNote,
-                  })
-                  .from(schema.dateException)
-                  .where(
-                    and(
-                      inArray(schema.dateException.orgUnitId, orgUnitIds),
-                      eq(schema.dateException._deleted, false),
+              // Date exceptions
+              db
+                .select({
+                  orgUnitId: schema.dateException.orgUnitId,
+                  // Convert Julian Day to epoch ms
+                  exceptionDate:
+                    sql<number>`(${schema.dateException.exceptionDate} - 2440587.5) * 86400000`.as(
+                      "exception_date_ms",
                     ),
+                  exceptionSlots: schema.dateException.exceptionSlots,
+                  exceptionNote: schema.dateException.exceptionNote,
+                })
+                .from(schema.dateException)
+                .where(
+                  and(
+                    inArray(schema.dateException.orgUnitId, orgUnitIds),
+                    eq(schema.dateException._deleted, false),
                   ),
+                ),
 
-                // Holiday instances
-                db
-                  .select({
-                    orgUnitId: schema.holidayInstance.orgUnitId,
-                    holidayTitle: schema.holidayInstance.holidayTitle,
-                    holidayRule: schema.holidayInstance.holidayRule,
-                    // Convert Julian Day to epoch ms (if present)
-                    holidayDate: sql<
-                      number | null
-                    >`CASE WHEN ${schema.holidayInstance.holidayDate} IS NOT NULL THEN (${schema.holidayInstance.holidayDate} - 2440587.5) * 86400000 ELSE NULL END`.as(
-                      "holiday_date_ms",
-                    ),
-                  })
-                  .from(schema.holidayInstance)
-                  .where(
-                    and(
-                      inArray(schema.holidayInstance.orgUnitId, orgUnitIds),
-                      eq(schema.holidayInstance._deleted, false),
-                    ),
+              // Holiday instances
+              db
+                .select({
+                  orgUnitId: schema.holidayInstance.orgUnitId,
+                  holidayTitle: schema.holidayInstance.holidayTitle,
+                  holidayRule: schema.holidayInstance.holidayRule,
+                  // Convert Julian Day to epoch ms (if present)
+                  holidayDate: sql<
+                    number | null
+                  >`CASE WHEN ${schema.holidayInstance.holidayDate} IS NOT NULL THEN (${schema.holidayInstance.holidayDate} - 2440587.5) * 86400000 ELSE NULL END`.as(
+                    "holiday_date_ms",
                   ),
+                })
+                .from(schema.holidayInstance)
+                .where(
+                  and(
+                    inArray(schema.holidayInstance.orgUnitId, orgUnitIds),
+                    eq(schema.holidayInstance._deleted, false),
+                  ),
+                ),
 
-                // Calendar periods
-                db
-                  .select({
-                    orgUnitId: schema.calendarPeriod.orgUnitId,
-                    periodKind: schema.calendarPeriod.periodKind,
-                    periodTitle: schema.calendarPeriod.periodTitle,
-                    // Convert Julian Day to epoch ms
-                    periodStart:
-                      sql<number>`(${schema.calendarPeriod.periodStart} - 2440587.5) * 86400000`.as(
-                        "period_start_ms",
-                      ),
-                    periodEnd:
-                      sql<number>`(${schema.calendarPeriod.periodEnd} - 2440587.5) * 86400000`.as(
-                        "period_end_ms",
-                      ),
-                    periodActive: schema.calendarPeriod.periodActive,
-                    periodSchedule: schema.calendarPeriod.periodSchedule,
-                  })
-                  .from(schema.calendarPeriod)
-                  .where(
-                    and(
-                      inArray(schema.calendarPeriod.orgUnitId, orgUnitIds),
-                      eq(schema.calendarPeriod._deleted, false),
+              // Calendar periods
+              db
+                .select({
+                  orgUnitId: schema.calendarPeriod.orgUnitId,
+                  periodKind: schema.calendarPeriod.periodKind,
+                  periodTitle: schema.calendarPeriod.periodTitle,
+                  // Convert Julian Day to epoch ms
+                  periodStart:
+                    sql<number>`(${schema.calendarPeriod.periodStart} - 2440587.5) * 86400000`.as(
+                      "period_start_ms",
                     ),
+                  periodEnd:
+                    sql<number>`(${schema.calendarPeriod.periodEnd} - 2440587.5) * 86400000`.as(
+                      "period_end_ms",
+                    ),
+                  periodActive: schema.calendarPeriod.periodActive,
+                  periodSchedule: schema.calendarPeriod.periodSchedule,
+                })
+                .from(schema.calendarPeriod)
+                .where(
+                  and(
+                    inArray(schema.calendarPeriod.orgUnitId, orgUnitIds),
+                    eq(schema.calendarPeriod._deleted, false),
                   ),
-              ],
-              { concurrency: 1 },
-            )
+                ),
+            ])
 
           // Build a map of org unit ID to timezone
           const timezoneMap = new Map<string, string>()
@@ -151,7 +151,6 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
             })
           }
 
-          // Populate weekly schedules
           for (const row of weeklySchedules) {
             const data = result.get(row.orgUnitId)
             if (data) {
@@ -164,7 +163,6 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
             }
           }
 
-          // Populate date exceptions
           for (const row of dateExceptions) {
             const data = result.get(row.orgUnitId)
             if (data) {
@@ -182,7 +180,6 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
             }
           }
 
-          // Populate holidays
           for (const row of holidays) {
             const data = result.get(row.orgUnitId)
             if (data) {
@@ -198,7 +195,6 @@ export const SqliteBusinessCalendarQueriesLive = Layer.effect(
             }
           }
 
-          // Populate periods
           for (const row of periods) {
             const data = result.get(row.orgUnitId)
             if (data) {

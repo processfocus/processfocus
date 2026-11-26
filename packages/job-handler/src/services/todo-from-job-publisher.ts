@@ -21,9 +21,7 @@ export class TodoFromJobPublishError extends Data.TaggedError(
  * - Local: HTTP POST to the GraphQL server's internal endpoint; transport
  *   failures are mapped to `TodoFromJobPublishError`
  */
-export class TodoFromJobPublisher extends Context.Tag(
-  "@pf/job-handler/TodoFromJobPublisher",
-)<
+export class TodoFromJobPublisher extends Context.Service<
   TodoFromJobPublisher,
   {
     /**
@@ -38,4 +36,4 @@ export class TodoFromJobPublisher extends Context.Tag(
       todos: readonly TodoRow[],
     ) => Effect.Effect<void, TodoFromJobPublishError, never>
   }
->() {}
+>()("@pf/job-handler/TodoFromJobPublisher") {}

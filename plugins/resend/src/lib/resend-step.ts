@@ -1,5 +1,6 @@
-import { Effect, Encoding, Option, Schema } from "effect"
-import { DocumentStoreService } from "@pf/document-store-service"
+import { DocumentStoreService } from "@processfocus/runtime"
+import { Effect, Option, Schema } from "effect"
+import { Base64 } from "effect/encoding"
 import {
   type AuthorTaggedError,
   type FlowContext,
@@ -44,6 +45,7 @@ export interface ResendEmailAttachment {
  * - if `from` or `subject` are provided here, they override the template values
  */
 export interface ResendEmailInput {
+  readonly idempotencyKey?: string
   readonly to: string | readonly string[]
   readonly subject?: string
   readonly html?: string
@@ -114,7 +116,7 @@ export type ResendStepProps<
       input: (
         state: TState,
         ctx: FlowContext<TSteps>,
-      ) => Effect.Effect<ResendEmailInput>
+      ) => Effect.Effect<ResendEmailInput, AuthorTaggedError, unknown>
       forEach?: never
     })
 
@@ -190,7 +192,7 @@ export class ResendStep<
     ResendError,
     DocumentStoreService
   > {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       if (
         input.template &&
         (input.html !== undefined || input.text !== undefined)
@@ -241,7 +243,7 @@ export class ResendStep<
               ),
             )
           // Base64-encode for Resend API (platform-agnostic, no Node.js Buffer)
-          const base64 = Encoding.encodeBase64(content)
+          const base64 = Base64.encode(content)
           resolvedAttachments.push({
             filename: att.filename,
             content: base64,
@@ -263,6 +265,9 @@ export class ResendStep<
     tags?: readonly { readonly name: string; readonly value: string }[],
   ): ResendEmailRequest {
     return {
+      ...(input.idempotencyKey !== undefined && {
+        idempotencyKey: input.idempotencyKey,
+      }),
       to: input.to,
       ...(sender !== undefined && { from: sender }),
       ...(input.subject !== undefined && { subject: input.subject }),
@@ -292,7 +297,7 @@ export class ResendStep<
   execute(
     input: ResendEmailInput,
   ): Effect.Effect<InferSchemaType<typeof resendOutput>, ResendError, unknown> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const resendClient = yield* ResendClient
       const { sender, resolvedAttachments } =
         yield* this.validateAndResolve(input)
@@ -308,12 +313,12 @@ export class ResendStep<
   /**
    * Execute the step and wrap output as a StepResult.
    *
-   * When the ResendDeferredDelivery capability is available (AWS runtime),
+   * When the ResendDeferredDelivery capability is available (waiting enabled),
    * sends the email, tags it for webhook correlation, persists internal
    * tracking metadata into process state, and returns a deferred result.
    *
-   * When the capability is absent (local runtime), falls back to the
-   * default immediate-completion behavior.
+   * When the capability is absent (waiting disabled), completes after provider
+   * acceptance with the normal emailId output; send errors still fail.
    */
   override executeStep(
     input: ResendEmailInput,
@@ -323,7 +328,7 @@ export class ResendStep<
     // inside generator functions).
     const superExecuteStep = super.executeStep.bind(this)
 
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const deferredOption = yield* Effect.serviceOption(ResendDeferredDelivery)
 
       return yield* Option.match(deferredOption, {
@@ -342,7 +347,7 @@ export class ResendStep<
     jobContext: StepJobContext,
     environment: string,
   ): Effect.Effect<StepResult, ResendError, unknown> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       // Idempotency guard: if process state already has resend metadata,
       // the email was sent on a previous attempt that failed to mark the
       // job completed. Return deferred without re-sending.

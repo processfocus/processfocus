@@ -2,12 +2,14 @@ import { existsSync, mkdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { Console, Duration, Effect } from "effect"
 import { CliError } from "../../errors"
+import { acquireAccessToken } from "../../utils/credentials"
 import {
   graphqlRequest,
   readCredentialsOrFail,
   resolveGraphqlEndpoint,
 } from "../../utils/graphql-client"
 import { ensureKnownEnvironmentName } from "../../utils/remote-name-validation"
+import { withTransferDeadline } from "./transfer-deadline"
 import { materializeTursoDbDownload } from "./tursodb-download"
 
 const CREATE_DATABASE_DOWNLOAD_SESSION_MUTATION = `
@@ -15,6 +17,7 @@ const CREATE_DATABASE_DOWNLOAD_SESSION_MUTATION = `
     createDatabaseDownloadSession(projectId: $projectId, environmentId: $environmentId) {
       databaseUrl
       authToken
+      expiresAt
       databaseName
       engine
       target {
@@ -29,6 +32,7 @@ interface CreateDatabaseDownloadSessionResponse {
   readonly createDatabaseDownloadSession: {
     readonly databaseUrl: string
     readonly authToken: string
+    readonly expiresAt: string
     readonly databaseName: string
     readonly engine: "libsql" | "tursodb"
     readonly target: {
@@ -136,12 +140,14 @@ const pullDatabaseWithTursoSync = (input: {
           message: "Database sync pull failed",
         }),
     }).pipe(
-      Effect.timeoutFail({
+      Effect.timeoutOrElse({
         duration: Duration.millis(input.syncPullTimeoutMs),
-        onTimeout: () =>
-          new CliError({
-            message: "Database sync pull timed out",
-          }),
+        orElse: () =>
+          Effect.fail(
+            new CliError({
+              message: "Database sync pull timed out",
+            }),
+          ),
       }),
       Effect.ensuring(closeSyncDatabase(database)),
     )
@@ -193,9 +199,13 @@ export const runDownloadDb = (
   )
 
   return Effect.gen(function* () {
-    yield* ensureKnownEnvironmentName(projectId, environmentId)
+    yield* ensureKnownEnvironmentName(
+      projectId,
+      environmentId,
+      "database-download",
+    )
 
-    const credentials = yield* readCredentialsOrFail()
+    const credentials = yield* readCredentialsOrFail("database-download")
     const endpoint = resolveGraphqlEndpoint(credentials.baseUrl)
 
     yield* ensureOutputDirectoryExists(resolvedOutputPath)
@@ -206,7 +216,7 @@ export const runDownloadDb = (
     const session =
       yield* graphqlRequest<CreateDatabaseDownloadSessionResponse>(
         endpoint,
-        credentials.accessToken,
+        acquireAccessToken(credentials),
         CREATE_DATABASE_DOWNLOAD_SESSION_MUTATION,
         { projectId, environmentId },
       ).pipe(Effect.map((response) => response.createDatabaseDownloadSession))
@@ -221,32 +231,37 @@ export const runDownloadDb = (
       `${action} ${session.databaseName} (${session.target.stageName})...`,
     )
 
-    if (session.engine === "libsql") {
-      const connectSyncDatabase =
-        dependencies.connectSyncDatabase ??
-        (yield* loadDefaultConnectSyncDatabase())
+    const transfer = Effect.gen(function* () {
+      if (session.engine === "libsql") {
+        const connectSyncDatabase =
+          dependencies.connectSyncDatabase ??
+          (yield* loadDefaultConnectSyncDatabase())
 
-      yield* pullDatabaseWithTursoSync({
-        databaseUrl: session.databaseUrl,
-        authToken: session.authToken,
-        resolvedOutputPath,
-        fetchImpl,
-        connectSyncDatabase,
-        syncPullTimeoutMs,
-      })
-    } else {
-      const materialize =
-        dependencies.materializeTursoDbDownload ?? materializeTursoDbDownload
-      yield* materialize({
-        sourceUrl: session.databaseUrl,
-        authToken: session.authToken,
-        outputPath: resolvedOutputPath,
-        fetch: fetchImpl,
-        timeoutMs:
-          dependencies.tursoDbDownloadTimeoutMs ?? DOWNLOAD_WAIT_TIMEOUT_MS,
-      })
-    }
-    yield* ensureDownloadedFileExists(resolvedOutputPath)
+        yield* pullDatabaseWithTursoSync({
+          databaseUrl: session.databaseUrl,
+          authToken: session.authToken,
+          resolvedOutputPath,
+          fetchImpl,
+          connectSyncDatabase,
+          syncPullTimeoutMs,
+        })
+      } else {
+        const materialize =
+          dependencies.materializeTursoDbDownload ?? materializeTursoDbDownload
+        yield* materialize({
+          sourceUrl: session.databaseUrl,
+          authToken: session.authToken,
+          outputPath: resolvedOutputPath,
+          fetch: fetchImpl,
+          timeoutMs:
+            dependencies.tursoDbDownloadTimeoutMs ?? DOWNLOAD_WAIT_TIMEOUT_MS,
+        })
+      }
+      yield* ensureDownloadedFileExists(resolvedOutputPath)
+    })
+    yield* credentials.workload
+      ? withTransferDeadline(transfer, session.expiresAt)
+      : transfer
 
     yield* Console.log(`Saved to ${resolvedOutputPath}`)
 

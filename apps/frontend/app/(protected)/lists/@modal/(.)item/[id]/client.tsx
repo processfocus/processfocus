@@ -4,16 +4,15 @@ import { useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { Suspense, useCallback } from "react"
-import type { JsonSchemaRoot } from "@pf/form"
 import { ListItemEditForm } from "../../../components/list-item-edit-form"
+import { ListItemLoadError } from "../../../components/list-item-load-error"
 import { useListDeletedCallback } from "../../../hooks/use-list-deleted-callback"
 import { useListItemDetail } from "../../../hooks/use-list-item-detail"
 import { listDetailTitle } from "../../../lib/list-detail-title"
-import { markListStale } from "../../../lib/list-refresh"
 import { formatCellValue } from "../../../utils"
+import { useListRefresh } from "@/app/(protected)/lists/lib/list-refresh-provider"
 import { FormDialogContent } from "@/components/form-dialog-content"
 import { Dialog } from "@/components/ui/dialog"
-import { getDisplayErrorMessage } from "@/lib/errors/get-display-error-message"
 
 interface ListDetailModalClientProps {
   listPath: string
@@ -24,6 +23,7 @@ function ListDetailModalClientInner({
   listPath,
   itemId,
 }: ListDetailModalClientProps) {
+  const refreshState = useListRefresh()
   const router = useRouter()
   const queryClient = useQueryClient()
 
@@ -31,16 +31,15 @@ function ListDetailModalClientInner({
     router.back()
   }, [router])
 
-  const { currentList, itemDetail, formMetadata, isLoading, error } =
+  const { currentList, itemDetail, formMetadata, isLoading, error, refetch } =
     useListItemDetail(listPath, itemId)
 
   const handleSaved = useCallback(() => {
     queryClient.invalidateQueries({
       queryKey: ["listItem", listPath, itemId],
     })
-    markListStale(listPath)
-    router.refresh()
-  }, [queryClient, listPath, itemId, router])
+    refreshState.invalidate(listPath)
+  }, [queryClient, listPath, itemId, refreshState])
 
   const handleDeleted = useListDeletedCallback(listPath, itemId)
 
@@ -60,9 +59,7 @@ function ListDetailModalClientInner({
     if (error) {
       return (
         <div className="space-y-4">
-          <p className="text-sm text-rose-600 dark:text-rose-400">
-            {getDisplayErrorMessage(error, "Unable to load this item.")}
-          </p>
+          <ListItemLoadError error={error} onRetry={refetch} />
           <button
             type="button"
             onClick={handleClose}
@@ -127,8 +124,6 @@ function ListDetailModalClientInner({
             ),
           )
         : (itemDetail as Record<string, unknown> | null)
-      const jsonSchema =
-        (formMetadata.jsonSchema as JsonSchemaRoot | null) ?? null
 
       return (
         <ListItemEditForm
@@ -139,8 +134,6 @@ function ListDetailModalClientInner({
           updateInputTypeName={formMetadata.updateInputTypeName ?? null}
           deleteMutationName={formMetadata.deleteMutationName ?? null}
           defaultValues={defaultValues}
-          formDefinition={formMetadata.formDefinition}
-          jsonSchema={jsonSchema}
           outputFields={currentList.outputColumns.map((c) => c.field)}
           onClose={handleClose}
           onSaved={handleSaved}
@@ -175,8 +168,9 @@ function ListDetailModalClientInner({
     <Dialog open={true} onOpenChange={(open) => !open && handleClose()}>
       <FormDialogContent
         className="sm:max-w-4xl"
-        title={error || !currentList ? "Error" : detailTitle}
-        description={error || !currentList ? "Something went wrong" : undefined}
+        title={
+          isLoading ? "Loading..." : error ? "Error Loading Item" : detailTitle
+        }
       >
         {renderContent()}
       </FormDialogContent>

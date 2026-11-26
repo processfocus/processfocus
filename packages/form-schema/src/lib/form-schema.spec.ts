@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert"
-import { Schema as ES, Effect, JSONSchema } from "effect"
+import { Schema as ES, Effect, JsonSchema, SchemaAST } from "effect"
 import {
   FormAutoComplete,
   FormDescription,
@@ -23,6 +23,7 @@ import {
   TextField,
   Wrapper,
 } from "./form-schema"
+import { NumberFromString } from "./number-from-string"
 import { emitFields, isFieldset, mergedComponentLayer } from "./walker"
 import { describe, expect, it } from "bun:test"
 
@@ -43,7 +44,6 @@ describe("Test creating form structure", () => {
       Effect.provide(mergedComponentLayer),
     )
     const form_fields = Effect.runSync(components)
-    // console.debug("FORM", form_fields)
     expect(form_fields["username"]).toBe("textfield")
     const agreeField = form_fields["agree"]
     assert(agreeField !== undefined)
@@ -156,9 +156,11 @@ describe("Field helper functions", () => {
       description: "Your street address",
     })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("Street name")
-    expect(annotations[FormDescription]).toBe("Your street address")
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("Street name")
+    expect(Reflect.get(annotations, FormDescription)).toBe(
+      "Your street address",
+    )
   })
 
   it("should create TextField with autocomplete metadata", () => {
@@ -167,32 +169,32 @@ describe("Field helper functions", () => {
       autoComplete: "given-name",
     })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormAutoComplete]).toBe("given-name")
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormAutoComplete)).toBe("given-name")
   })
 
   it("should create TextField with only label", () => {
     const field = TextField({ label: "Username" })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("Username")
-    expect(annotations[FormDescription]).toBeUndefined()
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("Username")
+    expect(Reflect.get(annotations, FormDescription)).toBeUndefined()
   })
 
   it("should create TextField without options", () => {
     const field = TextField()
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBeUndefined()
-    expect(annotations[FormDescription]).toBeUndefined()
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBeUndefined()
+    expect(Reflect.get(annotations, FormDescription)).toBeUndefined()
   })
 
   it("should create TextArea with text-area annotation", () => {
     const field = TextArea({ label: "Notes" })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("Notes")
-    expect(annotations[FormTextAreaInput]).toBe(true)
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("Notes")
+    expect(Reflect.get(annotations, FormTextAreaInput)).toBe(true)
   })
 
   it("should create TableField with table and read-only annotations", () => {
@@ -204,10 +206,10 @@ describe("Field helper functions", () => {
       { label: "History" },
     )
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("History")
-    expect(annotations[FormTableInput]).toBe(true)
-    expect(annotations[FormReadOnly]).toBe(true)
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("History")
+    expect(Reflect.get(annotations, FormTableInput)).toBe(true)
+    expect(Reflect.get(annotations, FormReadOnly)).toBe(true)
   })
 
   it("should create NumberField with label and description", () => {
@@ -216,16 +218,16 @@ describe("Field helper functions", () => {
       description: "Age in years",
     })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("Your age")
-    expect(annotations[FormDescription]).toBe("Age in years")
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("Your age")
+    expect(Reflect.get(annotations, FormDescription)).toBe("Age in years")
   })
 
   it("should create BooleanField with label", () => {
     const field = BooleanField({ label: "Accept terms" })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("Accept terms")
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("Accept terms")
   })
 
   it("should create required BooleanField that rejects false", () => {
@@ -247,18 +249,41 @@ describe("Field helper functions", () => {
       approved: BooleanField({ label: "I approve", required: true }),
     })
 
-    const jsonSchema = JSONSchema.make(schema) as unknown as {
-      properties: { approved: { type: string; enum?: boolean[] } }
+    const jsonSchema = JsonSchema.toDocumentDraft07(
+      ES.toJsonSchemaDocument(schema),
+    ).schema as unknown as {
+      properties: {
+        approved: {
+          type: string
+          enum?: boolean[]
+          allOf?: { enum?: boolean[] }[]
+        }
+      }
     }
     expect(jsonSchema.properties.approved.type).toBe("boolean")
-    expect(jsonSchema.properties.approved.enum).toEqual([true])
+    expect(
+      jsonSchema.properties.approved.enum ??
+        jsonSchema.properties.approved.allOf?.[0]?.enum,
+    ).toEqual([true])
   })
 
   it("should create NumberFieldFrom with transformation", () => {
-    const field = NumberFieldFrom(ES.NumberFromString, { label: "Your age" })
+    const field = NumberFieldFrom(NumberFromString, { label: "Your age" })
 
-    const annotations = field.ast.annotations
-    expect(annotations[FormLabel]).toBe("Your age")
+    const annotations = field.ast.annotations ?? {}
+    expect(Reflect.get(annotations, FormLabel)).toBe("Your age")
+    for (const [encoded, decoded] of [
+      ["42", 42],
+      ["Infinity", Infinity],
+      ["-Infinity", -Infinity],
+      ["NaN", NaN],
+    ] as const) {
+      expect(ES.decodeUnknownSync(field)(encoded)).toBe(decoded)
+      expect(ES.encodeSync(field)(decoded)).toBe(encoded)
+    }
+    for (const malformed of ["", " ", "not a number", "123abc"]) {
+      expect(() => ES.decodeUnknownSync(field)(malformed)).toThrow()
+    }
   })
 
   it("should create RadioField with literal options and preserve literal type", () => {
@@ -273,8 +298,10 @@ describe("Field helper functions", () => {
     const selected: FieldType = "approve"
 
     expect(selected).toBe("approve")
-    expect(field.ast.annotations[FormLabel]).toBe("Decision")
-    expect(field.ast.annotations[FormRadioInput]).toEqual({
+    expect(Reflect.get(SchemaAST.resolve(field.ast) ?? {}, FormLabel)).toBe(
+      "Decision",
+    )
+    expect(Reflect.get(field.ast.annotations ?? {}, FormRadioInput)).toEqual({
       options: [
         { value: "approve", label: "Approve" },
         { value: "reject", label: "Reject" },
@@ -312,7 +339,7 @@ describe("Field helper functions", () => {
         label: "Street name",
         description: "Your street address",
       }),
-      age: NumberFieldFrom(ES.NumberFromString, { label: "Your age" }),
+      age: NumberFieldFrom(NumberFromString, { label: "Your age" }),
       decision: RadioField({
         label: "Decision",
         options: [
@@ -324,7 +351,7 @@ describe("Field helper functions", () => {
     })
 
     // Verify the schema is properly structured and the helpers produce valid schemas
-    expect(schema.ast._tag).toBe("TypeLiteral")
+    expect(schema.ast._tag).toBe("Objects")
 
     // Verify we can decode (proving it's a valid Effect Schema)
     const decoded = ES.decodeSync(schema)({
@@ -340,17 +367,15 @@ describe("Field helper functions", () => {
 
   it("should support chaining with pipe", () => {
     const field = TextField({ label: "Username" }).pipe(
-      ES.minLength(3),
-      ES.maxLength(20),
+      ES.check(ES.isMinLength(3)),
+      ES.check(ES.isMaxLength(20)),
     )
 
-    // When using pipe, you get a Refinement schema
-    // The important thing is that it's a valid schema that can be used in forms
-    expect(field.ast._tag).toBe("Refinement")
+    expect(field.ast._tag).toBe("String")
 
     // Verify it can be used in a struct (which is what matters for forms)
     const schema = ES.Struct({ username: field })
-    expect(schema.ast._tag).toBe("TypeLiteral")
+    expect(schema.ast._tag).toBe("Objects")
   })
 })
 
@@ -361,8 +386,7 @@ describe("ListField", () => {
       parent_email: TextField({ label: "Parent email" }),
     })
 
-    // Schema.Array without annotations produces a TupleType AST node
-    expect(field.ast._tag).toBe("TupleType")
+    expect(field.ast._tag).toBe("Arrays")
   })
 
   it("should apply label annotation", () => {
@@ -370,7 +394,9 @@ describe("ListField", () => {
 
     // With annotations, the schema may wrap in a Transformation;
     // the label is accessible on the outer AST node
-    expect(field.ast.annotations[FormLabel]).toBe("Students")
+    expect(Reflect.get(SchemaAST.resolve(field.ast) ?? {}, FormLabel)).toBe(
+      "Students",
+    )
   })
 
   it("should work in a struct schema", () => {
@@ -381,7 +407,7 @@ describe("ListField", () => {
       }),
     })
 
-    expect(schema.ast._tag).toBe("TypeLiteral")
+    expect(schema.ast._tag).toBe("Objects")
 
     // Verify decoding works
     const decoded = ES.decodeSync(schema)({

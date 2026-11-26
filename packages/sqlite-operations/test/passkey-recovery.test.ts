@@ -1,7 +1,7 @@
-import { FetchHttpClient } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
 import { eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, Option } from "effect"
+import { FetchHttpClient } from "effect/http"
+import { SqlClient } from "effect/sql"
 import {
   AuthenticationDatabase,
   authenticateProviderUserByPasskey,
@@ -28,6 +28,7 @@ import { setupTestData } from "./auth-server.fixture"
 import { describe, expect, it } from "bun:test"
 
 const TestLayer = Layer.mergeAll(
+  LocalAuditLive.pipe(Layer.provide(SqliteAuditPersistenceLive)),
   SqliteAuthenticationDatabaseLive,
   SqliteOpenAuthStorageServiceLive,
   FetchHttpClient.layer,
@@ -295,8 +296,8 @@ describe("passkey account recovery", () => {
           credentialId: "new",
           previousCounter: 1,
           newCounter: 1,
-        }).pipe(Effect.either)
-        expect(failedCounter._tag).toBe("Left")
+        }).pipe(Effect.result)
+        expect(failedCounter._tag).toBe("Failure")
         expect(yield* lastUsedFor("new")).toEqual(newUsed)
 
         const failedIdentity = yield* authenticateProviderUserByPasskey({
@@ -306,8 +307,8 @@ describe("passkey account recovery", () => {
           credentialId: "existing",
           previousCounter: 0,
           newCounter: 0,
-        }).pipe(Effect.either)
-        expect(failedIdentity._tag).toBe("Left")
+        }).pipe(Effect.result)
+        expect(failedIdentity._tag).toBe("Failure")
         expect(yield* lastUsedFor("existing")).toEqual(existingUsed)
 
         const rows = yield* db.select().from(schema.passkeyCredential)
@@ -369,8 +370,8 @@ describe("passkey account recovery", () => {
         const result = yield* register(
           session.value.sessionBearer,
           "duplicate",
-        ).pipe(Effect.either)
-        expect(result._tag).toBe("Left")
+        ).pipe(Effect.result)
+        expect(result._tag).toBe("Failure")
         expect(
           Option.isSome(
             yield* resolvePasskeyRecoverySession(session.value.sessionBearer),
@@ -450,3 +451,6 @@ describe("passkey account recovery", () => {
     })
   }
 })
+
+import { LocalAuditLive } from "@pf/audit/local"
+import { SqliteAuditPersistenceLive } from "../src/lib/audit"

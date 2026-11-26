@@ -1,17 +1,20 @@
-import { Schema as ES, JSONSchema } from "effect"
+import { Schema as ES, JsonSchema } from "effect"
 import { BooleanField, NumberFieldFrom } from "./form-schema"
+import { NumberFromString } from "./number-from-string"
 import { describe, expect, it } from "bun:test"
 
 describe("NumberFieldFrom required validation", () => {
   it("should generate JSON Schema with minLength when required is true", () => {
     const schema = ES.Struct({
-      age: NumberFieldFrom(ES.NumberFromString, {
+      age: NumberFieldFrom(NumberFromString, {
         label: "Age",
         required: true,
       }),
     })
 
-    const jsonSchema = JSONSchema.make(schema) as unknown as {
+    const jsonSchema = JsonSchema.toDocumentDraft07(
+      ES.toJsonSchemaDocument(schema),
+    ).schema as unknown as {
       required?: string[]
       properties: { age: { type: string; minLength?: number } }
     }
@@ -25,38 +28,38 @@ describe("NumberFieldFrom required validation", () => {
 
   it("should fail Effect Schema validation on empty string when required is true", () => {
     const schema = ES.Struct({
-      age: NumberFieldFrom(ES.NumberFromString, {
+      age: NumberFieldFrom(NumberFromString, {
         label: "Age",
         required: true,
       }),
     })
 
     // Try to decode an empty string - should fail
-    const result = ES.decodeUnknownEither(schema)(
+    const result = ES.decodeUnknownResult(schema)(
       { age: "" },
       { errors: "all" },
     )
 
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
   })
 
   it("should succeed Effect Schema validation with valid number when required is true", () => {
     const schema = ES.Struct({
-      age: NumberFieldFrom(ES.NumberFromString, {
+      age: NumberFieldFrom(NumberFromString, {
         label: "Age",
         required: true,
       }),
     })
 
     // Try to decode a valid number string - should succeed
-    const result = ES.decodeUnknownEither(schema)(
+    const result = ES.decodeUnknownResult(schema)(
       { age: "42" },
       { errors: "all" },
     )
 
-    expect(result._tag).toBe("Right")
-    if (result._tag === "Right") {
-      expect(result.right.age).toBe(42)
+    expect(result._tag).toBe("Success")
+    if (result._tag === "Success") {
+      expect(result.success.age).toBe(42)
     }
   })
 
@@ -65,21 +68,34 @@ describe("NumberFieldFrom required validation", () => {
       approved: BooleanField({ label: "Approved", required: true }),
     })
 
-    const jsonSchema = JSONSchema.make(boolSchema) as unknown as {
+    const jsonSchema = JsonSchema.toDocumentDraft07(
+      ES.toJsonSchemaDocument(boolSchema),
+    ).schema as unknown as {
       required?: string[]
-      properties: { approved: { type: string; enum?: boolean[] } }
+      properties: {
+        approved: {
+          type: string
+          enum?: boolean[]
+          allOf?: { enum?: boolean[] }[]
+        }
+      }
     }
 
     expect(jsonSchema.required).toContain("approved")
-    expect(jsonSchema.properties.approved.enum).toEqual([true])
+    expect(
+      jsonSchema.properties.approved.enum ??
+        jsonSchema.properties.approved.allOf?.[0]?.enum,
+    ).toEqual([true])
   })
 
   it("should not have minLength when required is not set", () => {
     const schema = ES.Struct({
-      age: NumberFieldFrom(ES.NumberFromString, { label: "Age" }),
+      age: NumberFieldFrom(NumberFromString, { label: "Age" }),
     })
 
-    const jsonSchema = JSONSchema.make(schema) as unknown as {
+    const jsonSchema = JsonSchema.toDocumentDraft07(
+      ES.toJsonSchemaDocument(schema),
+    ).schema as unknown as {
       required?: string[]
       properties: { age: { type: string; minLength?: number } }
     }

@@ -1,6 +1,6 @@
 "use client"
 
-import { formatDistanceToNow } from "date-fns"
+import { DateTimeDisplay } from "@pf/shadcn-components/date-time-display"
 import {
   CollectionTableCard,
   type CollectionTableColumn,
@@ -54,9 +54,11 @@ const columns: CollectionTableColumn<User>[] = [
     label: "Last Login",
     cellClassName: "text-slate-500 dark:text-slate-400",
     render: (user) =>
-      formatDistanceToNow(new Date(user.lastLoggedIn), {
-        addSuffix: true,
-      }),
+      user.lastLoggedIn ? (
+        <DateTimeDisplay kind="timestamp" value={user.lastLoggedIn} />
+      ) : (
+        "Never"
+      ),
   },
 ]
 

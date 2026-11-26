@@ -1,0 +1,1 @@
+DROP TABLE "pf_permitted_client_email";

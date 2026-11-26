@@ -103,7 +103,6 @@ export async function POST(
     return respond({ success: false, redirect: "/login" })
   }
 
-  // Set new tokens as cookies
   await setTokenCookies(cookieStore, {
     access: result.tokens.access,
     refresh: result.tokens.refresh,

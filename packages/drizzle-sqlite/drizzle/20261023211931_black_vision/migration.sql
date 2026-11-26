@@ -1,0 +1,1 @@
+ALTER TABLE `pf_to_do` ADD `restart_attempt_id` text(36);

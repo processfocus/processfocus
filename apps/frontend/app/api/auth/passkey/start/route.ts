@@ -46,11 +46,10 @@ export const POST = async (request: NextRequest) => {
   try {
     const url = new URL(request.url)
 
-    // Extract redirect from request body
     const body = Schema.decodeUnknownSync(
       Schema.Struct({
         redirect: Schema.optional(Schema.String),
-        purpose: Schema.optional(Schema.Literal("signin", "reauthenticate")),
+        purpose: Schema.optional(Schema.Literals(["signin", "reauthenticate"])),
       }),
     )(await request.json())
     const prior =
@@ -98,7 +97,6 @@ export const POST = async (request: NextRequest) => {
       redirect: "manual", // Don't follow redirects - we just want the cookies
     })
 
-    // Create response
     const response = NextResponse.json({ success: true })
     const { oauthState: OS, passkeyAuthCookies: PAC } = getCookieNamesFromHost(
       request.headers.get("host") ?? "",

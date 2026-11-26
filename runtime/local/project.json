@@ -59,7 +59,7 @@
     "job-worker:dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun --watch runtime/local/src/job-worker/job-worker.ts",
+        "command": "bun runtime/local/src/job-worker/job-worker-supervisor.ts --watch-worker",
         "env": {
           "NODE_ENV": "development"
         }
@@ -129,7 +129,7 @@
     "job-worker:dev:bootstrapped": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun --watch runtime/local/src/job-worker/job-worker.ts",
+        "command": "bun runtime/local/src/job-worker/job-worker-supervisor.ts --watch-worker",
         "env": {
           "NODE_ENV": "development"
         }
@@ -159,11 +159,20 @@
     },
     "test": {
       "executor": "nx:run-commands",
+      "metadata": {
+        "description": "Four Bun file workers reduce local test time while bounding nested concurrency in the four-slot unit-slow CI lane."
+      },
       "options": {
         "cwd": "{projectRoot}",
-        "commands": ["bun test src"]
+        "commands": ["bun test --parallel=4 src"]
       },
-      "dependsOn": ["@pf/demo:build"]
+      "dependsOn": ["@pf/demo:build"],
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/cli/pforg/src/**/*.ts",
+        "{workspaceRoot}/cli/pforg/package.json"
+      ]
     },
     "typecheck": {
       "executor": "nx:run-commands",
@@ -232,5 +241,6 @@
       "cache": false,
       "dependsOn": ["build", "@pf/frontend:graphql-codegen"]
     }
-  }
+  },
+  "implicitDependencies": ["@pf/frontend"]
 }

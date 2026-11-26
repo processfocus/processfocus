@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 import { and, eq } from "drizzle-orm"
 import { Cause, DateTime, Effect, Exit, Option } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   AuthenticationDatabase,
   PasskeyOpenRegistrationDeniedError,
@@ -134,7 +134,7 @@ describe("auth-server passkey Open Registration", () => {
             .values({
               provider: "google",
               sub: "google-sub-1",
-              lastLoggedIn: now,
+              createdAt: now,
             })
             .returning({ id: schema.user.id })
           if (!user) throw new Error("missing user")
@@ -238,52 +238,120 @@ describe("auth-server passkey Open Registration", () => {
     )
   })
 
-  it("commit path creates a role-less Provider User and never accepts Invitations", async () => {
-    await Effect.runPromise(
-      Effect.provide(
-        Effect.gen(function* () {
-          yield* createRootOrgUnit()
-          yield* insertPasskeyProvider(false)
+  it.each([
+    {
+      label: "YubiKey model",
+      metadata: { aaguid: "2fc0579f-8113-47ea-b116-bb5a8db9202a" },
+      name: "YubiKey 5 Series with NFC",
+    },
+    {
+      label: "Google provider",
+      metadata: { aaguid: "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4" },
+      name: "Google Password Manager",
+    },
+    {
+      label: "Apple provider",
+      metadata: { aaguid: "FBFC3007-154E-4ECC-8C0B-6E020557D7BD" },
+      name: "Apple Passwords",
+    },
+    {
+      label: "hidden model on a USB/NFC key",
+      metadata: {
+        aaguid: "00000000-0000-0000-0000-000000000000",
+        deviceType: "singleDevice",
+        transports: ["usb", "nfc"],
+      },
+      name: "USB/NFC security key",
+    },
+    {
+      label: "sync-capable credential with unknown provider",
+      metadata: { deviceType: "multiDevice", transports: ["hybrid"] },
+      name: "Sync-capable passkey",
+    },
+    {
+      label: "sync-capable credential must not be labelled a USB key",
+      metadata: { deviceType: "multiDevice", transports: ["usb"] },
+      name: "Sync-capable passkey",
+    },
+    {
+      label: "ambiguous cross-device transport",
+      metadata: { deviceType: "singleDevice", transports: ["usb", "hybrid"] },
+      name: null,
+    },
+    {
+      label: "hidden model on an internal authenticator",
+      metadata: {
+        aaguid: "00000000-0000-0000-0000-000000000000",
+        deviceType: "singleDevice",
+        transports: ["internal"],
+      },
+      name: null,
+    },
+    { label: "missing metadata", metadata: {}, name: null },
+  ] satisfies {
+    label: string
+    metadata: Pick<
+      Parameters<typeof registerProviderUserByPasskey>[0]["credential"],
+      "aaguid" | "deviceType" | "transports"
+    >
+    name: string | null
+  }[])(
+    "commit path saves $label as an initial name without granting roles or accepting Invitations",
+    async ({ metadata, name }) => {
+      await Effect.runPromise(
+        Effect.provide(
+          Effect.gen(function* () {
+            yield* createRootOrgUnit()
+            yield* insertPasskeyProvider(false)
 
-          const email = "open-reg@example.com"
-          const userHandle = Buffer.from(
-            "open-reg-handle-32-bytes!!!!!!",
-          ).toString("base64url")
-          const registered = yield* registerProviderUserByPasskey({
-            type: "registration",
-            registrationKind: "open",
-            email,
-            userHandle,
-            credential: {
-              id: "cred-open-reg-1",
-              publicKey: "AQIDBA",
-              counter: 0,
-              transports: ["internal"],
-            },
-          })
-
-          expect(registered.email).toBe(email)
-          expect(registered.roles).toEqual([])
-
-          const db = yield* TypedSqliteDrizzle
-          const roleJoins = yield* db
-            .select({ id: schema.providerUserRole.id })
-            .from(schema.providerUserRole)
-            .where(eq(schema.providerUserRole._deleted, false))
-          expect(roleJoins).toHaveLength(0)
-
-          const invitations = yield* db
-            .select({
-              status: schema.invitation.invitationStatus,
+            const email = "open-reg@example.com"
+            const userHandle = Buffer.from(
+              "open-reg-handle-32-bytes!!!!!!",
+            ).toString("base64url")
+            const registered = yield* registerProviderUserByPasskey({
+              type: "registration",
+              registrationKind: "open",
+              email,
+              userHandle,
+              credential: {
+                id: "cred-open-reg-1",
+                publicKey: "AQIDBA",
+                counter: 0,
+                transports: ["internal"],
+                ...metadata,
+              },
             })
-            .from(schema.invitation)
-            .where(eq(schema.invitation._deleted, false))
-          expect(invitations).toHaveLength(0)
-        }),
-        TestLayer,
-      ),
-    )
-  })
+
+            expect(registered.email).toBe(email)
+            expect(registered.roles).toEqual([])
+
+            const auth = yield* AuthenticationDatabase
+            const credentials = yield* auth.listPasskeyCredentialsForUser(
+              registered.id,
+            )
+            expect(credentials).toHaveLength(1)
+            expect(credentials[0]?.name).toBe(name)
+
+            const db = yield* TypedSqliteDrizzle
+            const roleJoins = yield* db
+              .select({ id: schema.providerUserRole.id })
+              .from(schema.providerUserRole)
+              .where(eq(schema.providerUserRole._deleted, false))
+            expect(roleJoins).toHaveLength(0)
+
+            const invitations = yield* db
+              .select({
+                status: schema.invitation.invitationStatus,
+              })
+              .from(schema.invitation)
+              .where(eq(schema.invitation._deleted, false))
+            expect(invitations).toHaveLength(0)
+          }),
+          TestLayer,
+        ),
+      )
+    },
+  )
 
   it("commit path denies when a pending Invitation exists for the email", async () => {
     await Effect.runPromise(
@@ -392,7 +460,7 @@ describe("auth-server passkey Open Registration", () => {
           expect(failures).toHaveLength(1)
 
           if (Exit.isFailure(failures[0]!)) {
-            const error = Cause.failureOption(failures[0]!.cause)
+            const error = Cause.findErrorOption(failures[0]!.cause)
             if (Option.isSome(error)) {
               const typed =
                 error.value instanceof PasskeyOpenRegistrationDeniedError

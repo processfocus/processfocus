@@ -17,18 +17,18 @@ export async function POST(request: Request): Promise<NextResponse> {
       )
     }
 
-    const { token, field, filter, limit } = payload
+    const { token, field, filter, limit, selectedValue } = payload
     if (
       typeof token !== "string" ||
       typeof field !== "string" ||
+      (selectedValue !== undefined && typeof selectedValue !== "string") ||
       (filter !== undefined && filter !== null && typeof filter !== "string") ||
       (limit !== undefined &&
         limit !== null &&
         (typeof limit !== "number" ||
           !Number.isFinite(limit) ||
           !Number.isInteger(limit) ||
-          limit < 0 ||
-          limit > 100))
+          limit < 0))
     ) {
       return NextResponse.json(
         { error: "Invalid public form lookup payload." },
@@ -41,6 +41,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       field,
       filter ?? null,
       limit ?? null,
+      selectedValue,
     )
 
     return NextResponse.json({ items })

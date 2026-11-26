@@ -76,7 +76,11 @@ export interface FrontendPluginField {
 export interface FrontendPluginForm {
   readonly AppField: ComponentType<{
     readonly name: string
-    readonly children: () => JSX.Element
+    readonly children: (field: {
+      readonly state: { readonly value: unknown }
+      readonly handleChange: (value: unknown) => void
+      readonly handleBlur: () => void
+    }) => JSX.Element
   }>
   readonly Subscribe: <TSelected = unknown>(props: {
     readonly selector?: (
@@ -101,6 +105,10 @@ export type FormRenderer = (
 export interface FormRendererRegistration {
   readonly type: string
   readonly renderer: FormRenderer
+  readonly scripts?: ReadonlyArray<{
+    readonly src: string
+    readonly async?: boolean
+  }>
 }
 
 export interface ExecutionMenuActionVisibilityContext {

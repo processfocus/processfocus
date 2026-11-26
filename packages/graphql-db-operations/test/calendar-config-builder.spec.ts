@@ -128,7 +128,7 @@ describe("calendar-config-builder", () => {
       if (result._tag === "Failure") {
         const error = result.cause
         // Check it's an InvalidCalendarDataError
-        expect(error._tag).toBe("Fail")
+        expect(error.reasons[0]?._tag).toBe("Fail")
       }
     })
 

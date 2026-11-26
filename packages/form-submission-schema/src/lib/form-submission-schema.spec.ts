@@ -1,10 +1,16 @@
-import { Schema as ES, Effect } from "effect"
+import {
+  Schema as ES,
+  Effect,
+  Effect as MigratedEffect,
+  SchemaTransformation as MigratedTransformation,
+} from "effect"
 import {
   Divider,
   FLATTEN_SYMBOL,
   Image,
   ListField,
   NumberFieldFrom,
+  NumberFromString,
   RadioField,
   TextBlock,
   TextField,
@@ -324,16 +330,16 @@ describe("submissionSchemaSync", () => {
 
 describe("expandSubmissionInput", () => {
   it("expands successive discriminated union branches inside lists", () => {
-    const row = ES.Union(
+    const row = ES.Union([
       ES.Struct({
         kind: ES.Literal("text"),
         text: Wrapper({ content: ES.String }),
       }),
       ES.Struct({
         kind: ES.Literal("count"),
-        number: Wrapper({ count: ES.NumberFromString }),
+        number: Wrapper({ count: NumberFromString }),
       }),
-    )
+    ])
     const form = ES.Struct({ rows: ES.Array(row) })
     const projection = submissionSchemaSync(form)
     for (const rows of [
@@ -347,7 +353,7 @@ describe("expandSubmissionInput", () => {
       ],
     ]) {
       const input = { rows }
-      expect(ES.is(ES.encodedSchema(projection))(input)).toBe(true)
+      expect(ES.is(ES.toEncoded(projection))(input)).toBe(true)
       expect(expandSubmissionInput(form, input)).toEqual({
         rows: rows.map((value) =>
           value.kind === "text"
@@ -365,9 +371,9 @@ describe("expandSubmissionInput", () => {
         display: TextField({ readOnly: true }),
         help: TextBlock("Help"),
       }),
-      count: ES.optionalWith(NumberFieldFrom(ES.NumberFromString), {
-        default: () => 5,
-      }).pipe(ES.fromKey("encodedCount")),
+      encodedCount: NumberFieldFrom(NumberFromString).pipe(
+        ES.withDecodingDefaultType(MigratedEffect.sync(() => 5)),
+      ),
     }
     const form = ES.Struct({
       leaf: ES.optional(TextField({ readOnly: true })),
@@ -532,12 +538,16 @@ describe("optional submission containers", () => {
     const schema = submissionSchemaSync(
       ES.Struct({
         nullable: ES.NullOr(display),
-        refined: ES.optional(display.pipe(ES.minLength(1))),
-        transformed: ES.transform(display, ES.Number, {
-          strict: true,
-          decode: (s) => s.length,
-          encode: String,
-        }),
+        refined: ES.optional(display.pipe(ES.check(ES.isMinLength(1)))),
+        transformed: display.pipe(
+          ES.decodeTo(
+            ES.Number,
+            MigratedTransformation.transform({
+              decode: (s) => s.length,
+              encode: String,
+            }),
+          ),
+        ),
         nested: ES.optional(ES.Struct({ edit: TextField(), display })),
       }),
     )
@@ -558,7 +568,7 @@ describe("optional submission containers", () => {
     const display = TextField({ readOnly: true })
     const schema = submissionSchemaSync(
       ES.Struct({
-        mixed: ES.Union(display, ES.Number),
+        mixed: ES.Union([display, ES.Number]),
         container: ES.optional(
           ES.NullOr(ES.Struct({ edit: TextField(), display })),
         ),
@@ -576,23 +586,25 @@ describe("optional submission containers", () => {
   })
 
   it("retains codecs and filters on transformed nested structs", () => {
-    const transformed = ES.transform(
-      ES.Struct(children),
-      ES.Struct({ ...children, edit: ES.Number }),
-      {
-        strict: true,
-        decode: (value) => ({ ...value, edit: Number(value.edit) }),
-        encode: (value) => ({ ...value, edit: String(value.edit) }),
-      },
-    ).pipe(ES.filter((value) => value.edit > 0))
+    const transformed = ES.Struct(children)
+      .pipe(
+        ES.decodeTo(
+          ES.Struct({ ...children, edit: ES.Number }),
+          MigratedTransformation.transform({
+            decode: (value) => ({ ...value, edit: Number(value.edit) }),
+            encode: (value) => ({ ...value, edit: String(value.edit) }),
+          }),
+        ),
+      )
+      .pipe(ES.check(ES.makeFilter((value) => value.edit > 0)))
     const projected = submissionSchemaSync(
       ES.Struct({ nested: ES.optional(transformed) }),
     )
     // Structural fields erase the original schema's service type to unknown;
     // this fixture's synchronous codecs have no service requirements.
-    const schema = ES.make<typeof projected.Type, typeof projected.Encoded>(
-      projected.ast,
-    )
+    const schema = ES.make<
+      ES.Codec<typeof projected.Type, typeof projected.Encoded>
+    >(projected.ast)
     const decoded = ES.decodeUnknownSync(schema)({
       nested: { edit: "7", display: "client", help: "client" },
     })
@@ -609,7 +621,7 @@ describe("optional submission containers", () => {
         ES.Struct({
           nested: ES.optional(
             ES.Struct({
-              bad: ES.String.annotations({ [FLATTEN_SYMBOL]: true }),
+              bad: ES.String.annotate({ [FLATTEN_SYMBOL]: true }),
             }),
           ),
         }),
@@ -640,17 +652,19 @@ describe("optional submission containers", () => {
   it("preserves nullability, refinements, cardinality and transformed property codecs", () => {
     const nested = ES.Struct({
       ...children,
-      count: ES.optionalWith(NumberFieldFrom(ES.NumberFromString), {
-        default: () => 5,
-      }).pipe(ES.fromKey("encodedCount")),
-      hiddenDefault: ES.optionalWith(TextField({ readOnly: true }), {
-        default: () => "server display",
-      }),
-    })
+      count: NumberFieldFrom(NumberFromString).pipe(
+        ES.withDecodingDefaultType(MigratedEffect.sync(() => 5)),
+      ),
+      hiddenDefault: TextField({ readOnly: true }).pipe(
+        ES.withDecodingDefaultType(MigratedEffect.sync(() => "server display")),
+      ),
+    }).pipe(ES.encodeKeys({ count: "encodedCount" }))
     const schema = submissionSchemaSync(
       ES.Struct({
         nested: ES.optional(ES.NullOr(nested)),
-        list: ES.optional(ListField(children).pipe(ES.minItems(1))),
+        list: ES.optional(
+          ListField(children).pipe(ES.check(ES.isMinLength(1))),
+        ),
       }),
     )
     const decode = ES.decodeUnknownSync(schema)

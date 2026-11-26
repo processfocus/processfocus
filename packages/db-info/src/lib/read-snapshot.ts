@@ -1,9 +1,12 @@
-import type * as SqlClient from "@effect/sql/SqlClient"
-import type { SqlError } from "@effect/sql/SqlError"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
-import * as FiberRef from "effect/FiberRef"
+import type * as SqlClient from "effect/sql/SqlClient"
+import type { SqlError } from "effect/sql/SqlError"
 
-export const readSnapshotRequested = FiberRef.unsafeMake(false)
+export const readSnapshotRequested = Context.Reference<boolean>(
+  "@pf/db-info/readSnapshotRequested",
+  { defaultValue: () => false },
+)
 
 /**
  * Group database-only reads into one snapshot. Turso Cloud uses BEGIN DEFERRED
@@ -17,4 +20,4 @@ export const withReadSnapshot = <A, E, R>(
 ): Effect.Effect<A, E | SqlError, R> =>
   client
     .withTransaction(effect)
-    .pipe(Effect.locally(readSnapshotRequested, true))
+    .pipe(Effect.provideService(readSnapshotRequested, true))

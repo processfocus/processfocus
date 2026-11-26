@@ -65,6 +65,8 @@ const createCredentialsFile = (baseUrl: string) => {
 
 type RunInvitationRegistrationLink = (options: {
   orgPath?: string
+  databasePath?: string
+  frontendUrl?: string
   projectId?: string
   environmentId?: string
   email?: string
@@ -72,6 +74,7 @@ type RunInvitationRegistrationLink = (options: {
 }) => Effect.Effect<unknown>
 
 const localEnv = {
+  PF_RUNTIME_ROOT: orgRoot,
   SQLITE_DATABASE_PATH: undefined,
   PF_SCOPE: undefined,
   PF_ORG: undefined,
@@ -136,6 +139,49 @@ afterAll(() => {
 })
 
 describe("pfcli invitation registration-link", () => {
+  it.each(["--frontend-url", "--database-path"])(
+    "rejects local %s in remote mode before contacting Console",
+    async (option) => {
+      const result = await runPfcliInProcess([
+        "invitation",
+        "registration-link",
+        "--project",
+        "123",
+        "--env",
+        "dev",
+        "--email",
+        "employee@example.com",
+        option,
+        "https://example.com",
+      ])
+      expect(result.status).toBe(1)
+      expect(result.output).toContain("apply only to local mode")
+    },
+  )
+
+  it.each([
+    "not-a-url",
+    "ftp://example.com",
+    "https://user:private@example.com",
+    "https://example.com/app",
+    "https://example.com?token=private",
+    "https://example.com#private",
+  ])("rejects an unsuitable explicit frontend URL (%#)", async (url) => {
+    const result = await runPfcliInProcess([
+      "invitation",
+      "registration-link",
+      "--email",
+      "employee@example.com",
+      "--frontend-url",
+      url,
+    ])
+    expect(result.status).toBe(1)
+    expect(result.output).toContain(
+      "--frontend-url must be an absolute HTTP(S) origin",
+    )
+    expect(result.output).not.toContain("private")
+  })
+
   it("sends remote mutation variables including rotate", async () => {
     const { runInvitationRegistrationLink } = await loadPfcliCommand<{
       runInvitationRegistrationLink: RunInvitationRegistrationLink
@@ -357,8 +403,12 @@ describe("pfcli invitation registration-link", () => {
 
 describe("local Registration Link configuration", () => {
   it("matches runtime scope and trusted frontend origin precedence", async () => {
+    const runtimeRoot = mkdtempSync(join(orgRoot, "frontend-ports-"))
+    writeFileSync(join(runtimeRoot, ".frontend-port.json"), '{"port":3002}')
+
     await withEnv(
       {
+        PF_RUNTIME_ROOT: runtimeRoot,
         PF_SCOPE: "configured-scope",
         PF_ORG: "configured-org",
         FRONTEND_BASE_URL: "http://localhost:3100/",
@@ -377,6 +427,7 @@ describe("local Registration Link configuration", () => {
 
     await withEnv(
       {
+        PF_RUNTIME_ROOT: runtimeRoot,
         PF_SCOPE: undefined,
         PF_ORG: "configured-org",
         FRONTEND_BASE_URL: undefined,
@@ -395,6 +446,7 @@ describe("local Registration Link configuration", () => {
 
     await withEnv(
       {
+        PF_RUNTIME_ROOT: runtimeRoot,
         PF_SCOPE: undefined,
         PF_ORG: undefined,
         FRONTEND_BASE_URL: undefined,
@@ -413,6 +465,7 @@ describe("local Registration Link configuration", () => {
 
     await withEnv(
       {
+        PF_RUNTIME_ROOT: runtimeRoot,
         PF_SCOPE: undefined,
         PF_ORG: undefined,
         FRONTEND_BASE_URL: undefined,
@@ -422,10 +475,26 @@ describe("local Registration Link configuration", () => {
       async () => {
         expect(resolveLocalRegistrationLinkOrganisationScope()).toBe("local")
         expect(resolveLocalRegistrationLinkFrontendOrigin()).toBe(
-          "http://localhost:3000",
+          "http://localhost:3002",
         )
       },
     )
+  })
+
+  it.each([
+    { name: "missing", content: undefined },
+    { name: "malformed", content: "{invalid json" },
+  ])("falls back to port 3000 for a $name port file", async ({ content }) => {
+    const runtimeRoot = mkdtempSync(join(orgRoot, "frontend-ports-"))
+    if (content !== undefined) {
+      writeFileSync(join(runtimeRoot, ".frontend-port.json"), content)
+    }
+
+    await withEnv({ ...localEnv, PF_RUNTIME_ROOT: runtimeRoot }, async () => {
+      expect(resolveLocalRegistrationLinkFrontendOrigin()).toBe(
+        "http://localhost:3000",
+      )
+    })
   })
 })
 
@@ -438,19 +507,22 @@ describe("pfcli invitation registration-link local mode", () => {
   })
 
   it("accepts org-path before --email through the CLI entrypoint", async () => {
-    const result = await withEnv(localEnv, () =>
-      runPfcliInProcess([
-        "invitation",
-        "registration-link",
-        localOrgRoot,
-        "--email",
-        "employee@example.com",
-      ]),
+    writeFileSync(join(localOrgRoot, ".frontend-port.json"), '{"port":3002}')
+    const result = await withEnv(
+      { ...localEnv, PF_RUNTIME_ROOT: localOrgRoot },
+      () =>
+        runPfcliInProcess([
+          "invitation",
+          "registration-link",
+          localOrgRoot,
+          "--email",
+          "employee@example.com",
+        ]),
     )
 
     expect(result.status).toBe(0)
     expect(result.output).toContain(
-      "http://localhost:3000/register/passkey#token=",
+      "http://localhost:3002/register/passkey#token=",
     )
   }, 120_000)
 
@@ -519,53 +591,76 @@ describe("pfcli invitation registration-link local mode", () => {
     expect(result.output).not.toContain("Database path not configured")
   })
 
-  it("issues a locally exchangeable link with configured scope, origin, and key", async () => {
-    const { runInvitationRegistrationLink } = await loadPfcliCommand<{
-      runInvitationRegistrationLink: RunInvitationRegistrationLink
-    }>("invitation-registration-link")
-    const secret = "local-registration-link-test-secret"
-    const organisationScope = "local-test-scope"
-    const frontendOrigin = "http://localhost:3456"
-    const email = "settings-e2e@example.com"
+  it.each([false, true])(
+    "issues an exchangeable link with configured scope, origin, and key (explicit options: %s)",
+    async (explicit) => {
+      const { runInvitationRegistrationLink } = await loadPfcliCommand<{
+        runInvitationRegistrationLink: RunInvitationRegistrationLink
+      }>("invitation-registration-link")
+      const secret = "local-registration-link-test-secret"
+      const organisationScope = "local-test-scope"
+      const frontendOrigin = "http://localhost:3456"
+      const email = "settings-e2e@example.com"
 
-    const { output } = await withEnv(
-      {
-        ...localEnv,
-        PF_SCOPE: organisationScope,
-        FRONTEND_BASE_URL: `${frontendOrigin}/`,
-        INVITATION_REGISTRATION_ENCRYPTION_KEY: secret,
-      },
-      () =>
-        captureStdout(() =>
-          runWithNodeContext(
-            runInvitationRegistrationLink({
-              orgPath: localOrgRoot,
-              email: `  ${email.toUpperCase()}  `,
-              rotate: false,
-            }),
-          ),
-        ),
-    )
+      const { output } = await withEnv<{ output: string }>(
+        {
+          ...localEnv,
+          PF_SCOPE: organisationScope,
+          FRONTEND_BASE_URL: explicit
+            ? "https://ignored.example.com"
+            : `${frontendOrigin}/`,
+          SQLITE_DATABASE_PATH: explicit
+            ? join(orgRoot, "must-not-open.db")
+            : undefined,
+          INVITATION_REGISTRATION_ENCRYPTION_KEY: secret,
+        },
+        () =>
+          explicit
+            ? runPfcliInProcess([
+                "invitation",
+                "registration-link",
+                localOrgRoot,
+                "--email",
+                email,
+                "--frontend-url",
+                `${frontendOrigin}/`,
+                "--database-path",
+                localDbPath,
+              ])
+            : captureStdout(() =>
+                runWithNodeContext(
+                  runInvitationRegistrationLink({
+                    orgPath: localOrgRoot,
+                    email: `  ${email.toUpperCase()}  `,
+                    rotate: false,
+                  }),
+                ),
+              ),
+      )
 
-    expect(output).toContain(`${frontendOrigin}/register/passkey#token=`)
-    expect(output).not.toContain(`${frontendOrigin}//register`)
-    expect(output).toContain("expires at:")
-    const rawToken = registrationTokenFromOutput(output)
+      expect(output).toContain(`${frontendOrigin}/register/passkey#token=`)
+      expect(output).not.toContain(`${frontendOrigin}//register`)
+      expect(output).toContain("expires at:")
+      const rawToken = registrationTokenFromOutput(output)
 
-    const exchanged = await Effect.runPromise(
-      Effect.gen(function* () {
-        const authenticationDatabase = yield* AuthenticationDatabase
-        return yield* authenticationDatabase.exchangeRegistrationLink(rawToken)
-      }).pipe(Effect.provide(makeAuthenticationLayer(localDbPath))),
-    )
-    expect(Option.isSome(exchanged)).toBe(true)
-    if (Option.isSome(exchanged)) {
-      expect(exchanged.value.email).toBe(email)
-    }
+      const exchanged = await Effect.runPromise(
+        Effect.gen(function* () {
+          const authenticationDatabase = yield* AuthenticationDatabase
+          return yield* authenticationDatabase.exchangeRegistrationLink(
+            rawToken,
+          )
+        }).pipe(Effect.provide(makeAuthenticationLayer(localDbPath))),
+      )
+      expect(Option.isSome(exchanged)).toBe(true)
+      if (Option.isSome(exchanged)) {
+        expect(exchanged.value.email).toBe(email)
+      }
 
-    const invitation = await loadInvitation(localDbPath, email)
-    expect(invitation.registrationLinkGeneratedBy).toBe("SYSTEM")
-  }, 120_000)
+      const invitation = await loadInvitation(localDbPath, email)
+      expect(invitation.registrationLinkGeneratedBy).toBe("SYSTEM")
+    },
+    120_000,
+  )
 
   it("reports an active link and rotates it, invalidating the old token", async () => {
     const { runInvitationRegistrationLink } = await loadPfcliCommand<{
@@ -582,6 +677,7 @@ describe("pfcli invitation registration-link local mode", () => {
               orgPath: localOrgRoot,
               email,
               rotate,
+              frontendUrl: "https://rotation.example.com",
             }),
           ),
         ),
@@ -595,6 +691,9 @@ describe("pfcli invitation registration-link local mode", () => {
 
     const rotated = await runLocal(true)
     const rotatedToken = registrationTokenFromOutput(rotated.output)
+    expect(rotated.output).toContain(
+      "https://rotation.example.com/register/passkey#token=",
+    )
     expect(rotatedToken).not.toBe(firstToken)
 
     const exchangeResults = await Effect.runPromise(
@@ -611,60 +710,81 @@ describe("pfcli invitation registration-link local mode", () => {
     expect(Option.isSome(exchangeResults.newResult)).toBe(true)
   }, 120_000)
 
-  it("rotate issues a recovery link for an accepted account without reopening the invitation", async () => {
-    const email = "employee@example.com"
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const db = yield* AuthenticationDatabase
-        const root = yield* db.findRootOrgUnit()
-        if (Option.isNone(root)) throw new Error("Missing root")
-        const roleIds = yield* db.findInvitationRoleIds(email)
-        const user = yield* db.createProviderUser({
-          email,
-          name: email,
-          firstName: "",
-          lastName: "",
-          picture: "",
-          locale: "",
-          provider: "passkey",
-          sub: Buffer.from("cli-recovery-handle").toString("base64url"),
-          orgUnitId: root.value.id,
-        })
-        yield* db.assignProviderUserRoles(user.id, roleIds)
-        yield* db.acceptPendingInvitationForUser({
-          email,
-          userId: user.id,
-          provider: "passkey",
-          subject: user.sub,
-          acceptedAt: yield* DateTime.now,
-        })
-      }).pipe(Effect.provide(makeAuthenticationLayer(localDbPath))),
-    )
-    const before = await loadInvitation(localDbPath, email)
-    const { runInvitationRegistrationLink } = await loadPfcliCommand<{
-      runInvitationRegistrationLink: RunInvitationRegistrationLink
-    }>("invitation-registration-link")
-    const { output } = await withEnv(localEnv, () =>
-      captureStdout(() =>
-        runWithNodeContext(
-          runInvitationRegistrationLink({
-            orgPath: localOrgRoot,
+  it.each([false, true])(
+    "rotate issues exchangeable recovery without reopening the invitation (explicit URL: %s)",
+    async (explicit) => {
+      const email = "employee@example.com"
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const db = yield* AuthenticationDatabase
+          const root = yield* db.findRootOrgUnit()
+          if (Option.isNone(root)) throw new Error("Missing root")
+          const roleIds = yield* db.findInvitationRoleIds(email)
+          const user = yield* db.createProviderUser({
             email,
-            rotate: true,
-          }),
+            name: email,
+            firstName: "",
+            lastName: "",
+            picture: "",
+            locale: "",
+            provider: "passkey",
+            sub: Buffer.from("cli-recovery-handle").toString("base64url"),
+            orgUnitId: root.value.id,
+          })
+          yield* db.assignProviderUserRoles(user.id, roleIds)
+          yield* db.acceptPendingInvitationForUser({
+            email,
+            userId: user.id,
+            provider: "passkey",
+            subject: user.sub,
+            acceptedAt: yield* DateTime.now,
+          })
+        }).pipe(Effect.provide(makeAuthenticationLayer(localDbPath))),
+      )
+      const before = await loadInvitation(localDbPath, email)
+      const { runInvitationRegistrationLink } = await loadPfcliCommand<{
+        runInvitationRegistrationLink: RunInvitationRegistrationLink
+      }>("invitation-registration-link")
+      writeFileSync(join(localOrgRoot, ".frontend-port.json"), '{"port":3002}')
+      const { output } = await withEnv<{ output: string }>(
+        { ...localEnv, PF_RUNTIME_ROOT: localOrgRoot },
+        () =>
+          explicit
+            ? runPfcliInProcess([
+                "invitation",
+                "registration-link",
+                localOrgRoot,
+                "--email",
+                email,
+                "--rotate",
+                "--frontend-url",
+                "https://recovery.example.com:8443",
+              ])
+            : captureStdout(() =>
+                runWithNodeContext(
+                  runInvitationRegistrationLink({
+                    orgPath: localOrgRoot,
+                    email,
+                    rotate: true,
+                  }),
+                ),
+              ),
+      )
+      expect(output).toContain(
+        `${explicit ? "https://recovery.example.com:8443" : "http://localhost:3002"}/register/passkey#token=`,
+      )
+      const token = registrationTokenFromOutput(output)
+      expect(token.startsWith("pfr_")).toBe(true)
+      expect(await loadInvitation(localDbPath, email)).toEqual(before)
+      const exchanged = await Effect.runPromise(
+        exchangePasskeyRecoveryLink(token).pipe(
+          Effect.provide(makeAuthenticationLayer(localDbPath)),
         ),
-      ),
-    )
-    const token = registrationTokenFromOutput(output)
-    expect(token.startsWith("pfr_")).toBe(true)
-    expect(await loadInvitation(localDbPath, email)).toEqual(before)
-    const exchanged = await Effect.runPromise(
-      exchangePasskeyRecoveryLink(token).pipe(
-        Effect.provide(makeAuthenticationLayer(localDbPath)),
-      ),
-    )
-    expect(Option.isSome(exchanged)).toBe(true)
-  }, 120_000)
+      )
+      expect(Option.isSome(exchanged)).toBe(true)
+    },
+    120_000,
+  )
 
   it("resolves the local database from PF_ORG when org-path is omitted", async () => {
     const { runInvitationRegistrationLink } = await loadPfcliCommand<{

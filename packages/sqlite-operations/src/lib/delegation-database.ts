@@ -9,7 +9,11 @@ import {
   or,
 } from "drizzle-orm"
 import { DateTime, Effect, Layer, Option } from "effect"
-import { DelegationDatabase, mapQueryError, mapWriteError } from "@pf/auth-api"
+import {
+  DelegationDatabase,
+  mapDelegationQueryError as mapQueryError,
+  mapDelegationWriteError as mapWriteError,
+} from "@pf/delegation"
 import * as schema from "@pf/drizzle-sqlite"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 
@@ -77,10 +81,10 @@ export const SqliteDelegationDatabaseLive = Layer.effect(
           )
           .pipe(
             Effect.map((rows) =>
-              Option.fromNullable(rows[0]).pipe(
+              Option.fromNullishOr(rows[0]).pipe(
                 Option.map((row) => ({
                   ...row,
-                  expiresAt: DateTime.unsafeMake(
+                  expiresAt: DateTime.makeUnsafe(
                     Math.round(DateTime.toEpochMillis(row.expiresAt) / 1000) *
                       1000,
                   ),
@@ -157,7 +161,7 @@ export const SqliteDelegationDatabaseLive = Layer.effect(
             ),
           )
           .pipe(
-            Effect.map((rows) => Option.fromNullable(rows[0]?.id)),
+            Effect.map((rows) => Option.fromNullishOr(rows[0]?.id)),
             mapQueryError("Failed to resolve Delegation owner"),
           ),
       list: (ownerId) =>
@@ -191,18 +195,18 @@ export const SqliteDelegationDatabaseLive = Layer.effect(
             Effect.map((rows) =>
               rows.map((row) => ({
                 ...row,
-                createdAt: DateTime.unsafeMake(
+                createdAt: DateTime.makeUnsafe(
                   Math.round(DateTime.toEpochMillis(row.createdAt) / 1000) *
                     1000,
                 ),
-                expiresAt: DateTime.unsafeMake(
+                expiresAt: DateTime.makeUnsafe(
                   Math.round(DateTime.toEpochMillis(row.expiresAt) / 1000) *
                     1000,
                 ),
                 revokedAt:
                   row.revokedAt === null
                     ? null
-                    : DateTime.unsafeMake(
+                    : DateTime.makeUnsafe(
                         Math.round(
                           DateTime.toEpochMillis(row.revokedAt) / 1000,
                         ) * 1000,

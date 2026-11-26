@@ -2,59 +2,37 @@ import type { StoredEmailAttachment } from "@processfocus/runtime"
 import {
   Data,
   type DateTime,
+  type Duration,
   Effect,
-  JSONSchema,
   Option,
   Schema,
   SchemaAST,
+  SchemaGetter,
 } from "effect"
-import type { JsonSchema7Root } from "effect/JSONSchema"
-import {
-  type ClientFormDefinition,
-  type FieldSet,
-  type FormComponent,
-  FormComponentType,
-  type ListField,
-  type StaticText,
-  type TableField,
-  type WalkError,
-  asClientRepresentation,
-} from "@pf/form-client-representation"
-import {
-  type FormRule,
-  type FormRuleEffect,
-  type FormRuleEvaluationResult,
-  type FormRuleExpression,
-  type FormRuleLiteral,
-  type FormRulePath,
-  type FormRuleTargetState,
-  type FormRuleValues,
-  type OrderingOperator,
-  type RuleValue,
-  evaluateFormRules,
-  formRuleConditionPaths,
-} from "@pf/form-rule"
 import {
   type CalendarSlotFieldMetadata,
   type CalendarSlotItem,
-  type FlattenMarker,
   FormCalendarSlotInput,
+  FormDefault,
+  FormDescription,
+  FormLabel,
   FormLookupInput,
-  FormMessage,
+  type FormPresentation,
+  FormStaticText,
+  LINK_TEXT_SYMBOL,
+  LINK_URL_SYMBOL,
   type LookupFieldMetadata,
   type LookupItem,
-  type ReadOnlyMarker,
+  type LookupMarker,
   type StableFormFields,
-  type StructuralOnlyMarker,
-  TEXTBLOCK_DYNAMIC_CONTENT_SYMBOL,
-  type TableFieldMarker,
-  fieldInputAst,
+  TEXTBLOCK_CONTENT_SYMBOL,
+  fieldAnnotation,
   hasFlattenAnnotation,
   hasStructuralOnlyAnnotation,
-  isReadOnlyField,
 } from "@pf/form-schema"
 import {
   type DeepWritable,
+  executableOriginalValues,
   getSchemaDefaults,
   submissionSchemaSync as makeSubmissionSchema,
 } from "@pf/form-submission-schema"
@@ -62,15 +40,23 @@ import { isProcess } from "./brands"
 import type {
   FlowContext,
   FormStepMeta,
+  MergeFormStep,
+  MergeSteps,
   StepMeta,
   SummaryContext,
 } from "./flow-context"
-import type { FlowPath } from "./flow-path"
+import {
+  type FlowPath,
+  type MergeState,
+  assertSameProcess,
+  wrapInFlowPath,
+} from "./flow-path"
 import {
   type FormAuthoring,
   assertResolvedFormFields,
   createFormAuthoring,
 } from "./form-authoring"
+import { FormDecorationError, mapFormFields } from "./form-decoration"
 import { mergeFormDefaults, resolveFormFieldDefaults } from "./form-defaults"
 import {
   LookupAccessor,
@@ -78,7 +64,7 @@ import {
   type LookupOverrideStore,
 } from "./lookup-accessor"
 import { pathToPascalCase } from "./org-utils"
-import type { InferFormSchemaType, Process } from "./process"
+import type { InferFormSchemaType, Process, ResolveStepOutput } from "./process"
 import type { Role } from "./role"
 import { type IStepScope, Step, type StepProps } from "./step"
 import {
@@ -106,7 +92,7 @@ const isAst = (value: unknown): value is SchemaAST.AST =>
   typeof (value as { readonly _tag?: unknown })._tag === "string"
 
 const getRawAnnotation = (
-  value: { readonly annotations?: SchemaAST.Annotations },
+  value: { readonly annotations?: Record<PropertyKey, unknown> },
   annotationId: symbol,
 ): Option.Option<unknown> => {
   const annotation = value.annotations?.[annotationId]
@@ -114,20 +100,20 @@ const getRawAnnotation = (
 }
 
 const getSchemaAnnotationDeep = (
-  schema: Schema.Schema.Any,
+  schema: Schema.Top,
   annotationId: symbol,
 ): Option.Option<unknown> => {
   const visit = (
     ast: SchemaAST.AST,
     seen: Set<SchemaAST.AST>,
   ): Option.Option<unknown> => {
-    const direct = SchemaAST.getAnnotation(ast, annotationId)
+    const direct = getAnnotation(ast, annotationId)
     if (Option.isSome(direct)) return direct
     if (seen.has(ast)) return Option.none()
     seen.add(ast)
 
     if (SchemaAST.isSuspend(ast)) {
-      const result = visit(ast.f(), seen)
+      const result = visit(ast.thunk(), seen)
       if (Option.isSome(result)) return result
     }
 
@@ -136,7 +122,7 @@ const getSchemaAnnotationDeep = (
       for (const property of record["propertySignatures"]) {
         if (typeof property !== "object" || property === null) continue
         const propertyRecord = property as {
-          readonly annotations?: SchemaAST.Annotations
+          readonly annotations?: Record<PropertyKey, unknown>
           readonly type?: unknown
         }
         const propertyAnnotation = getRawAnnotation(
@@ -188,29 +174,7 @@ const getSchemaAnnotationDeep = (
   return visit(schema.ast, new Set())
 }
 
-type DynamicTextBlockContent = () => Effect.Effect<string, never, unknown>
-
-// Avoid unbounded metadata fan-out when a form has several dynamic display blocks.
-const dynamicTextBlockResolutionConcurrency = 5
-
-const isFieldSetComponent = (component: FormComponent): component is FieldSet =>
-  component._tag === "fieldset"
-
-const isStaticComponent = (component: FormComponent): component is StaticText =>
-  component._tag === "static"
-
-const isListComponent = (component: FormComponent): component is ListField =>
-  component._tag === "list"
-
-const isTableComponent = (component: FormComponent): component is TableField =>
-  component._tag === "table"
-
-const isDynamicTextBlockContent = (
-  value: unknown,
-): value is DynamicTextBlockContent => typeof value === "function"
-
 const getSchemaAst = (schema: unknown): SchemaAST.AST | undefined => {
-  if (Schema.isPropertySignature(schema)) return fieldInputAst(schema)
   if (
     (typeof schema !== "object" && typeof schema !== "function") ||
     schema === null ||
@@ -221,21 +185,6 @@ const getSchemaAst = (schema: unknown): SchemaAST.AST | undefined => {
 
   const ast = (schema as { readonly ast?: unknown }).ast
   return isAst(ast) ? ast : undefined
-}
-
-const getDynamicTextBlockContent = (
-  schema: unknown,
-): DynamicTextBlockContent | undefined => {
-  const ast = isAst(schema) ? schema : getSchemaAst(schema)
-  if (!ast) {
-    return undefined
-  }
-
-  const content = Option.getOrUndefined(
-    SchemaAST.getAnnotation(ast, TEXTBLOCK_DYNAMIC_CONTENT_SYMBOL),
-  )
-
-  return isDynamicTextBlockContent(content) ? content : undefined
 }
 
 const getStructFields = (schema: unknown): Schema.Struct.Fields | undefined => {
@@ -257,8 +206,7 @@ const getTypeLiteralFields = (
   ast: SchemaAST.AST | undefined,
 ): Schema.Struct.Fields | undefined => {
   if (!ast) return undefined
-  if (ast._tag === "Transformation" || ast._tag === "Refinement")
-    return getTypeLiteralFields(ast.from)
+  if (ast.encoding) return getTypeLiteralFields(SchemaAST.toEncoded(ast))
   if (ast._tag === "Union") {
     for (const member of ast.types) {
       const fields = getTypeLiteralFields(member)
@@ -266,11 +214,11 @@ const getTypeLiteralFields = (
     }
     return undefined
   }
-  if (ast._tag !== "TypeLiteral") return undefined
+  if (ast._tag !== "Objects") return undefined
   return Object.fromEntries(
     ast.propertySignatures.map((property) => [
       property.name,
-      Schema.make(SchemaAST.annotations(property.type, property.annotations)),
+      Schema.make(property.type),
     ]),
   )
 }
@@ -284,25 +232,6 @@ const getNestedFields = (
   schema: unknown,
 ): Record<string, unknown> | undefined =>
   getStructFields(schema) ?? getAstFields(schema)
-
-const getListItemFields = (
-  schema: unknown,
-): Record<string, unknown> | undefined => {
-  const ast = getSchemaAst(schema)
-  if (ast?._tag !== "TupleType") {
-    return undefined
-  }
-
-  // Effect Schema arrays are TupleType nodes with the item type in rest[0];
-  // recurse into that item TypeLiteral to line up with List/Table itemChildren.
-  const rest = (
-    ast as {
-      readonly rest?: readonly { readonly type?: unknown }[]
-    }
-  ).rest
-  const itemAst = rest?.[0]?.type
-  return isAst(itemAst) ? getTypeLiteralFields(itemAst) : undefined
-}
 
 /**
  * Counts leaf fields in a nested structure.
@@ -352,420 +281,6 @@ type FormDefaults<TInput extends Schema.Struct.Fields> = {
   [K in keyof TInput]: DeepWritable<Schema.Schema.Type<TInput[K]>>
 }
 
-export const FormRuleSelf: unique symbol = Symbol.for(
-  "@pf/process/form-rule-self",
-) as unknown as typeof FormRuleSelf
-
-type RuleLiteralFor<T> = Extract<T, FormRuleLiteral>
-
-type RuleComparable<T> = RuleLiteralFor<Exclude<T, undefined>>
-type RuleOrderComparable<T> = Extract<RuleComparable<T>, string | number>
-
-type Prettify<T> = {
-  readonly [K in keyof T]: T[K]
-} & {}
-
-type UnionToIntersection<T> = (
-  T extends unknown
-    ? (value: T) => void
-    : never
-) extends (value: infer I) => void
-  ? I
-  : never
-
-interface FormRuleValueAccessor<T> {
-  readonly equals: (value: RuleComparable<T>) => FormRuleExpression
-  readonly notEquals: (value: RuleComparable<T>) => FormRuleExpression
-  readonly in: (values: readonly RuleComparable<T>[]) => FormRuleExpression
-  readonly notIn: (values: readonly RuleComparable<T>[]) => FormRuleExpression
-  readonly blank: () => FormRuleExpression
-  readonly present: () => FormRuleExpression
-  readonly lt: (value: RuleOrderComparable<T>) => FormRuleExpression
-  readonly lte: (value: RuleOrderComparable<T>) => FormRuleExpression
-  readonly gt: (value: RuleOrderComparable<T>) => FormRuleExpression
-  readonly gte: (value: RuleOrderComparable<T>) => FormRuleExpression
-}
-
-// Optional/refined fields retain their declaration for classification and nested targets.
-type RuleField<Field> = Field extends { readonly from: infer From }
-  ? RuleField<From>
-  : Field
-
-type FormRuleValueAccessorEntry<
-  TInput extends Schema.Struct.Fields,
-  K extends keyof TInput & string,
-> =
-  RuleField<TInput[K]> extends ReadOnlyMarker | StructuralOnlyMarker
-    ? Record<never, never>
-    : TInput[K] extends FlattenMarker
-      ? TInput[K] extends Schema.Struct<infer NestedFields>
-        ? FormRuleValueAccessors<NestedFields>
-        : Record<never, never>
-      : {
-          readonly [P in K]: RuleField<TInput[K]> extends Schema.Struct<
-            infer NestedFields
-          >
-            ? FormRuleValueAccessors<NestedFields>
-            : FormRuleValueAccessor<Schema.Schema.Type<TInput[K]>>
-        }
-
-type FormRuleValueAccessors<TInput extends Schema.Struct.Fields> = Prettify<
-  UnionToIntersection<
-    {
-      readonly [K in keyof TInput & string]: FormRuleValueAccessorEntry<
-        TInput,
-        K
-      >
-    }[keyof TInput & string]
-  >
->
-
-type LeafFormRuleTargetState = FormRuleTargetState
-// Container and static display targets currently allow the same effects, but
-// separate aliases keep those authored-surface constraints explicit.
-type ContainerFormRuleTargetState = Omit<FormRuleTargetState, "required">
-type StaticDisplayFormRuleTargetState = Omit<FormRuleTargetState, "required">
-
-export type FormRuleTargetTree<TInput extends Schema.Struct.Fields> = {
-  readonly [K in keyof TInput & string]?: RuleField<TInput[K]> extends
-    | StructuralOnlyMarker
-    | ReadOnlyMarker
-    ? StaticDisplayFormRuleTargetState
-    : RuleField<TInput[K]> extends TableFieldMarker
-      ? StaticDisplayFormRuleTargetState
-      : RuleField<TInput[K]> extends Schema.Struct<infer NestedFields>
-        ?
-            | (FormRuleTargetTree<NestedFields> & {
-                readonly [FormRuleSelf]?: ContainerFormRuleTargetState
-              })
-            | (TInput[K] extends Schema.Struct<infer _Fields>
-                ? never
-                : LeafFormRuleTargetState)
-        : LeafFormRuleTargetState
-}
-
-interface AuthoredFormRule<TInput extends Schema.Struct.Fields> {
-  readonly effects: (
-    effects: FormRuleTargetTree<TInput>,
-    otherwise?: FormRuleTargetTree<TInput>,
-  ) => FormRule
-}
-
-interface FormRuleAuthor<TInput extends Schema.Struct.Fields> {
-  readonly when: (condition: FormRuleExpression) => AuthoredFormRule<TInput>
-  readonly and: (
-    ...expressions: readonly FormRuleExpression[]
-  ) => FormRuleExpression
-  readonly or: (
-    ...expressions: readonly FormRuleExpression[]
-  ) => FormRuleExpression
-  readonly not: (expression: FormRuleExpression) => FormRuleExpression
-}
-
-const formRuleStateKeys = new Set(["hidden", "disabled", "required", "label"])
-
-const formRuleStateTypes: Record<string, "boolean" | "string"> = {
-  hidden: "boolean",
-  disabled: "boolean",
-  required: "boolean",
-  label: "string",
-}
-
-const isFormRuleTargetState = (
-  value: unknown,
-): value is FormRuleTargetState => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false
-  }
-
-  const keys = Object.keys(value)
-  return (
-    keys.length > 0 &&
-    keys.every((key) => {
-      if (!formRuleStateKeys.has(key)) return false
-      const expected = formRuleStateTypes[key]
-      if (!expected) return false
-      return typeof (value as Record<string, unknown>)[key] === expected
-    })
-  )
-}
-
-const ruleFieldValue = (path: FormRulePath): RuleValue => ({
-  _tag: "field",
-  path,
-})
-
-const ruleLiteralValue = (value: FormRuleLiteral): RuleValue => ({
-  _tag: "literal",
-  value,
-})
-
-const comparison = (
-  tag: "equals" | "notEquals",
-  path: FormRulePath,
-  value: FormRuleLiteral,
-): FormRuleExpression => ({
-  _tag: tag,
-  left: ruleFieldValue(path),
-  right: ruleLiteralValue(value),
-})
-
-const membership = (
-  tag: "in" | "notIn",
-  path: FormRulePath,
-  values: readonly FormRuleLiteral[],
-): FormRuleExpression => ({
-  _tag: tag,
-  value: ruleFieldValue(path),
-  candidates: ruleLiteralValue(values),
-})
-
-const ordering = (
-  operator: OrderingOperator,
-  path: FormRulePath,
-  value: FormRuleLiteral,
-): FormRuleExpression => ({
-  _tag: typeof value === "number" ? "numberOrder" : "stringOrder",
-  operator,
-  left: ruleFieldValue(path),
-  right: ruleLiteralValue(value),
-})
-
-const makeValueAccessor = <T>(
-  path: FormRulePath,
-): FormRuleValueAccessor<T> => ({
-  equals: (value) => comparison("equals", path, value),
-  notEquals: (value) => comparison("notEquals", path, value),
-  in: (values) => membership("in", path, values),
-  notIn: (values) => membership("notIn", path, values),
-  blank: () => ({ _tag: "blank", value: ruleFieldValue(path) }),
-  present: () => ({ _tag: "present", value: ruleFieldValue(path) }),
-  lt: (value) => ordering("lt", path, value),
-  lte: (value) => ordering("lte", path, value),
-  gt: (value) => ordering("gt", path, value),
-  gte: (value) => ordering("gte", path, value),
-})
-
-const makeRuleAuthor = <
-  TInput extends Schema.Struct.Fields,
->(): FormRuleAuthor<TInput> => ({
-  when: (condition) => ({
-    effects: (effects, otherwise) => ({
-      condition,
-      effects: flattenRuleEffects(effects),
-      ...(otherwise ? { otherwise: flattenRuleEffects(otherwise) } : {}),
-    }),
-  }),
-  and: (...expressions) => ({ _tag: "and", expressions }),
-  or: (...expressions) => ({ _tag: "or", expressions }),
-  not: (expression) => ({ _tag: "not", expression }),
-})
-
-const makeValueAccessors = <TInput extends Schema.Struct.Fields>(
-  fields: TInput,
-  path: FormRulePath = [],
-): FormRuleValueAccessors<TInput> =>
-  Object.entries(fields).reduce<Record<string, unknown>>(
-    (accessors, [key, schema]) => {
-      if (hasStructuralOnlyAnnotation(schema) || isReadOnlyField(schema))
-        return accessors
-      const nextPath = [...path, key]
-      const nestedFields = getNestedFields(schema)
-      const isFlattened = hasFlattenAnnotation(schema as Schema.Schema.Any)
-
-      if (nestedFields && isFlattened) {
-        Object.assign(
-          accessors,
-          makeValueAccessors(nestedFields as Schema.Struct.Fields, path),
-        )
-        return accessors
-      }
-
-      accessors[key] = nestedFields
-        ? makeValueAccessors(nestedFields as Schema.Struct.Fields, nextPath)
-        : makeValueAccessor(nextPath)
-      return accessors
-    },
-    {},
-  ) as FormRuleValueAccessors<TInput>
-
-const flattenRuleEffects = <TInput extends Schema.Struct.Fields>(
-  tree: FormRuleTargetTree<TInput>,
-): readonly FormRuleEffect[] => {
-  const effects: FormRuleEffect[] = []
-
-  const visit = (value: unknown, path: FormRulePath) => {
-    if (isFormRuleTargetState(value)) {
-      effects.push({ target: path, state: value })
-      return
-    }
-
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return
-    }
-
-    const record = value as Record<string | symbol, unknown>
-    const selfState = record[FormRuleSelf]
-    if (selfState !== undefined && isFormRuleTargetState(selfState)) {
-      effects.push({ target: path, state: selfState })
-    }
-
-    for (const [key, child] of Object.entries(record)) {
-      visit(child, [...path, key])
-    }
-  }
-
-  visit(tree, [])
-  return effects
-}
-
-const getFormRuleTargetComponent = (
-  representation: Record<string, FormComponent>,
-  path: FormRulePath,
-): FormComponent | undefined => {
-  let current: Record<string, FormComponent> | undefined = representation
-  let component: FormComponent | undefined
-
-  for (const segment of path) {
-    if (typeof segment !== "string" || !current) return undefined
-    component = current[segment]
-    if (!component) return undefined
-
-    if (isFieldSetComponent(component)) {
-      current = component.children
-    } else if (isListComponent(component) || isTableComponent(component)) {
-      current = component.itemChildren
-    } else {
-      current = undefined
-    }
-  }
-
-  return component
-}
-
-const isStructuralOrStaticRuleTarget = (component: FormComponent): boolean => {
-  switch (component._tag) {
-    case FormComponentType.FieldSet:
-    case FormComponentType.Static:
-    case FormComponentType.Link:
-    case FormComponentType.MetricBreakdown:
-      return true
-    case FormComponentType.Table:
-      // Table is read-only display; List is a submitted array and can be
-      // required to enforce at least one item.
-      return true
-    case FormComponentType.Text:
-    case FormComponentType.TextArea:
-    case FormComponentType.Number:
-    case FormComponentType.Date:
-    case FormComponentType.Email:
-    case FormComponentType.Phone:
-    case FormComponentType.ProviderUser:
-    case FormComponentType.Boolean:
-    case FormComponentType.Select:
-    case FormComponentType.Radio:
-    case FormComponentType.File:
-    case FormComponentType.List:
-    case FormComponentType.Lookup:
-    case FormComponentType.CalendarSlot:
-    case FormComponentType.Plugin:
-      return false
-    default: {
-      const _exhaustive: never = component
-      return _exhaustive
-    }
-  }
-}
-
-const formRulePathToFieldName = (path: FormRulePath): string | undefined =>
-  path.every((segment) => typeof segment === "string")
-    ? path.join(".")
-    : undefined
-
-const hasFormRuleFieldName = (
-  representation: Record<string, FormComponent>,
-  fieldName: string,
-): boolean => {
-  for (const component of Object.values(representation)) {
-    if ("field" in component && component.field === fieldName) {
-      return true
-    }
-
-    if (
-      isFieldSetComponent(component) &&
-      hasFormRuleFieldName(component.children, fieldName)
-    ) {
-      return true
-    }
-  }
-
-  return false
-}
-
-const hasFormRuleFieldPath = (
-  representation: Record<string, FormComponent>,
-  path: FormRulePath,
-): boolean => {
-  const fieldName = formRulePathToFieldName(path)
-  if (fieldName === undefined) {
-    return false
-  }
-
-  if (hasFormRuleFieldName(representation, fieldName)) {
-    return true
-  }
-
-  let current: Record<string, FormComponent> | undefined = representation
-  let component: FormComponent | undefined
-
-  for (const segment of path) {
-    if (typeof segment !== "string" || !current) return false
-    component = current[segment]
-    if (!component) return false
-
-    current = isFieldSetComponent(component) ? component.children : undefined
-  }
-
-  return component !== undefined
-}
-
-const validateFormRuleTargets = (
-  formStep: string,
-  representation: Record<string, FormComponent>,
-  rules: readonly FormRule[],
-): void => {
-  for (const rule of rules) {
-    const conditionPaths = formRuleConditionPaths({
-      expression: rule.condition,
-    })
-    for (const path of conditionPaths) {
-      if (!hasFormRuleFieldPath(representation, path)) {
-        throw new Error(
-          `Form "${formStep}" rule condition references missing field "${path.join(".")}" in rendered form tree`,
-        )
-      }
-    }
-
-    for (const effect of [...rule.effects, ...(rule.otherwise ?? [])]) {
-      const target = getFormRuleTargetComponent(representation, effect.target)
-      if (!target) {
-        throw new Error(
-          `Form "${formStep}" rule targets missing field "${effect.target.join(".")}" in rendered form tree`,
-        )
-      }
-
-      if (
-        effect.state.required !== undefined &&
-        isStructuralOrStaticRuleTarget(target)
-      ) {
-        throw new Error(
-          `Form "${formStep}" rule target "${effect.target.join(".")}" cannot set required on structural or static display components`,
-        )
-      }
-    }
-  }
-}
-
 /**
  * Summary type for todo cards.
  * Record where keys are labels and values are the display strings.
@@ -780,6 +295,13 @@ export class FormSubmissionError extends Data.TaggedError(
   readonly field: string
   readonly message: string
 }> {}
+
+/** An unauthenticated process start, independent of External Participants. */
+export interface FormAnonymousPageConfig {
+  /** Stable address segment. Use an unguessable value for private reception pages. */
+  readonly address: string
+  readonly afterSubmit: "restart" | "thank-you"
+}
 
 export interface FormEmbedConfig {
   readonly sites: readonly string[]
@@ -980,7 +502,7 @@ const flattenDefaults = (
   const flat: Record<string, unknown> = {}
 
   for (const [key, field] of Object.entries(schema.fields)) {
-    const fieldAsAny = field as Schema.Schema.Any
+    const fieldAsAny = field as Schema.Top
 
     // Skip structural-only fields (no values)
     if (hasStructuralOnlyAnnotation(fieldAsAny)) continue
@@ -988,7 +510,7 @@ const flattenDefaults = (
     // Check for flatten annotation (Wrapper)
     if (
       hasFlattenAnnotation(fieldAsAny) &&
-      fieldAsAny.ast._tag === "TypeLiteral" &&
+      fieldAsAny.ast._tag === "Objects" &&
       "fields" in fieldAsAny
     ) {
       // Wrapper defaults may already be flat when they come from schema
@@ -1020,6 +542,14 @@ const flattenDefaults = (
   }
 
   return flat
+}
+
+type FormBindings<F extends Schema.Struct.Fields> = {
+  readonly [K in keyof F]?: FormPresentation & {
+    readonly default?: F[K]["Encoded"]
+  } & (F[K] extends LookupMarker
+      ? { readonly query?: LookupFieldMetadata["query"] }
+      : unknown)
 }
 
 /**
@@ -1089,9 +619,30 @@ interface FormStepPropsBase<
    * })
    * ```
    */
-  readonly form: (
-    helpers: FormAuthoring<TState, TSteps, TItem>,
-  ) => StaticFormDeclaration<TInput>
+  readonly form:
+    | Schema.Struct<TInput>
+    | ((
+        helpers: FormAuthoring<TState, TSteps, TItem>,
+      ) => StaticFormDeclaration<TInput>)
+
+  /** Server-only request bindings; fields and their value contracts remain static. */
+  readonly bindings?: (
+    state: TState,
+    ctx: FlowContext<TSteps>,
+    item: TItem,
+  ) => FormBindings<TInput>
+
+  /** Browser-safe module exporting the same static schema supplied to form. */
+  readonly browser?: {
+    readonly entrypoint: string
+    readonly exportName: string
+    /** Server-only, request-local public data keyed by submitted field path. */
+    readonly resolvePluginConfiguration?: () => Effect.Effect<
+      Readonly<Record<string, unknown>>,
+      never,
+      unknown
+    >
+  }
 
   /**
    * Function to compute summary for todo cards.
@@ -1177,6 +728,8 @@ interface FormStepPropsBase<
    * Optional configuration for rendering this start form as an anonymous embed.
    * Allowed sites are exact origins only.
    */
+  readonly anonymousPage?: FormAnonymousPageConfig
+
   readonly embed?: FormEmbedConfig
 
   /**
@@ -1348,34 +901,116 @@ export class Form<
    * The full validation schema: Schema.Struct(fields) optionally refined
    * with a struct-level filterEffect from the validate prop.
    */
-  private _schema: Schema.Schema.Any
+  private _schema: Schema.Top
 
   /**
    * The flat submission validation schema: submissionSchema(fields) optionally
    * refined with a struct-level filterEffect from the validate prop.
    * Used for server-side validation where wrapper nesting is irrelevant.
    */
-  private _submissionEffectSchema: Schema.Schema.Any
+  private _submissionEffectSchema: Schema.Top
 
   /**
    * Lookup query overrides set via `this.lookups.<field>.setQuery()`.
    */
   private _lookupOverrides = new Map<string, LookupOverride>()
+  private _lookupResolvers = new Map<
+    string,
+    NonNullable<LookupFieldMetadata["resolve"]>
+  >()
 
-  /**
-   * Typed accessors for lookup fields.
-   * Use `this.lookups.<field>.setQuery()` for independent lookups or
-   * `this.lookups.<field>.dependsOn([...]).setQuery()` for dependent lookups.
-   */
-  static readonly self = FormRuleSelf
+  _setLookupResolver(
+    fieldName: string,
+    resolve: NonNullable<LookupFieldMetadata["resolve"]>,
+  ): void {
+    this._lookupResolvers.set(fieldName, resolve)
+  }
+
+  resolveLookupSelection(
+    fieldName: string,
+    value: string,
+    fields: Schema.Struct.Fields = this._formFields,
+  ): Effect.Effect<LookupItem | null, unknown, unknown> {
+    const field = makeSubmissionSchema(Schema.Struct(fields)).fields[fieldName]
+    const metadata = field
+      ? (Option.getOrUndefined(
+          getSchemaAnnotationDeep(field as Schema.Top, FormLookupInput),
+        ) as LookupFieldMetadata | undefined)
+      : undefined
+    const resolve = this._lookupResolvers.get(fieldName) ?? metadata?.resolve
+    // Dependent lookup capabilities remain on their existing typed route.
+    if (
+      !metadata ||
+      this._lookupOverrides.get(fieldName)?.dependencies?.length ||
+      !resolve
+    )
+      return Effect.succeed(null)
+    return resolve(value).pipe(
+      Effect.map((item) => (item?.value === value ? item : null)),
+    )
+  }
 
   override readonly isForm = true
+
+  /** Attach a deadline. The owner output is not yet available. */
+  onDeadline<
+    TOutput extends Schema.Struct.Fields | undefined,
+    THandlerId extends string,
+    THandlerIsForm extends boolean = false,
+  >(
+    name: string,
+    options: {
+      readonly handler: Step<TState, TOutput, THandlerId, THandlerIsForm, false>
+      readonly interrupting?: boolean
+    } & (
+      | { readonly after: Duration.Duration; readonly at?: never }
+      | {
+          readonly at: (state: TState) => DateTime.DateTime
+          readonly after?: never
+        }
+    ),
+  ): FlowPath<
+    MergeState<TState, ResolveStepOutput<TOutput, THandlerIsForm>>,
+    TOutput,
+    THandlerIsForm extends true
+      ? MergeFormStep<TSteps, THandlerId>
+      : MergeSteps<TSteps, THandlerId>
+  > {
+    if (!name.trim()) {
+      throw new Error("A deadline name must not be empty")
+    }
+    if (this.deadlines.some((deadline) => deadline.name === name)) {
+      throw new Error(`Duplicate deadline "${name}" on ${this.node.path}`)
+    }
+    assertSameProcess(options.handler, this.process)
+    this.process.addEdge(this, options.handler, {
+      deadlineName: name,
+      interrupting: options.interrupting ?? false,
+    })
+    this.deadlines.push({
+      name,
+      interrupting: options.interrupting ?? false,
+      timing: options.at ? { at: options.at } : { after: options.after },
+    })
+    // As for normal flow paths, only the phantom accumulated state changes.
+    return wrapInFlowPath(options.handler, this.process) as FlowPath<
+      MergeState<TState, ResolveStepOutput<TOutput, THandlerIsForm>>,
+      TOutput,
+      THandlerIsForm extends true
+        ? MergeFormStep<TSteps, THandlerId>
+        : MergeSteps<TSteps, THandlerId>
+    >
+  }
 
   readonly lookups: {
     readonly [K in keyof TInput & string]: LookupAccessor<TInput, K>
   }
 
-  private _rules: FormRule[] = []
+  readonly sharedSchema: Schema.Struct<TInput>
+
+  readonly browser: FormProps<TState, TSteps, TInput, TItem>["browser"]
+
+  readonly anonymousPage: FormAnonymousPageConfig | undefined
 
   readonly embed: FormEmbedConfig | undefined
 
@@ -1429,14 +1064,84 @@ export class Form<
       }),
     } as StepProps<TInput>
 
-    // Cast scope - Step base class doesn't need TSteps, it's only used in Form callbacks
     super(scope, id, stepProps)
 
     const authoring = createFormAuthoring<TState, TSteps, TItem>()
-    const fields = Object.freeze({ ...props.form(authoring.helpers) })
+    this.browser = props.browser
+    const fields = Object.freeze({
+      ...(Schema.isSchema(props.form)
+        ? props.form.fields
+        : props.form(authoring.helpers)),
+    })
+    this.sharedSchema = Schema.isSchema(props.form)
+      ? props.form
+      : Schema.Struct(fields)
     this._formFields = authoring.project(fields)
-    this._formFn = (state, ctx, item) =>
-      authoring.project(fields, [state, ctx, item])
+    this._formFn = (state, ctx, item) => {
+      const resolved = authoring.project(fields, [state, ctx, item])
+      const bindings = props.bindings?.(state, ctx, item)
+      if (!bindings) return resolved
+      const decorated: Record<string, Schema.Constraint> = { ...resolved }
+      for (const key of Object.keys(bindings)) {
+        if (!Object.hasOwn(resolved, key))
+          throw new FormDecorationError({
+            path: `form.${key}`,
+            message: `Unknown form binding: ${key}`,
+          })
+      }
+      for (const key in resolved) {
+        const binding = bindings[key]
+        if (!binding) continue
+        const query = "query" in binding ? binding.query : undefined
+        const lookup = fieldAnnotation(resolved[key].ast, FormLookupInput)
+        if (
+          query !== undefined &&
+          (typeof query !== "function" || lookup === undefined)
+        )
+          throw new FormDecorationError({
+            path: `form.${key}`,
+            message: `Invalid lookup binding: ${key}`,
+          })
+        const annotations = {
+          ...(query === undefined
+            ? {}
+            : {
+                [FormLookupInput]: {
+                  ...(typeof lookup === "object" && lookup !== null
+                    ? lookup
+                    : {}),
+                  query,
+                },
+              }),
+          ...(binding.label === undefined
+            ? {}
+            : { [FormLabel]: binding.label }),
+          ...(binding.description === undefined
+            ? {}
+            : { [FormDescription]: binding.description }),
+          ...(binding.text === undefined
+            ? {}
+            : {
+                [FormStaticText]: binding.text,
+                [TEXTBLOCK_CONTENT_SYMBOL]: binding.text,
+                [LINK_TEXT_SYMBOL]: binding.text,
+              }),
+          ...(binding.href === undefined
+            ? {}
+            : { [LINK_URL_SYMBOL]: binding.href }),
+          ...(binding.default === undefined
+            ? {}
+            : { [FormDefault]: binding.default }),
+        }
+        // Decoration changes only presentation/default annotations, retaining the field contract.
+        decorated[key] = mapFormFields(
+          { field: resolved[key] },
+          (ast) => Schema.make<Schema.Top>(ast).annotate(annotations).ast,
+          (existing) => ({ ...existing, ...annotations }),
+        ).field
+      }
+      return decorated as TInput
+    }
 
     assertResolvedFormFields(this._formFields)
 
@@ -1444,8 +1149,16 @@ export class Form<
     const struct = Schema.Struct(this._formFields)
     this._onSubmit = props.onSubmit
     this._schema = props.validate
-      ? // biome-ignore lint/suspicious/noExplicitAny: Struct.Type<TInput> is structurally identical to filterEffect's inferred type
-        struct.pipe(Schema.filterEffect(props.validate as any))
+      ? struct.pipe(
+          Schema.decode({
+            decode: SchemaGetter.checkEffect(
+              props.validate as (
+                input: typeof struct.Type,
+              ) => ReturnType<NonNullable<typeof props.validate>>,
+            ),
+            encode: SchemaGetter.passthrough(),
+          }),
+        )
       : struct
 
     // Build flat submission schema for server-side validation.
@@ -1453,8 +1166,16 @@ export class Form<
     // Authoring-time errors (collisions / invalid flatten) throw the TaggedError.
     const flatSubmission = makeSubmissionSchema(struct)
     this._submissionEffectSchema = props.validate
-      ? // biome-ignore lint/suspicious/noExplicitAny: validate callback receives flat type at runtime
-        flatSubmission.pipe(Schema.filterEffect(props.validate as any))
+      ? flatSubmission.pipe(
+          Schema.decode({
+            decode: SchemaGetter.checkEffect(
+              props.validate as (
+                input: typeof flatSubmission.Type,
+              ) => ReturnType<NonNullable<typeof props.validate>>,
+            ),
+            encode: SchemaGetter.passthrough(),
+          }),
+        )
       : flatSubmission
 
     // Build typed lookup accessors for every field in TInput
@@ -1465,13 +1186,25 @@ export class Form<
       ]),
     ) as { readonly [K in keyof TInput & string]: LookupAccessor<TInput, K> }
 
+    if (props.anonymousPage) {
+      if (props.embed || props.publicCompletion) {
+        throw new Error(
+          "An Anonymous Page cannot also be an embed or public completion",
+        )
+      }
+      if (!/^[A-Za-z0-9_-]+$/.test(props.anonymousPage.address)) {
+        throw new Error(
+          "Anonymous Page address must be a URL-safe path segment",
+        )
+      }
+    }
+    this.anonymousPage = props.anonymousPage
     this.embed = props.embed
       ? normalizeEmbedConfig(props.embed, flatSubmission.fields)
       : undefined
     this.supportingRoles = props.supportingRoles
     this.publicCompletion = props.publicCompletion
 
-    // Store the summary function if provided
     if (props.summary) {
       this._summaryFn = props.summary
     }
@@ -1480,7 +1213,6 @@ export class Form<
       this._assigneeFn = props.assignee
     }
 
-    // Store forEach items function if provided
     if (props.forEach) {
       this._forEachItemsFn = props.forEach.items
       // Override brand property for cross-bundle detection
@@ -1501,27 +1233,51 @@ export class Form<
     return this._lookupOverrides
   }
 
-  /**
-   * Append browser-safe form rules authored against typed field accessors and
-   * a typed target tree matching this form's schema.
-   */
-  rules(
-    build: (
-      values: FormRuleValueAccessors<TInput>,
-      rule: FormRuleAuthor<TInput>,
-    ) => readonly FormRule[],
+  private _prefill:
+    | {
+        dependency: string
+        fields: readonly string[]
+        concealed: readonly string[]
+        load: (
+          value: string,
+        ) => Effect.Effect<Record<string, unknown>, unknown, unknown>
+      }
+    | undefined
+
+  /** Fresh selection-dependent values. Concealed fields still travel on submission. */
+  prefillOn<
+    const K extends keyof TInput & string,
+    const F extends keyof Schema.Struct.Type<TInput> & keyof TInput & string,
+  >(
+    dependency: K,
+    options: {
+      fields: readonly F[]
+      concealed?: readonly F[]
+      load: (
+        value: string,
+      ) => Effect.Effect<Pick<Schema.Struct.Type<TInput>, F>, unknown, unknown>
+    },
   ): this {
-    this._rules.push(
-      ...build(makeValueAccessors(this._formFields), makeRuleAuthor<TInput>()),
-    )
+    this._prefill = {
+      dependency,
+      fields: options.fields,
+      concealed: options.concealed ?? [],
+      load: options.load,
+    }
     return this
   }
 
-  authoritativeFormRules(): readonly FormRule[] {
-    return [...this._rules]
+  prefillQuery(): typeof this._prefill {
+    return this._prefill
   }
 
-  flattenRuleTargetPath(path: FormRulePath): FormRulePath {
+  prefillQueryName(): string {
+    return `${this.lookupQueryName("prefill")}Values`
+  }
+
+  submissionPath(
+    path: readonly (string | number)[],
+  ): readonly (string | number)[] {
     const flat: Array<string | number> = []
     let currentFields: Schema.Struct.Fields | undefined = this._formFields
     for (const segment of path) {
@@ -1530,9 +1286,7 @@ export class Form<
         continue
       }
 
-      const fieldSchema = currentFields[segment] as
-        | Schema.Schema.Any
-        | undefined
+      const fieldSchema = currentFields[segment] as Schema.Top | undefined
       if (!fieldSchema) {
         flat.push(segment)
         currentFields = undefined
@@ -1551,17 +1305,6 @@ export class Form<
     }
 
     return flat
-  }
-
-  evaluateFormRules(
-    values: FormRuleValues,
-    baseValues?: FormRuleValues,
-  ): FormRuleEvaluationResult {
-    return evaluateFormRules({
-      rules: this._rules,
-      values,
-      ...(baseValues === undefined ? {} : { baseValues }),
-    })
   }
 
   /**
@@ -1585,7 +1328,7 @@ export class Form<
    * Returns Schema.Struct(fields), optionally refined with a struct-level
    * filterEffect when a `validate` callback was provided.
    */
-  override get outputSchema(): Schema.Schema.Any {
+  override get outputSchema(): Schema.Top {
     return this._schema
   }
 
@@ -1605,7 +1348,7 @@ export class Form<
    * Used by start/complete resolvers for server-side validation where
    * wrapper nesting should not affect persisted state shape.
    */
-  override get submissionEffectSchema(): Schema.Schema.Any {
+  override get submissionEffectSchema(): Schema.Top {
     return this._submissionEffectSchema
   }
 
@@ -1680,7 +1423,7 @@ export class Form<
       Effect.flatMap((assignee) =>
         Effect.isEffect(assignee) ? assignee : Effect.succeed(assignee),
       ),
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.logWarning(
           `Failed to resolve assignee for form "${this.node.id}"`,
           { cause },
@@ -1719,7 +1462,7 @@ export class Form<
       Effect.flatMap((summary) =>
         Effect.isEffect(summary) ? summary : Effect.succeed(summary),
       ),
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.logWarning(
           `Failed to compute summary for form "${this.node.id}"`,
           { cause },
@@ -1768,7 +1511,7 @@ export class Form<
   resolveInitialDefaults(
     currentProviderUser?: string,
   ): Effect.Effect<Record<string, unknown>, never> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const resolvedDefaults = yield* this.resolveFieldDefaults(
         this._formFields,
         currentProviderUser,
@@ -1781,212 +1524,6 @@ export class Form<
         ) as Schema.Struct<Schema.Struct.Fields>,
       )
     })
-  }
-
-  /**
-   * Get the client representation for this form's fields.
-   * Used for rendering the form in the UI.
-   *
-   * Post-processes the representation to add `dependencies` and `queryName`
-   * to any lookup components that have dependent overrides.
-   *
-   * @returns Effect that produces the client representation
-   */
-  private buildClientComponents(
-    fields: Schema.Struct.Fields,
-  ): Effect.Effect<Record<string, FormComponent>, WalkError> {
-    const effectSchema = Schema.Struct(fields)
-    return Effect.gen(this, function* () {
-      const repr = yield* asClientRepresentation(effectSchema)
-      const components: Record<string, FormComponent> = { ...repr }
-
-      // Inject dependency metadata into lookup components with overrides
-      for (const [fieldName, override] of this._lookupOverrides) {
-        if (override.dependencies && override.dependencies.length > 0) {
-          const component = components[fieldName]
-          if (component && component._tag === "lookup") {
-            components[fieldName] = {
-              ...component,
-              dependencies: override.dependencies,
-              queryName: this.lookupQueryName(fieldName),
-            }
-          }
-        }
-      }
-
-      return components
-    })
-  }
-
-  private buildClientFormDefinition(
-    fields: Schema.Struct.Fields,
-  ): Effect.Effect<ClientFormDefinition, WalkError> {
-    return this.buildClientComponents(fields).pipe(
-      Effect.map((components) => {
-        if (this._rules.length > 0) {
-          validateFormRuleTargets(this.stepKey, components, this._rules)
-        }
-
-        return { components, rules: this._rules }
-      }),
-    )
-  }
-
-  private resolveDynamicTextBlockComponent(
-    fieldSchema: unknown,
-    component: FormComponent,
-  ): Effect.Effect<FormComponent, never, unknown> {
-    if (isFieldSetComponent(component)) {
-      const nestedFields = getNestedFields(fieldSchema)
-      if (!nestedFields) {
-        return Effect.succeed(component)
-      }
-
-      return this.resolveDynamicTextBlocks(
-        nestedFields,
-        component.children,
-      ).pipe(Effect.map((children) => ({ ...component, children })))
-    }
-
-    if (isListComponent(component) || isTableComponent(component)) {
-      const itemFields = getListItemFields(fieldSchema)
-      if (!itemFields) {
-        return Effect.succeed(component)
-      }
-
-      return this.resolveDynamicTextBlocks(
-        itemFields,
-        component.itemChildren,
-      ).pipe(Effect.map((itemChildren) => ({ ...component, itemChildren })))
-    }
-
-    if (!fieldSchema || !isStaticComponent(component)) {
-      return Effect.succeed(component)
-    }
-
-    const dynamicContent = getDynamicTextBlockContent(fieldSchema)
-    if (!dynamicContent) {
-      return Effect.succeed(component)
-    }
-
-    return dynamicContent().pipe(
-      Effect.map((content): FormComponent => ({ ...component, content })),
-      Effect.catchAllCause((cause) =>
-        Effect.logWarning(
-          `Failed to resolve dynamic text block for form "${this.node.id}"`,
-          { cause, fieldName: component.field },
-        ).pipe(Effect.as(component)),
-      ),
-    )
-  }
-
-  private resolveDynamicTextBlocks(
-    fields: Record<string, unknown>,
-    representation: Record<string, FormComponent>,
-  ): Effect.Effect<Record<string, FormComponent>, never, unknown> {
-    return Effect.gen(this, function* () {
-      const entries = yield* Effect.forEach(
-        Object.entries(representation),
-        ([fieldName, component]) => {
-          const fieldSchema = fields[fieldName]
-
-          return this.resolveDynamicTextBlockComponent(
-            fieldSchema,
-            component,
-          ).pipe(
-            Effect.map((resolved): readonly [string, FormComponent] => [
-              fieldName,
-              resolved,
-            ]),
-          )
-        },
-        { concurrency: dynamicTextBlockResolutionConcurrency },
-      )
-
-      return Object.fromEntries(entries) as Record<string, FormComponent>
-    })
-  }
-
-  private buildRenderableClientFormDefinition(
-    fields: Schema.Struct.Fields,
-  ): Effect.Effect<ClientFormDefinition, WalkError, unknown> {
-    return this.buildClientFormDefinition(fields).pipe(
-      Effect.flatMap((definition) =>
-        this.resolveDynamicTextBlocks(fields, definition.components).pipe(
-          Effect.map((components) => ({
-            components,
-            rules: definition.rules,
-          })),
-        ),
-      ),
-    )
-  }
-
-  clientFormDefinition(): Effect.Effect<ClientFormDefinition, WalkError> {
-    return this.buildClientFormDefinition(this.output)
-  }
-
-  renderableClientFormDefinition(): Effect.Effect<
-    ClientFormDefinition,
-    WalkError,
-    unknown
-  > {
-    return this.buildRenderableClientFormDefinition(this.output)
-  }
-
-  clientFormDefinitionWithState(
-    state: Record<string, unknown>,
-    ctx: FlowContext<TSteps>,
-    item?: unknown,
-  ): Effect.Effect<ClientFormDefinition, WalkError> {
-    return this.buildClientFormDefinition(
-      this.getFieldsWithState(state as TState, ctx, item as TItem),
-    )
-  }
-
-  renderableClientFormDefinitionWithState(
-    state: Record<string, unknown>,
-    ctx: FlowContext<TSteps>,
-    item?: unknown,
-  ): Effect.Effect<ClientFormDefinition, WalkError, unknown> {
-    return this.buildRenderableClientFormDefinition(
-      this.getFieldsWithState(state as TState, ctx, item as TItem),
-    )
-  }
-
-  /**
-   * Get the submission schema for form validation.
-   * Excludes read-only fields and removes additionalProperties constraint
-   * to allow form values to include read-only fields.
-   *
-   * @returns JSON schema object
-   */
-  submissionSchema(): Record<string, unknown> {
-    const effectSchema = Schema.Struct(this.output)
-    const submission = makeSubmissionSchema(effectSchema)
-    const { additionalProperties: _, ...schema } = JSONSchema.make(
-      submission,
-    ) as JsonSchema7Root & { additionalProperties?: boolean }
-
-    // Inject FormMessage annotations as x-message into JSON Schema properties.
-    // LIMITATION: This only handles top-level properties. Nested objects/arrays
-    // would require recursive AST traversal and path-based message lookup.
-    const properties = (schema as Record<string, unknown>)["properties"] as
-      | Record<string, Record<string, unknown>>
-      | undefined
-    if (properties && submission.ast._tag === "TypeLiteral") {
-      for (const prop of submission.ast.propertySignatures) {
-        const msg = SchemaAST.getAnnotation(prop.type, FormMessage)
-        if (Option.isSome(msg) && typeof msg.value === "string") {
-          const name = String(prop.name)
-          if (properties[name]) {
-            properties[name]["x-message"] = msg.value
-          }
-        }
-      }
-    }
-
-    return schema
   }
 
   /**
@@ -2030,10 +1567,7 @@ export class Form<
     }
 
     const metadata = Option.getOrUndefined(
-      getSchemaAnnotationDeep(
-        fieldSchema as Schema.Schema.Any,
-        FormLookupInput,
-      ),
+      getSchemaAnnotationDeep(fieldSchema as Schema.Top, FormLookupInput),
     ) as LookupFieldMetadata | undefined
     if (!metadata?.query) {
       return new LookupFieldNotFoundError({
@@ -2069,10 +1603,7 @@ export class Form<
     }
 
     const metadata = Option.getOrUndefined(
-      getSchemaAnnotationDeep(
-        fieldSchema as Schema.Schema.Any,
-        FormLookupInput,
-      ),
+      getSchemaAnnotationDeep(fieldSchema as Schema.Top, FormLookupInput),
     ) as LookupFieldMetadata | undefined
     if (!metadata?.query) {
       return new LookupFieldNotFoundError({
@@ -2098,10 +1629,7 @@ export class Form<
     }
 
     const metadata = Option.getOrUndefined(
-      getSchemaAnnotationDeep(
-        fieldSchema as Schema.Schema.Any,
-        FormCalendarSlotInput,
-      ),
+      getSchemaAnnotationDeep(fieldSchema as Schema.Top, FormCalendarSlotInput),
     ) as CalendarSlotFieldMetadata | undefined
     if (!metadata?.query) {
       return new LookupFieldNotFoundError({
@@ -2130,6 +1658,71 @@ export class Form<
     return this._runCalendarSlotQuery(fieldName, fields[fieldName])
   }
 
+  /** Encoded authoritative values, without form-initialization placeholders. */
+  resolveOriginalValues(
+    processState: Record<string, unknown>,
+    ctx: FlowContext<TSteps>,
+    item?: unknown,
+    currentProviderUser?: string,
+  ): Effect.Effect<Record<string, unknown>, never> {
+    const fields = this.getFieldsWithState(
+      processState as TState,
+      ctx,
+      item as TItem,
+    )
+    return this.resolveFieldDefaults(
+      makeSubmissionSchema(Schema.Struct(fields)).fields,
+      currentProviderUser,
+    ).pipe(
+      Effect.map((defaults) =>
+        executableOriginalValues(this.sharedSchema, defaults, processState),
+      ),
+    )
+  }
+
+  resolvePresentation(
+    processState: Record<string, unknown>,
+    ctx: FlowContext<TSteps>,
+    item?: unknown,
+  ): Record<string, FormPresentation> {
+    const presentation: Record<string, FormPresentation> = {}
+    const fields = this.getFieldsWithState(
+      processState as TState,
+      ctx,
+      item as TItem,
+    )
+    const visit = (fields: Schema.Struct.Fields, prefix: string): void => {
+      for (const [name, field] of Object.entries(fields)) {
+        const target = prefix ? `${prefix}.${name}` : name
+        const label = fieldAnnotation(field.ast, FormLabel)
+        const description = fieldAnnotation(field.ast, FormDescription)
+        const text =
+          fieldAnnotation(field.ast, FormStaticText) ??
+          fieldAnnotation(field.ast, TEXTBLOCK_CONTENT_SYMBOL) ??
+          fieldAnnotation(field.ast, LINK_TEXT_SYMBOL)
+        const href = fieldAnnotation(field.ast, LINK_URL_SYMBOL)
+        presentation[target] = {
+          ...(typeof label === "string" ? { label } : {}),
+          ...(typeof description === "string" ? { description } : {}),
+          ...(typeof text === "string" ? { text } : {}),
+          ...(typeof href === "string" ? { href } : {}),
+        }
+        if (field.ast._tag === "Objects")
+          visit(
+            Object.fromEntries(
+              field.ast.propertySignatures.map((property) => [
+                String(property.name),
+                Schema.make(property.type),
+              ]),
+            ),
+            target,
+          )
+      }
+    }
+    visit(fields, "")
+    return presentation
+  }
+
   /**
    * Resolves all default values for this Form given the current process state.
    * Re-executes the form function with state to get fields with state-based defaults.
@@ -2146,7 +1739,7 @@ export class Form<
     item?: unknown,
     currentProviderUser?: string,
   ): Effect.Effect<Record<string, unknown>, never> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       // Start with schema defaults
       const defaults = this.defaults()
 
@@ -2173,3 +1766,8 @@ export class Form<
     })
   }
 }
+
+const getAnnotation = (
+  ast: SchemaAST.AST,
+  key: symbol,
+): Option.Option<unknown> => Option.fromNullishOr(fieldAnnotation(ast, key))

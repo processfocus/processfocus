@@ -1,11 +1,19 @@
 import "server-only"
 
+import { randomUUID } from "node:crypto"
 import type {
+  AuthorizationAnswer,
+  AuthorizationCall,
   CedarValueJson,
   EntityJson,
   TypeAndId,
 } from "@cedar-policy/cedar-wasm"
-import { isAuthorized, policySetTextToParts } from "@cedar-policy/cedar-wasm"
+import {
+  policySetTextToParts,
+  preparsePolicySet,
+  preparseSchema,
+  statefulIsAuthorized,
+} from "@cedar-policy/cedar-wasm"
 import type {
   AuthorizationEvalInput,
   AuthorizationEvalResult,
@@ -13,6 +21,42 @@ import type {
 
 const uid = (type: string, id: string): TypeAndId => ({ type, id })
 const ent = (ref: TypeAndId): CedarValueJson => ({ __entity: ref })
+
+// Cedar has no cache eviction API. Reuse one private slot, keyed by the complete
+// artifacts, rather than retaining a new WASM policy/schema entry per request.
+// Preparation and evaluation are synchronous: no other request can replace the
+// slot between them. Decisions and request entities are never cached.
+const ARTIFACT_SLOT = `dashboard-authorization-explorer:${randomUUID()}`
+let preparedArtifacts: { policies: string; schema: string } | null = null
+
+const authorizeWithArtifacts = (
+  policies: string,
+  schema: string,
+  request: Omit<AuthorizationCall, "policies" | "schema">,
+): AuthorizationAnswer => {
+  if (
+    preparedArtifacts?.policies !== policies ||
+    preparedArtifacts.schema !== schema
+  ) {
+    preparedArtifacts = null
+    const policyResult = preparsePolicySet(ARTIFACT_SLOT, {
+      staticPolicies: policies,
+    })
+    if (policyResult.type === "failure") {
+      return { ...policyResult, warnings: [] }
+    }
+    const schemaResult = preparseSchema(ARTIFACT_SLOT, schema)
+    if (schemaResult.type === "failure") {
+      return { ...schemaResult, warnings: [] }
+    }
+    preparedArtifacts = { policies, schema }
+  }
+  return statefulIsAuthorized({
+    ...request,
+    preparsedPolicySetId: ARTIFACT_SLOT,
+    preparsedSchemaName: ARTIFACT_SLOT,
+  })
+}
 
 const formatLocalTimeAsUtc = (date: Date): string => {
   const pad2 = (n: number) => String(n).padStart(2, "0")
@@ -60,10 +104,9 @@ const buildEntities = (input: AuthorizationEvalInput): EntityJson[] => {
       parents: [],
     })
   } else if (input.principal.type === "PF::PublicLink") {
-    const todo = uid("PF::Todo", input.resource.id)
     entities.push({
       uid: principalUid,
-      attrs: { todo: ent(todo) },
+      attrs: { todoId: input.principal.id },
       parents: [],
     })
   }
@@ -93,8 +136,6 @@ const buildEntities = (input: AuthorizationEvalInput): EntityJson[] => {
     if (entityType.endsWith("::ProviderUser")) return principalUid
     if (entityType.endsWith("::Role"))
       return firstRole ? roleRef(firstRole) : uid(entityType, "prototype")
-    if (entityType.endsWith("::Todo"))
-      return uid("PF::Todo", `${input.orgUnitId}/prototype/todo-1`)
     return uid(entityType, "prototype")
   }
 
@@ -173,7 +214,14 @@ const emptyRequest = (input: AuthorizationEvalInput) => ({
   principal: input.principal,
   action: { type: "PF::Action", id: input.action },
   resource: input.resource,
-  context: { nodeEnv: "unknown", requestTime: "" },
+  context: {
+    nodeEnv: "unknown",
+    requestTime: "",
+    weekday: "",
+    runtimeMode: "unknown",
+    stage: "",
+    environment: "",
+  },
   entityCount: 0,
 })
 
@@ -185,9 +233,34 @@ export const evaluateWithArtifacts = (
 ): AuthorizationEvalResult => {
   const now = new Date()
   const requestTime = formatLocalTimeAsUtc(now)
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+  })
+    .format(now)
+    .toLowerCase()
   const context: Record<string, CedarValueJson> = {
     requestTime: { __extn: { fn: "datetime", arg: requestTime } },
+    weekday,
     nodeEnv: process.env["NODE_ENV"] ?? "development",
+    runtimeMode:
+      process.env["PF_RUNTIME_MODE"] === "local" ||
+      process.env["PF_RUNTIME_MODE"] === "deployed"
+        ? process.env["PF_RUNTIME_MODE"]
+        : "unknown",
+    stage: process.env["PF_STAGE"] ?? "",
+    environment: process.env["PF_ENV"] ?? "",
+    ...(input.completionContext
+      ? {
+          todoId: input.completionContext.todoId,
+          ...(input.completionContext.assignedTo
+            ? {
+                assignedTo: ent(
+                  uid("PF::ProviderUser", input.completionContext.assignedTo),
+                ),
+              }
+            : {}),
+        }
+      : {}),
   }
   const entities = buildEntities(input)
   const request = {
@@ -196,18 +269,21 @@ export const evaluateWithArtifacts = (
     resource: input.resource,
     context: {
       nodeEnv: String(context["nodeEnv"]),
+      runtimeMode: String(context["runtimeMode"]),
+      stage: String(context["stage"]),
+      environment: String(context["environment"]),
       requestTime,
+      weekday,
+      ...input.completionContext,
     },
     entityCount: entities.length,
   }
 
-  const answer = isAuthorized({
+  const answer = authorizeWithArtifacts(policies, schema, {
     principal: uid(input.principal.type, input.principal.id),
     action: uid("PF::Action", input.action),
     resource: uid(input.resource.type, input.resource.id),
     context,
-    schema,
-    policies: { staticPolicies: policies },
     entities,
     validateRequest: true,
   })

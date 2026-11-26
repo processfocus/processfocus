@@ -24,15 +24,13 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
-    "@effect/sql-drizzle": "^0.51.0",
     "@pf/db-info": "workspace:*",
     "@pf/drizzle-sqlite": "*",
     "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@effect/sql-sqlite-bun": "^0.53.0",
+    "@effect/sql-sqlite-bun": "4.1.4",
     "@pf/layer-sqlite-bun": "*"
   },
   "license": "SEE LICENSE IN LICENSE.md"

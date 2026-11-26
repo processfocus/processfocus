@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, DateTime, Effect, Layer, Option, type Schema } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { BusinessCalendarError } from "@pf/business-calendar"
 import {
   type ExecutionListQuery,
@@ -8,7 +8,6 @@ import {
   ProviderUserQueries,
   type TodoStepRow,
   decodeDelegationAudit,
-  delegationAuditLabel,
 } from "@pf/graphql-db-operations"
 import type {
   Execution,
@@ -23,6 +22,7 @@ import {
   normalizePath,
   toConstructPath,
 } from "@pf/process"
+import { attributedActorDisplayLabel } from "../actor-presentation"
 import type { ExecutionEventDocument } from "../execution-events"
 import {
   type InvalidCalendarDataError,
@@ -36,11 +36,13 @@ import type { RxDbCollectionOps } from "./collection-ops"
  * Step data for GraphQL output.
  */
 interface ExecutionStepData {
+  deadlineActivity?: string
   id: string
   name: string
   path: string
   status:
     | "Completed"
+    | "Interrupted"
     | "Waiting"
     | "Potential"
     | "Failed"
@@ -113,7 +115,7 @@ export const publicCompletionRecipientEmail = (
     // recipient callbacks in current processes use state/process data only.
     const ctx = buildFlowContext(
       execution.id,
-      DateTime.unsafeMake(execution.startedAt),
+      DateTime.makeUnsafe(execution.startedAt),
       [],
     )
     const recipient = yield* resolveMaybeEffect(
@@ -122,7 +124,7 @@ export const publicCompletionRecipientEmail = (
 
     return typeof recipient === "string" ? recipient : recipient.email
   }).pipe(
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.logWarning("Unable to resolve public completion recipient", {
         executionId: execution.id,
         stepPath,
@@ -194,7 +196,7 @@ const epochMsToIsoOrNull = (
     return null
   }
 
-  return DateTime.formatIso(DateTime.unsafeMake(epochMs))
+  return DateTime.formatIso(DateTime.makeUnsafe(epochMs))
 }
 
 /**
@@ -262,7 +264,22 @@ export const assembleSteps = (
     // The start step is prepended from execution metadata; a todo for that
     // same path is not a second timeline entry.
     if (toConstructPath(step.path) === startPathKey) return
-    addStep(step, todoId)
+    const deadlineActivity = (
+      executionTodos.find((todo) => todo.todoId === todoId)?.deadlines ?? []
+    )
+      .map((deadline) => {
+        const activity = deadline.triggeredAt
+          ? `triggered ${deadline.triggeredAt}`
+          : deadline.disarmedAt
+            ? `disarmed ${deadline.disarmedAt}`
+            : "pending"
+        return `Deadline ${deadline.name}: ${activity}; due ${deadline.dueAt}`
+      })
+      .join("\n")
+    addStep(
+      { ...step, ...(deadlineActivity ? { deadlineActivity } : {}) },
+      todoId,
+    )
   }
 
   // 0. Prepend the start step as first completed step
@@ -287,11 +304,12 @@ export const assembleSteps = (
     externalSubmitterEmail: execution.startStepExternalParticipantEmail,
     providerUserId: execution.startedById,
     providerUserFirstName:
-      delegationAuditLabel(execution.createdBy ?? "") ??
+      attributedActorDisplayLabel(execution.createdBy ?? "") ??
       execution.startedByFirstName,
-    providerUserLastName: delegationAuditLabel(execution.createdBy ?? "")
-      ? null
-      : execution.startedByLastName,
+    providerUserLastName:
+      attributedActorDisplayLabel(execution.createdBy ?? "") !== undefined
+        ? null
+        : execution.startedByLastName,
     providerUserPicture: execution.startedByPicture,
     providerUserOrgUnit: execution.startedByOrgUnit,
     assignedProviderUserEmail: null,
@@ -315,7 +333,7 @@ export const assembleSteps = (
         id: todo.todoId,
         name: todo.stepName,
         path: todo.stepPath,
-        status: "Completed",
+        status: todo.interrupted ? "Interrupted" : "Completed",
         failureReason: null,
         roleId: todo.roleId,
         roleName: todo.roleName,
@@ -325,18 +343,20 @@ export const assembleSteps = (
         externalSubmitterEmail: todo.externalParticipantEmail,
         providerUserId: todo.providerUserId,
         providerUserFirstName:
-          delegationAuditLabel(todo.updatedBy ?? "") ??
+          attributedActorDisplayLabel(todo.updatedBy ?? "") ??
           todo.providerUserFirstName,
-        providerUserLastName: delegationAuditLabel(todo.updatedBy ?? "")
-          ? null
-          : todo.providerUserLastName,
+        providerUserLastName:
+          attributedActorDisplayLabel(todo.updatedBy ?? "") !== undefined
+            ? null
+            : todo.providerUserLastName,
         providerUserPicture: todo.providerUserPicture,
         providerUserOrgUnit: todo.providerUserOrgUnit,
         assignedProviderUserEmail: todo.assignedProviderUserEmail,
         startedAt: epochMsToIsoOrNull(todo.createdAt),
-        completedAt:
-          epochMsToIsoOrNull(todo.updatedAt) ??
-          epochMsToIsoOrNull(todo.createdAt),
+        completedAt: todo.interrupted
+          ? null
+          : (epochMsToIsoOrNull(todo.updatedAt) ??
+            epochMsToIsoOrNull(todo.createdAt)),
       },
       todo.todoId,
     )
@@ -363,11 +383,12 @@ export const assembleSteps = (
         externalSubmitterEmail: todo.externalParticipantEmail,
         providerUserId: todo.providerUserId,
         providerUserFirstName:
-          delegationAuditLabel(todo.updatedBy ?? "") ??
+          attributedActorDisplayLabel(todo.updatedBy ?? "") ??
           todo.providerUserFirstName,
-        providerUserLastName: delegationAuditLabel(todo.updatedBy ?? "")
-          ? null
-          : todo.providerUserLastName,
+        providerUserLastName:
+          attributedActorDisplayLabel(todo.updatedBy ?? "") !== undefined
+            ? null
+            : todo.providerUserLastName,
         providerUserPicture: todo.providerUserPicture,
         providerUserOrgUnit: todo.providerUserOrgUnit,
         assignedProviderUserEmail: todo.assignedProviderUserEmail,
@@ -582,9 +603,9 @@ export const calculateSlaTarget = (
   slaUnit: string | null,
 ): string | null => {
   if (slaValue == null || slaUnit == null) return null
-  const startedAtDt = DateTime.unsafeMake(startedAt)
+  const startedAtDt = DateTime.makeUnsafe(startedAt)
   const slaMs = slaToMs(slaValue, slaUnit)
-  return DateTime.formatIso(DateTime.add(startedAtDt, { millis: slaMs }))
+  return DateTime.formatIso(DateTime.add(startedAtDt, { milliseconds: slaMs }))
 }
 
 /**
@@ -603,10 +624,12 @@ export const calculateSlaWarning = (
 ): string | null => {
   // All three values must be configured - no default for warning threshold
   if (slaValue == null || slaUnit == null || warningPercent == null) return null
-  const startedAtDt = DateTime.unsafeMake(startedAt)
+  const startedAtDt = DateTime.makeUnsafe(startedAt)
   const slaMs = slaToMs(slaValue, slaUnit)
   const warningMs = slaMs * (warningPercent / 100)
-  return DateTime.formatIso(DateTime.add(startedAtDt, { millis: warningMs }))
+  return DateTime.formatIso(
+    DateTime.add(startedAtDt, { milliseconds: warningMs }),
+  )
 }
 
 /**
@@ -623,6 +646,7 @@ const mapToGraphql = (
   return {
     id: execution.id,
     startedByEmail: execution.startedByEmail,
+    startedByServiceAccountId: execution.startedByServiceAccountId ?? null,
     startedByRolePath: execution.startedByRolePath,
     stepOrgUnitPaths: assembled.steps.flatMap((step) =>
       (step.status === "Completed" ||
@@ -665,6 +689,7 @@ const mapToGraphql = (
       name: step.name,
       path: step.path,
       status: step.status,
+      deadlineActivity: step.deadlineActivity ?? null,
       failureReason: step.failureReason,
       notStartedReason: step.notStartedReason ?? null,
       role: step.completingRoleId
@@ -711,13 +736,13 @@ type ExecutionCollectionContract = RxDbCollectionOps<
   ExecutionInputPushRowT0NewDocumentStateT0
 >
 
-export class ExecutionCollectionOps extends Context.Tag(
-  "@pf/graphql-api/ExecutionCollectionOps",
-)<
+export class ExecutionCollectionOps extends Context.Service<
   ExecutionCollectionOps,
   Omit<ExecutionCollectionContract, "pull"> & {
     readonly pull: (
-      ...args: Parameters<ExecutionQueries["Type"]["pullExecution"]>
+      ...args: Parameters<
+        Context.Service.Shape<typeof ExecutionQueries>["pullExecution"]
+      >
     ) => ReturnType<ExecutionCollectionContract["pull"]>
 
     readonly list: (
@@ -730,7 +755,7 @@ export class ExecutionCollectionOps extends Context.Tag(
       | BusinessCalendarError
     >
   }
->() {}
+>()("@pf/graphql-api/ExecutionCollectionOps") {}
 
 /**
  * Live implementation that delegates to ExecutionQueries.
@@ -809,8 +834,9 @@ export const ExecutionCollectionOpsLive = Layer.effect(
                     providerUserId: owner.value.id,
                     providerUserFirstName:
                       todo.failureReason === "Execution abandoned"
-                        ? (delegationAuditLabel(todo.updatedBy ?? "") ?? null)
-                        : `${delegationAuditLabel(todo.updatedBy ?? "")} (initiated work)`,
+                        ? (attributedActorDisplayLabel(todo.updatedBy ?? "") ??
+                          null)
+                        : `${attributedActorDisplayLabel(todo.updatedBy ?? "")} (initiated work)`,
                     providerUserLastName: null,
                   }
                 }),

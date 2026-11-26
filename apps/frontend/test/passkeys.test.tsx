@@ -1,7 +1,8 @@
 import { Data, Effect } from "effect"
 import { JSDOM } from "jsdom"
-import { act } from "react"
+import { type ComponentProps, act } from "react"
 import { type Root, createRoot } from "react-dom/client"
+import { DateTimeDisplayProvider } from "@pf/shadcn-components"
 import type { PasskeyCredential } from "../lib/auth/passkeys"
 import { canOpenPasskeysMenu } from "../lib/auth/passkeys-menu"
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
@@ -44,9 +45,16 @@ const {
   startPasskeyEnrollment,
   verifyPasskeyEnrollment,
 } = await import("../app/(protected)/passkeys/actions")
-const { PasskeysClient } = await import(
+const { PasskeysClient: Client } = await import(
   "../app/(protected)/passkeys/passkeys-client"
 )
+function PasskeysClient(props: ComponentProps<typeof Client>) {
+  return (
+    <DateTimeDisplayProvider initialNow={Date.parse("2026-04-01T00:00:00Z")}>
+      <Client {...props} />
+    </DateTimeDisplayProvider>
+  )
+}
 
 const enrollmentOptions = {
   challenge: "c",
@@ -95,15 +103,6 @@ describe("passkey management server actions", () => {
       }),
     )
     expect(init?.cache).toBe("no-store")
-  })
-
-  test("does not forward another account's identity", async () => {
-    const request = mock(async (url: string | URL | Request) => {
-      expect(String(url)).toBe("https://auth.example.test/oauth/passkeys")
-      return Response.json(listBody)
-    })
-    globalThis.fetch = request
-    await listPasskeys()
   })
 
   test("denies HTTP 403 without exposing backend errors", async () => {

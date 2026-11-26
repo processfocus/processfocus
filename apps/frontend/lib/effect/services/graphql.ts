@@ -1,5 +1,6 @@
-import { Context, Effect, Layer } from "effect"
-import { GraphQLClient, type RequestDocument } from "graphql-request"
+import { Context, Data, Effect, Layer } from "effect"
+import { type DocumentNode, print } from "graphql"
+import { GraphQLClient } from "graphql-request"
 import {
   type AccessToken,
   GraphQLAuthenticationError,
@@ -7,31 +8,42 @@ import {
 } from "./access-token"
 import { getGraphqlEndpoint } from "@/lib/graphql/endpoint"
 
+export class GraphQLRequestError extends Data.TaggedError(
+  "GraphQLRequestError",
+)<{
+  readonly message: string
+}> {}
+
 /**
  * Extract the operation name from a GraphQL query/mutation.
  * Falls back to truncated document if no name found.
  */
-const getQueryName = (doc: RequestDocument): string => {
-  const str = String(doc)
-  const match = str.match(/(?:query|mutation|subscription)\s+(\w+)/)
-  return match?.[1] ?? str.slice(0, 50)
+const getQueryName = (query: string): string => {
+  const match = query.match(/(?:query|mutation|subscription)\s+(\w+)/)
+  return match?.[1] ?? query.slice(0, 50)
 }
+
+type QueryDocument = string | DocumentNode
 
 /**
  * GraphQL client service for making GraphQL requests.
  * Wraps graphql-request with Effect error handling and automatic authentication.
  */
-export class GraphQLService extends Context.Tag("@pf/frontend/GraphQLService")<
+export class GraphQLService extends Context.Service<
   GraphQLService,
   {
     readonly client: GraphQLClient
     readonly request: <T>(
-      query: RequestDocument,
+      query: QueryDocument,
       variables?: Record<string, unknown>,
       headers?: HeadersInit,
-    ) => Effect.Effect<T, Error | GraphQLAuthenticationError, AccessToken>
+    ) => Effect.Effect<
+      T,
+      GraphQLRequestError | GraphQLAuthenticationError,
+      AccessToken
+    >
   }
->() {}
+>()("@pf/frontend/GraphQLService") {}
 
 /**
  * Creates a GraphQL service layer with the configured endpoint.
@@ -40,7 +52,7 @@ export class GraphQLService extends Context.Tag("@pf/frontend/GraphQLService")<
  * The client is configured with credentials: "include" to send cookies automatically
  * in browser contexts.
  *
- * Authentication is handled automatically via the AccessToken FiberRef - the service
+ * Authentication is handled automatically via the request-local AccessToken service - the service
  * will fail with GraphQLAuthenticationError if no token is available. This ensures
  * all GraphQL requests are properly authenticated.
  *
@@ -57,7 +69,7 @@ export const GraphQLServiceLive = Layer.effect(
     return GraphQLService.of({
       client,
       request: <T>(
-        query: RequestDocument,
+        query: QueryDocument,
         variables?: Record<string, unknown>,
         headers?: HeadersInit,
       ) =>
@@ -76,15 +88,19 @@ export const GraphQLServiceLive = Layer.effect(
           const authHeaders: HeadersInit = { Authorization: `Bearer ${token}` }
           const mergedHeaders = { ...authHeaders, ...headers }
 
+          // The HTTP client can use a different GraphQL.js major in a consumer install.
+          const document = typeof query === "string" ? query : print(query)
           return yield* Effect.tryPromise({
-            try: () => client.request<T>(query, variables, mergedHeaders),
+            try: () => client.request<T>(document, variables, mergedHeaders),
             catch: (error) =>
-              new Error(`GraphQL request failed: ${String(error)}`),
+              new GraphQLRequestError({
+                message: `GraphQL request failed: ${String(error)}`,
+              }),
           }).pipe(
             Effect.withSpan("graphql.request", {
               attributes: {
-                "graphql.operation": getQueryName(query),
-                "graphql.document": String(query).slice(0, 200),
+                "graphql.operation": getQueryName(document),
+                "graphql.document": document.slice(0, 200),
               },
             }),
           )

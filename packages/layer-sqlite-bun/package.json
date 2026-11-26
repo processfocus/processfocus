@@ -14,10 +14,9 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/sql": "^0.52.1",
-    "@effect/sql-sqlite-bun": "^0.53.0",
+    "@effect/sql-sqlite-bun": "4.1.4",
     "@pf/db-info": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

@@ -16,16 +16,221 @@ import {
 } from "../tools/project-boundaries/policy"
 import {
   isRuntimeHostDependencyFile,
+  validateAccountingOwnership,
   validateExecutorDescriptorOwnership,
+  validateGraphqlSchemaCredentialOwnership,
+  validateIdentityManagementOwnership,
   validateNonGraphReferenceFiles,
   validateOrganisationPluginModel,
   validatePathDependency,
   validateProjectGraph,
   validatePublicationAllowlistUniqueness,
   validatePublicationStatus,
+  validateRealtimeOwnership,
   validateReleaseDependencies,
+  validateRuntimeContractOwnership,
   validateRuntimeHostDependencyFiles,
 } from "./check-project-boundaries"
+
+test("endpoint discovery cannot reclaim realtime behavior and the client stays portable", () => {
+  for (const content of [
+    'export * from "@pf/realtime-client"',
+    'export { AppSyncEventsClient as Client } from "./renamed"',
+    "export class SubscriptionPresenceLease {}",
+  ]) {
+    expect(
+      validateRealtimeOwnership([
+        { path: "packages/frontend-endpoints/src/index.ts", content },
+      ]),
+    ).toHaveLength(1)
+  }
+  for (const specifier of [
+    "node:fs",
+    "fs/promises",
+    "@aws-sdk/client-appsync",
+    "react",
+    "@pf/frontend-endpoints",
+    "@pf/project-accounting",
+    "@pf/graphql-api",
+    "../../../cloud/org/auth",
+  ]) {
+    expect(
+      validateRealtimeOwnership([
+        {
+          path: "packages/realtime-client/src/renamed.ts",
+          content: `import * as dependency from "${specifier}"`,
+        },
+      ]),
+    ).toHaveLength(1)
+  }
+  expect(
+    validateRealtimeOwnership([
+      {
+        path: "packages/frontend-endpoints/src/index.ts",
+        content: 'export * from "./endpoint"',
+      },
+      {
+        path: "packages/frontend-endpoints/src/port-files.ts",
+        content: 'import { readFileSync } from "node:fs"',
+      },
+      {
+        path: "packages/realtime-client/src/index.ts",
+        content: 'export * from "./appsync-client"',
+      },
+      {
+        path: "apps/frontend/lib/appsync-events/client.ts",
+        content: 'import { AppSyncEventsClient } from "@pf/realtime-client"',
+      },
+    ]),
+  ).toEqual([])
+})
+
+test("graphql-schema rejects credential dependencies, crypto and secret configuration regardless of helper names", () => {
+  for (const content of [
+    'import { createCipheriv as seal } from "node:crypto"',
+    'const crypto = require("crypto")',
+    'const key = globalThis.crypto.subtle.importKey("raw", bytes)',
+    'const secret = process.env["PUBLIC_TODO_TOKEN_SECRET"]',
+    'const secret = process.env["INVITATION_REGISTRATION_ENCRYPTION_KEY"]',
+    'export * from "@pf/public-completion/credentials"',
+    'export * from "@pf/identity-management/credentials"',
+    'export * from "./public-todo-token"',
+  ]) {
+    expect(
+      validateGraphqlSchemaCredentialOwnership([
+        { path: "packages/graphql-schema/src/renamed.ts", content },
+      ]),
+    ).toHaveLength(1)
+  }
+  expect(
+    validateGraphqlSchemaCredentialOwnership([
+      {
+        path: "packages/public-completion/src/credentials.ts",
+        content: 'import { createCipheriv } from "node:crypto"',
+      },
+      {
+        path: "packages/graphql-api/src/resolver.ts",
+        content:
+          'import { decryptPublicTodoToken } from "@pf/public-completion/credentials"',
+      },
+      {
+        path: "packages/graphql-schema/src/index.ts",
+        content:
+          'export * from "./errors"; export * from "./generated/types.generated"',
+      },
+      {
+        path: "packages/graphql-schema/src/errors.ts",
+        content:
+          'class PublicCompletionInvitationNotFound extends Data.TaggedError("PublicCompletionInvitationNotFound") {}',
+      },
+    ]),
+  ).toEqual([])
+})
+
+test("GraphQL packages cannot reclaim identity lifecycle or credential ownership", () => {
+  for (const content of [
+    "export const issueRegistrationLink = () => {}",
+    "export function grantRoleToProviderUser() {}",
+    "export const decryptRegistrationLinkToken = () => {}",
+    'export * from "@pf/identity-management"',
+    'export { hashRegistrationLinkToken } from "@pf/identity-management/credentials"',
+    'export * from "./registration-link-token"',
+  ]) {
+    expect(
+      validateIdentityManagementOwnership([
+        { path: "packages/graphql-schema/src/index.ts", content },
+      ]),
+    ).toHaveLength(1)
+  }
+  expect(
+    validateIdentityManagementOwnership([
+      {
+        path: "packages/graphql-db-operations/src/lib/settings-queries.ts",
+        content:
+          'export { InvitationSource } from "@pf/identity-management/persistence"',
+      },
+      {
+        path: "packages/identity-management/src/credentials.ts",
+        content: "export const decryptRegistrationLinkToken = () => {}",
+      },
+      {
+        path: "packages/graphql-api/src/resolver.ts",
+        content:
+          'import { issueRegistrationLink } from "@pf/identity-management"',
+      },
+    ]),
+  ).toEqual([])
+})
+
+test("accounting contracts cannot drift into generic modules or revive the queue facade", () => {
+  for (const content of [
+    "export class ProjectAccountingEvents extends Context.Service {}",
+    'class Renamed extends Context.Service<Renamed, {}>()("@pf/process/UsageCostService") {}',
+    'export const AWS_COST_EXPLORER_COST_SOURCE = "aws-cost-explorer"',
+    'export { ProjectAccountingEvents } from "@pf/project-accounting"',
+    'import { QueueService } from "@pf/queue-service"',
+  ]) {
+    expect(
+      validateAccountingOwnership([
+        { path: "packages/process/src/contracts.ts", content },
+      ]),
+    ).toHaveLength(1)
+  }
+  expect(
+    validateAccountingOwnership([
+      {
+        path: "cloud/accounting/src/contracts.ts",
+        content: "export interface UsageCostServiceApi {}",
+      },
+      {
+        path: "packages/project-accounting/src/contracts.ts",
+        content:
+          "export const PROJECT_ACCOUNTING_QUEUE = 'project-accounting-event'",
+      },
+      {
+        path: "runtime/local/src/adapter.ts",
+        content:
+          'import { ProjectAccountingEvents } from "@pf/project-accounting"',
+      },
+      {
+        path: "packages/process/src/contracts.ts",
+        content: "// interface UsageCostServiceApi {}",
+      },
+    ]),
+  ).toEqual([])
+})
+
+test("runtime owns document-store and notification declarations across workspace consumers", () => {
+  for (const content of [
+    "export interface EmailMessage { readonly to: string }",
+    "export type NotificationDeliveryReceipt = { providerMessageId: string }",
+    'class Renamed extends Context.Service<Renamed, {}>()("@pf/job-handler/EmailSender") {}',
+    'export class FileNotFoundError extends Data.TaggedError("FileNotFoundError")<{}> {}',
+  ]) {
+    expect(
+      validateRuntimeContractOwnership([
+        { path: "plugins/example/src/contracts.ts", content },
+      ]),
+    ).toHaveLength(1)
+  }
+  expect(
+    validateRuntimeContractOwnership([
+      {
+        path: "packages/runtime/src/lib/notification.ts",
+        content: "export interface EmailMessage {}",
+      },
+      {
+        path: "runtime/local/src/adapter.ts",
+        content:
+          'import { EmailSender, type EmailMessage } from "@processfocus/runtime"',
+      },
+      {
+        path: "plugins/example/src/adapter.ts",
+        content: "// interface EmailMessage {}",
+      },
+    ]),
+  ).toEqual([])
+})
 
 test("rejects catalog composition and retired host APIs", () => {
   for (const content of [
@@ -299,53 +504,6 @@ describe("project boundary policy", () => {
     ])
   })
 
-  test("allows Google Drive packed-consumer verification from the AWS runtime project", () => {
-    expect(
-      validateRuntimeHostDependencyFiles([
-        {
-          path: "runtime/aws/project.json",
-          content: JSON.stringify({
-            targets: {
-              "private-consumer": {
-                dependsOn: [
-                  {
-                    projects: ["@processfocus/plugin-google-drive"],
-                    target: "pack-check",
-                  },
-                ],
-              },
-            },
-          }),
-        },
-      ]),
-    ).toEqual([])
-  })
-
-  test.each(["@processfocus/plugin-aws-lambda", "@processfocus/plugin-xero"])(
-    "allows %s release verification from the AWS runtime project",
-    (packageName) => {
-      expect(
-        validateRuntimeHostDependencyFiles([
-          {
-            path: "runtime/aws/project.json",
-            content: JSON.stringify({
-              targets: {
-                "private-consumer": {
-                  dependsOn: [
-                    {
-                      projects: [packageName],
-                      target: "pack-check",
-                    },
-                  ],
-                },
-              },
-            }),
-          },
-        ]),
-      ).toEqual([])
-    },
-  )
-
   test("rejects non-pack-check Docker plugin dependencies from private-consumer", () => {
     expect(
       validateRuntimeHostDependencyFiles([
@@ -400,28 +558,6 @@ describe("project boundary policy", () => {
       "runtime/aws has a concrete Resend plugin dependency in runtime/aws/src/graphql-server.ts. Depend on @processfocus/runtime server-plugin and webhook callback contracts instead.",
       "runtime/local has a concrete Resend plugin dependency in runtime/local/package.json. Depend on @processfocus/runtime server-plugin and webhook callback contracts instead.",
     ])
-  })
-
-  test("allows Resend release verification from the AWS runtime project", () => {
-    expect(
-      validateRuntimeHostDependencyFiles([
-        {
-          path: "runtime/aws/project.json",
-          content: JSON.stringify({
-            targets: {
-              "private-consumer": {
-                dependsOn: [
-                  {
-                    projects: ["@processfocus/plugin-resend"],
-                    target: "pack-check",
-                  },
-                ],
-              },
-            },
-          }),
-        },
-      ]),
-    ).toEqual([])
   })
 
   test("rejects every represented public-to-private edge kind", () => {
@@ -1134,7 +1270,14 @@ test("Biome rejects all supported cloud-org import forms in frontend source", as
     const fixture = join(fixtureRoot, "nested", name)
     await writeFile(fixture, source)
     const childProcess = Bun.spawn(
-      ["bunx", "biome", "lint", "--diagnostic-level=error", fixture],
+      [
+        "bunx",
+        "biome",
+        "lint",
+        "--vcs-enabled=false",
+        "--diagnostic-level=error",
+        fixture,
+      ],
       { stdout: "pipe", stderr: "pipe" },
     )
     const [exitCode, stdout, stderr] = await Promise.all([

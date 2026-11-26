@@ -2,11 +2,11 @@
 
 import { useQuery } from "@tanstack/react-query"
 import { ClientError } from "graphql-request"
-import { useRouter } from "next/navigation"
 import { useState } from "react"
-import { type FieldError, dynamicForm } from "@pf/form"
-import { parseNullableClientFormDefinition } from "@pf/form-client-representation/client-form-definition"
+import type { FieldError, FormActionsContext } from "@pf/form"
 import { Button } from "@pf/shadcn-components"
+import { ListSchemaForm } from "./list-schema-form"
+import { useListRefresh } from "@/app/(protected)/lists/lib/list-refresh-provider"
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,7 @@ import {
   assertGraphqlName,
   listCreateFormMetadataQuery,
 } from "@/lib/graphql/list-queries"
+import { LookupClientProvider } from "@/lib/graphql/lookup-provider"
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -61,7 +62,7 @@ function ListCreateForm({
   onClose: () => void
 }) {
   const client = useGraphqlClient()
-  const router = useRouter()
+  const refreshState = useListRefresh()
   const metadata = useQuery({
     queryKey: ["list-create-form", listPath],
     queryFn: async () =>
@@ -79,13 +80,12 @@ function ListCreateForm({
   if (!metadata.data)
     return <p role="alert">You cannot create records in this List.</p>
   const data = metadata.data
-  return dynamicForm({
+  const options = {
     draftId: `list-create-${listPath}`,
-    stepPath: listPath,
-    formDefinition: parseNullableClientFormDefinition(data.formDefinition),
     defaultValues: objectValue(data.defaultValues),
-    jsonSchema: objectValue(data.jsonSchema),
-    handleSubmit: async (values): Promise<FieldError[] | undefined> => {
+    handleSubmit: async (
+      values: Record<string, unknown>,
+    ): Promise<FieldError[] | undefined> => {
       assertGraphqlName(data.createMutationName, "mutation name")
       assertGraphqlName(data.createInputTypeName, "input type name")
       try {
@@ -93,7 +93,7 @@ function ListCreateForm({
           `mutation CreateListItem($input: ${data.createInputTypeName}!) { ${data.createMutationName}(input: $input) }`,
           { input: values },
         )
-        router.refresh()
+        refreshState.invalidate(listPath)
         onClose()
         return undefined
       } catch (error) {
@@ -128,7 +128,7 @@ function ListCreateForm({
         ]
       }
     },
-    renderActions: ({ formState }) => (
+    renderActions: ({ formState }: FormActionsContext) => (
       <div className="flex justify-end gap-3">
         <Button
           type="button"
@@ -143,5 +143,18 @@ function ListCreateForm({
         </Button>
       </div>
     ),
-  })
+  }
+  const formPath = `${listPath}/create`
+  return (
+    <LookupClientProvider listCreate>
+      <ListSchemaForm
+        formPath={formPath}
+        draftId={options.draftId}
+        defaultValues={options.defaultValues ?? {}}
+        onSubmit={options.handleSubmit}
+      >
+        {options.renderActions}
+      </ListSchemaForm>
+    </LookupClientProvider>
+  )
 }

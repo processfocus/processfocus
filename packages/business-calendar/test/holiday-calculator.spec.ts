@@ -1,4 +1,4 @@
-import { DateTime, Effect } from "effect"
+import { Cause, DateTime, Effect, Option } from "effect"
 import {
   Friday,
   Monday,
@@ -47,11 +47,11 @@ describe("calculateEasterSunday", () => {
     const result = Effect.runSyncExit(calculateEasterSunday(1500))
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
-      const error = result.cause
-      expect(error._tag).toBe("Fail")
-      if (error._tag === "Fail") {
-        expect(error.error).toBeInstanceOf(InvalidYearError)
-        expect((error.error as InvalidYearError).year).toBe(1500)
+      const error = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(error)).toBe(true)
+      if (Option.isSome(error)) {
+        expect(error.value).toBeInstanceOf(InvalidYearError)
+        expect((error.value as InvalidYearError).year).toBe(1500)
       }
     }
   })
@@ -65,10 +65,10 @@ describe("calculateEasterSunday", () => {
     const result = Effect.runSyncExit(calculateEasterSunday(10000))
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
-      const error = result.cause
-      expect(error._tag).toBe("Fail")
-      if (error._tag === "Fail") {
-        expect(error.error).toBeInstanceOf(InvalidYearError)
+      const error = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(error)).toBe(true)
+      if (Option.isSome(error)) {
+        expect(error.value).toBeInstanceOf(InvalidYearError)
       }
     }
   })
@@ -244,12 +244,12 @@ describe("calculateHolidaysForYear", () => {
     const result = Effect.runSyncExit(calculateHolidaysForYear(holidays, 2024))
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
-      const error = result.cause
-      expect(error._tag).toBe("Fail")
-      if (error._tag === "Fail") {
-        expect(error.error).toBeInstanceOf(InvalidDateError)
-        expect((error.error as InvalidDateError).message).toContain("Month 2")
-        expect((error.error as InvalidDateError).day).toBe(30)
+      const error = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(error)).toBe(true)
+      if (Option.isSome(error)) {
+        expect(error.value).toBeInstanceOf(InvalidDateError)
+        expect((error.value as InvalidDateError).message).toContain("Month 2")
+        expect((error.value as InvalidDateError).day).toBe(30)
       }
     }
   })

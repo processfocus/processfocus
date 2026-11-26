@@ -7,7 +7,6 @@ import type {
 } from "./types"
 import type { ProcessWorkflowQuery } from "@/lib/generated/gql/graphql"
 
-// Layout constants
 const INITIAL_SWIMLANE_HEIGHT = 160 // Generous initial height before measurement
 const STEP_WIDTH = 280
 export const DEFAULT_STEP_GAP = 80
@@ -54,6 +53,8 @@ const ANONYMOUS_SWIMLANE_NAME = "Anonymous"
 const STRAIGHT_LINE_Y_TOLERANCE_PX = 0.5
 
 function getFlowLabel(flow: WorkflowFlow): string | undefined {
+  if (flow.deadlineName)
+    return `Deadline: ${flow.deadlineName} (owner stays open)`
   if (flow.condition) return flow.condition
   if (flow.isOnError) {
     return flow.taggedErrors && flow.taggedErrors.length > 0
@@ -233,7 +234,6 @@ function estimateWrappedLabelWidth(label: string): number {
  * After React Flow measures nodes, use applyMeasuredLayout() to center them.
  */
 export function createInitialLayout(workflowData: WorkflowData): LayoutResult {
-  // Guard clause for empty workflows
   if (workflowData.steps.length === 0) {
     return { nodes: [], edges: [], phases: [] }
   }
@@ -276,7 +276,6 @@ export function createInitialLayout(workflowData: WorkflowData): LayoutResult {
     index, // color index based on sorted position
     order: phase.order,
   }))
-  // Build lookup for phaseId -> color index
   const phaseIndexMap = new Map<string, number>()
   for (const phase of phases) {
     phaseIndexMap.set(phase.id, phase.index)
@@ -537,7 +536,6 @@ export function createInitialLayout(workflowData: WorkflowData): LayoutResult {
     currentY += swimlaneHeight + SWIMLANE_VERTICAL_GAP
   }
 
-  // Create edges from flows
   const workflowStepNodes = nodes.filter((node) => node.type === "workflowStep")
   const stepYByStepId = getStepDirectionYByStepId(workflowStepNodes)
   const directionByFlowId = new Map<string, FlowDirection>()
@@ -634,7 +632,6 @@ export function createInitialLayout(workflowData: WorkflowData): LayoutResult {
     // Get total outgoing edges from source for spreading
     const totalFromSource = outgoingEdgeCounts.get(flow.sourceStepId) ?? 1
 
-    // Get column info for routing
     const sourceColumn = stepColumnMap.get(flow.sourceStepId) ?? 1
     const targetColumn = stepColumnMap.get(flow.targetStepId) ?? 1
     const gapWidth = gapWidthByColumn.get(sourceColumn) ?? DEFAULT_STEP_GAP
@@ -664,7 +661,6 @@ export function createInitialLayout(workflowData: WorkflowData): LayoutResult {
       labelBgStyle: { fill: "#f8fafc", stroke: "#e2e8f0" },
       labelBgPadding: [4, 2] as [number, number],
       labelBgBorderRadius: 4,
-      // Custom data for edge routing
       data: {
         edgeIndex: edgeIdx,
         totalEdges: totalFromSource,
@@ -681,6 +677,7 @@ export function createInitialLayout(workflowData: WorkflowData): LayoutResult {
           targetLaneId !== undefined &&
           sourceLaneId !== targetLaneId,
         isOnError: flow.isOnError,
+        isDeadline: !!flow.deadlineName,
         isConditional: (!!flow.condition || flow.isElse) && !flow.schedule,
         isScheduled: !!flow.schedule && !flow.condition && !flow.isElse,
         isConditionalAndScheduled:
@@ -807,7 +804,6 @@ export function applyMeasuredLayout(
     currentY += swimlaneHeight + SWIMLANE_VERTICAL_GAP
   }
 
-  // Build new nodes array with updated positions
   const newNodes: Array<Node<WorkflowStepData> | Node<WorkflowSwimlaneData>> =
     []
 

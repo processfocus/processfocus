@@ -89,7 +89,7 @@ export const scanAuthorizedPull = <
         (checkpoint && compareCheckpoints(firstCheckpoint, checkpoint) <= 0) ||
         compareCheckpoints(lastCheckpoint, firstCheckpoint) < 0
       ) {
-        return yield* Effect.dieMessage(
+        return yield* Effect.die(
           "Pull backend returned a non-advancing checkpoint page",
         )
       }

@@ -33,8 +33,8 @@ describe("provider callback error handling", () => {
     )
     expect(Exit.isFailure(defectExit)).toBe(true)
     if (Exit.isFailure(defectExit)) {
-      expect([...Cause.defects(defectExit.cause)]).toHaveLength(1)
-      expect([...Cause.failures(defectExit.cause)]).toHaveLength(0)
+      expect([...defectExit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)]).toHaveLength(1)
+      expect([...defectExit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)]).toHaveLength(0)
     }
 
     // Same helper password/code/passkey providers use for consumer callbacks.
@@ -45,8 +45,8 @@ describe("provider callback error handling", () => {
     )
     expect(Exit.isFailure(typedExit)).toBe(true)
     if (Exit.isFailure(typedExit)) {
-      expect([...Cause.defects(typedExit.cause)]).toHaveLength(0)
-      const failures = [...Cause.failures(typedExit.cause)]
+      expect([...typedExit.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)]).toHaveLength(0)
+      const failures = [...typedExit.cause.reasons.filter(Cause.isFailReason).map((reason) => reason.error)]
       expect(failures).toHaveLength(1)
       const failure = failures[0]
       expect(failure).toBeInstanceOf(ProviderCallbackError)

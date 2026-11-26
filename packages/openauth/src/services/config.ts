@@ -11,10 +11,7 @@ import type { SubjectSchema } from "../subject"
  * Token TTL configuration context.
  * Provides access to configured token lifetimes.
  */
-export class TokenTtlConfig extends Context.Tag("@pf/openauth/TokenTtlConfig")<
-  TokenTtlConfig,
-  TokenTtl
->() {}
+export class TokenTtlConfig extends Context.Service<TokenTtlConfig, TokenTtl>()("@pf/openauth/TokenTtlConfig") {}
 
 /**
  * Create a TokenTtlConfig layer with the given TTL values.
@@ -36,10 +33,7 @@ export const defaultTokenTtl: TokenTtl = {
  * Subject schema configuration context.
  * Provides access to the configured subject types for token validation.
  */
-export class SubjectsConfig extends Context.Tag("@pf/openauth/SubjectsConfig")<
-  SubjectsConfig,
-  SubjectSchema
->() {}
+export class SubjectsConfig extends Context.Service<SubjectsConfig, SubjectSchema>()("@pf/openauth/SubjectsConfig") {}
 
 /**
  * Create a SubjectsConfig layer with the given subject schema.

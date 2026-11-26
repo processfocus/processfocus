@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql"
 import { Context, Data, DateTime, Effect, Layer } from "effect"
+import type { SqlError } from "effect/sql"
 import {
   type BusinessCalendarConfig,
   type BusinessCalendarError,
@@ -96,9 +96,7 @@ export interface SlaCalculationInput {
 /**
  * Service for calculating business-calendar-aware SLA targets.
  */
-export class SlaCalculationService extends Context.Tag(
-  "@pf/graphql-api/SlaCalculationService",
-)<
+export class SlaCalculationService extends Context.Service<
   SlaCalculationService,
   {
     /**
@@ -118,7 +116,7 @@ export class SlaCalculationService extends Context.Tag(
       | BusinessCalendarError
     >
   }
->() {}
+>()("@pf/graphql-api/SlaCalculationService") {}
 
 /**
  * Get number of working days per week from calendar config.
@@ -133,7 +131,7 @@ const getWorkingDaysPerWeek = (config: BusinessCalendarConfig): number => {
  * Internal implementation that calculates SLA targets and estimated completion.
  */
 const calculateSlaTargetsInternal = (
-  calendarQueries: BusinessCalendarQueries["Type"],
+  calendarQueries: Context.Service.Shape<typeof BusinessCalendarQueries>,
 ) => {
   return (executions: SlaCalculationInput[]) =>
     Effect.gen(function* () {
@@ -251,7 +249,7 @@ const calculateSlaTargetsInternal = (
  * Add business time based on SLA unit.
  */
 const addBusinessTime = (
-  calendarService: BusinessCalendarService["Type"],
+  calendarService: Context.Service.Shape<typeof BusinessCalendarService>,
   startedAt: DateTime.Utc,
   value: number,
   unit: SlaUnit,
@@ -282,7 +280,7 @@ const calculateWithClockTime = (
   exec: SlaCalculationInput,
 ): Effect.Effect<SlaTargets, InvalidSlaUnitError> =>
   Effect.gen(function* () {
-    const startedAt = DateTime.unsafeMake(exec.startedAt)
+    const startedAt = DateTime.makeUnsafe(exec.startedAt)
     const hasSla = exec.slaValue != null && exec.slaUnit != null
 
     let slaTargetAt: string | null = null
@@ -320,7 +318,7 @@ const calculateWithClockTime = (
       const midpointMs =
         (exec.typicalDurationMinMs + exec.typicalDurationMaxMs) / 2
       const estimatedTarget = DateTime.add(startedAt, {
-        millis: Math.round(midpointMs),
+        milliseconds: Math.round(midpointMs),
       })
       estimatedCompletionAt = DateTime.formatIso(estimatedTarget)
     }
@@ -346,7 +344,7 @@ const calculateWithCalendar = (
   Effect.gen(function* () {
     const calendarService = yield* BusinessCalendarService
 
-    const startedAt = DateTime.unsafeMake(exec.startedAt)
+    const startedAt = DateTime.makeUnsafe(exec.startedAt)
     const hasSla = exec.slaValue != null && exec.slaUnit != null
 
     // Calculate SLA target only if SLA is configured

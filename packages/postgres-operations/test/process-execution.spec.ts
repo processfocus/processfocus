@@ -1,7 +1,7 @@
-import { SqlClient } from "@effect/sql"
 import { expect, it } from "@effect/vitest"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-postgres"
 import {
   ProcessExecutionOperations,
@@ -13,20 +13,14 @@ import { TypedPostgresDrizzle } from "@pf/service-drizzle-postgres"
 import { PostgresProcessExecutionOperationsLive } from "../src/lib/process-execution"
 import { PostgresTest } from "./postgres-test"
 
-const fixedRequestTime = DateTime.unsafeMake("2026-04-06T10:00:00.000Z")
+const fixedRequestTime = DateTime.makeUnsafe("2026-04-06T10:00:00.000Z")
 
-const RequestTimeTest = Layer.succeed(
-  RequestTime,
-  FiberRef.unsafeMake(fixedRequestTime),
-)
+const RequestTimeTest = Layer.succeed(RequestTime, fixedRequestTime)
 
-const UserDetailsTest = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "TEST_USER",
-    id: "usr-test-process-execution",
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsTest = Layer.succeed(UserDetails, {
+  by: "TEST_USER",
+  id: "usr-test-process-execution",
+} as UserDetailsValue)
 
 const TestLayer = Layer.provideMerge(
   Layer.mergeAll(
@@ -56,7 +50,7 @@ const ensureTestUser = (suffix: string) =>
       id: "usr-test-process-execution",
       provider: `test-provider-${suffix}`,
       sub: `test-sub-${suffix}`,
-      lastLoggedIn: fixedRequestTime,
+      createdAt: fixedRequestTime,
     })
   })
 
@@ -173,7 +167,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("process-execution", (it) => {
           executionId,
         )
 
-        const duplicateInsert = yield* Effect.either(
+        const duplicateInsert = yield* Effect.result(
           sqlClient.withTransaction(
             Effect.gen(function* () {
               const duplicateProcessState =
@@ -191,7 +185,7 @@ it.layer(TestLayer, { timeout: "60 seconds" })("process-execution", (it) => {
           ),
         )
 
-        expect(duplicateInsert._tag).toBe("Left")
+        expect(duplicateInsert._tag).toBe("Failure")
 
         const existingExecution =
           yield* operations.getProcessExecutionStartInfo(executionId)

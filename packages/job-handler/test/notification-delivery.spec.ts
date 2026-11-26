@@ -1,18 +1,24 @@
-import { DateTime, Effect, Layer, Schema } from "effect"
-import { StepCompletionOperations } from "@pf/graphql-db-operations"
 import {
   type EmailMessage,
   EmailSender,
-  NOTIFICATION_DELIVERY_QUEUE,
   NotificationDeliveryConfig,
-  NotificationDeliveryPayloadSchema,
   NotificationDeliverySendError,
+} from "@processfocus/runtime"
+import type { Context } from "effect"
+import { DateTime, Effect, Layer, Logger, Schema } from "effect"
+import { StepCompletionOperations } from "@pf/graphql-db-operations"
+import {
+  LoggingEmailSenderLive,
+  NOTIFICATION_DELIVERY_QUEUE,
+  NotificationDeliveryPayloadSchema,
   notificationDeliveryHandler,
 } from "@pf/job-handler"
 import { describe, expect, it } from "bun:test"
 
 const makeReceiptOpsLayer = (
-  recordPublicCompletionInvitationAttemptReceipt: StepCompletionOperations["Type"]["recordPublicCompletionInvitationAttemptReceipt"],
+  recordPublicCompletionInvitationAttemptReceipt: Context.Service.Shape<
+    typeof StepCompletionOperations
+  >["recordPublicCompletionInvitationAttemptReceipt"],
 ) => {
   const receiptOps = {
     createPublicCompletionInvitationAttempt: () =>
@@ -21,18 +27,92 @@ const makeReceiptOpsLayer = (
       ),
     recordPublicCompletionInvitationAttemptReceipt,
   } satisfies Pick<
-    StepCompletionOperations["Type"],
+    Context.Service.Shape<typeof StepCompletionOperations>,
     | "createPublicCompletionInvitationAttempt"
     | "recordPublicCompletionInvitationAttemptReceipt"
   >
 
   return Layer.succeed(
     StepCompletionOperations,
-    receiptOps as StepCompletionOperations["Type"],
+    receiptOps as Context.Service.Shape<typeof StepCompletionOperations>,
   )
 }
 
+const taskAssignment = Effect.gen(function* () {
+  const now = yield* DateTime.now
+  yield* notificationDeliveryHandler.handle({
+    jobId: "job-notification-001",
+    queue: NOTIFICATION_DELIVERY_QUEUE,
+    payload: {
+      channel: "email",
+      idempotencyKey: "notification-delivery-001",
+      recipient: {
+        userId: "usr-123",
+        email: "person@example.com",
+        displayName: "Pat Person",
+      },
+      todo: {
+        todoId: "todo-123",
+        stepPath: "finance/purchase/finish",
+        processName: "Purchase approval",
+        stepName: "Finish purchase",
+      },
+    },
+    attempts: 1,
+    maxAttempts: 5,
+    availableAt: now,
+    lockedUntil: now,
+  })
+})
+
 describe("Notification Delivery Handler", () => {
+  it.each([
+    [
+      "missing identity",
+      "Skipping notification email because sender identity is not configured",
+    ],
+    [
+      "logging-only transport",
+      "Skipping task-assignment email because no delivery transport is configured",
+    ],
+  ] as const)(
+    "skips task-assignment email with %s",
+    async (reason, warning) => {
+      const messages: unknown[] = []
+      const logger = Logger.make(({ message }) => {
+        if (Array.isArray(message)) messages.push(message[0])
+      })
+      const layer = Layer.mergeAll(
+        Layer.succeed(NotificationDeliveryConfig, {
+          getFrontendBaseUrl: () => "https://console.example.com",
+          getEnvironment: () => undefined,
+          getSenderIdentity: () =>
+            reason === "missing identity"
+              ? undefined
+              : { email: "notifications@example.com" },
+        }),
+        reason === "logging-only transport"
+          ? LoggingEmailSenderLive
+          : Layer.succeed(EmailSender, {
+              send: () =>
+                Effect.die(
+                  "A notification without an identity must not be sent",
+                ),
+            }),
+        Logger.layer([logger]),
+        makeReceiptOpsLayer(() =>
+          Effect.die("No public-completion receipt expected"),
+        ),
+      )
+
+      await Effect.runPromise(taskAssignment.pipe(Effect.provide(layer)))
+
+      expect(messages).toContainEqual(expect.stringContaining(warning))
+      expect(messages).not.toContain("Processing notification-delivery job")
+      expect(messages).not.toContain("Delivered notification email")
+    },
+  )
+
   it("renders a task-assignment email and delegates it to the sender", async () => {
     const emails: EmailMessage[] = []
     const idempotencyKeys: (string | undefined)[] = []
@@ -56,35 +136,8 @@ describe("Notification Delivery Handler", () => {
       }),
     )
 
-    const program = Effect.gen(function* () {
-      const now = yield* DateTime.now
-      yield* notificationDeliveryHandler.handle({
-        jobId: "job-notification-001",
-        queue: NOTIFICATION_DELIVERY_QUEUE,
-        payload: {
-          channel: "email",
-          idempotencyKey: "notification-delivery-001",
-          recipient: {
-            userId: "usr-123",
-            email: "person@example.com",
-            displayName: "Pat Person",
-          },
-          todo: {
-            todoId: "todo-123",
-            stepPath: "finance/purchase/finish",
-            processName: "Purchase approval",
-            stepName: "Finish purchase",
-          },
-        },
-        attempts: 1,
-        maxAttempts: 5,
-        availableAt: now,
-        lockedUntil: now,
-      })
-    })
-
     await Effect.runPromise(
-      program.pipe(Effect.provide(TestLayer)) as Effect.Effect<void>,
+      taskAssignment.pipe(Effect.provide(TestLayer)) as Effect.Effect<void>,
     )
 
     expect(emails).toHaveLength(1)
@@ -309,7 +362,7 @@ describe("Notification Delivery Handler", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const now = yield* DateTime.now
-        const payload = yield* Schema.decodeUnknown(
+        const payload = yield* Schema.decodeUnknownEffect(
           NotificationDeliveryPayloadSchema,
         )({
           channel: "email",
@@ -776,53 +829,5 @@ describe("Notification Delivery Handler", () => {
     expect(emails[0]?.html).toContain("Database connection timed out")
     expect(emails[0]?.html).toContain("...")
     expect(emails[0]?.html).not.toContain("END")
-  })
-
-  it("skips delivery when notifications are not configured", async () => {
-    let sendCalls = 0
-
-    const TestLayer = Layer.mergeAll(
-      Layer.succeed(NotificationDeliveryConfig, {
-        getFrontendBaseUrl: () => "https://console.example.com",
-        getEnvironment: () => undefined,
-        getSenderIdentity: () => undefined,
-      }),
-      Layer.succeed(EmailSender, {
-        send: () =>
-          Effect.sync(() => {
-            sendCalls++
-            return undefined
-          }),
-      }),
-    )
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const now = yield* DateTime.now
-        yield* notificationDeliveryHandler.handle({
-          jobId: "job-notification-003",
-          queue: NOTIFICATION_DELIVERY_QUEUE,
-          payload: {
-            channel: "email",
-            recipient: {
-              userId: "usr-123",
-              email: "person@example.com",
-            },
-            todo: {
-              todoId: "todo-123",
-              stepPath: "finance/purchase/finish",
-              processName: "Purchase approval",
-              stepName: "Finish purchase",
-            },
-          },
-          attempts: 1,
-          maxAttempts: 5,
-          availableAt: now,
-          lockedUntil: now,
-        })
-      }).pipe(Effect.provide(TestLayer)) as Effect.Effect<void>,
-    )
-
-    expect(sendCalls).toBe(0)
   })
 })

@@ -20,7 +20,7 @@ class SubscriptionNotSupportedError extends Data.TaggedError(
 /**
  * Service for broadcasting todo changes to WebSocket subscribers
  */
-export class TodoEvents extends Context.Tag("@pf/graphql-api/TodoEvents")<
+export class TodoEvents extends Context.Service<
   TodoEvents,
   {
     /**
@@ -56,4 +56,4 @@ export class TodoEvents extends Context.Tag("@pf/graphql-api/TodoEvents")<
       SubscriptionNotSupportedError
     >
   }
->() {}
+>()("@pf/graphql-api/TodoEvents") {}

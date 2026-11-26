@@ -1,10 +1,10 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import {
   AcknowledgeError,
   ClaimError,
   DEFAULT_MAX_RETRIES,
   DEFAULT_VISIBILITY_TIMEOUT,
   EnqueueError,
+  type JobClaim,
   JobNotFoundError,
   type Payload,
   QueueService,
@@ -16,13 +16,14 @@ import {
 } from "@processfocus/runtime"
 import { and, eq, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm"
 import { Cause, DateTime, Duration, Effect, Layer, Option } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
+import { formatSqlError } from "@pf/db-info"
 import * as schema from "@pf/drizzle-postgres"
 import {
   type UserDetails,
   getUserDetails,
   returnedRow,
 } from "@pf/graphql-db-operations"
-import { formatSqlError } from "@pf/queue-service"
 import { type RequestTime, getRequestTime } from "@pf/request-time"
 import { TypedPostgresDrizzle } from "@pf/service-drizzle-postgres"
 
@@ -122,7 +123,9 @@ export const PostgresQueueServiceLive = Layer.effect(
           const requestTime = yield* getRequestTime()
           const userDetails = yield* getUserDetails()
           const delayMs = Duration.toMillis(delay)
-          const availableAt = DateTime.add(requestTime, { millis: delayMs })
+          const availableAt = DateTime.add(requestTime, {
+            milliseconds: delayMs,
+          })
 
           const result = yield* db
             .insert(schema.jobQueue)
@@ -163,52 +166,81 @@ export const PostgresQueueServiceLive = Layer.effect(
           return row.id
         }),
 
-      rawClaim: (queue: string, visibilityTimeout?: Duration.Duration) =>
+      rawClaim: (name, visibilityTimeout) =>
+        queue
+          .rawClaimBatch(name, 1, visibilityTimeout)
+          .pipe(Effect.map(Option.fromIterable)),
+
+      rawClaimBatch: (
+        queue: string,
+        limit: number,
+        visibilityTimeout?: Duration.Duration,
+      ) =>
         Effect.gen(function* () {
           yield* validateQueueName(queue)
+          if (!Number.isSafeInteger(limit) || limit <= 0) {
+            return yield* new ClaimError({
+              queue,
+              message: "Claim limit must be a positive safe integer",
+            })
+          }
           const db = yield* TypedPostgresDrizzle
           const now = yield* DateTime.now
           const timeout = visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT
           const timeoutMs = Duration.toMillis(timeout)
-          const lockedUntil = DateTime.add(now, { millis: timeoutMs })
+          const lockedUntil = DateTime.add(now, { milliseconds: timeoutMs })
           const receipt = crypto.randomUUID()
 
           // Use CTE with FOR UPDATE SKIP LOCKED for efficient concurrent claiming
           // Use drizzle query builder functions so custom type converters are applied
-          const candidate = db.$with("candidate").as(
-            db
-              .select({ id: schema.jobQueue.id })
-              .from(schema.jobQueue)
-              .where(
-                and(
-                  eq(schema.jobQueue.queue, queue),
-                  lte(schema.jobQueue.availableAt, now),
-                  or(
-                    isNull(schema.jobQueue.lockedUntil),
-                    lte(schema.jobQueue.lockedUntil, now),
-                  ),
-                  lt(
-                    schema.jobQueue.jobAttempts,
-                    schema.jobQueue.jobRetryLimit,
-                  ),
-                  eq(schema.jobQueue._deleted, false),
-                ),
-              )
-              .orderBy(
-                schema.jobQueue.jobAttempts,
-                schema.jobQueue.availableAt,
-                schema.jobQueue.id,
-              )
-              .limit(1)
-              .for("update", { skipLocked: true }),
+          const availableJobConditions = and(
+            eq(schema.jobQueue.queue, queue),
+            lte(schema.jobQueue.availableAt, now),
+            or(
+              isNull(schema.jobQueue.lockedUntil),
+              lte(schema.jobQueue.lockedUntil, now),
+            ),
+            lt(schema.jobQueue.jobAttempts, schema.jobQueue.jobRetryLimit),
+            eq(schema.jobQueue._deleted, false),
           )
+          const available = yield* db
+            .select({ id: schema.jobQueue.id })
+            .from(schema.jobQueue)
+            .where(availableJobConditions)
+            .limit(1)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ClaimError({
+                    queue,
+                    message: "Failed to check available jobs",
+                    cause,
+                  }),
+              ),
+            )
+          if (available.length === 0) return []
+          const candidate = db
+            .$with("candidate")
+            .as(
+              db
+                .select({ id: schema.jobQueue.id })
+                .from(schema.jobQueue)
+                .where(availableJobConditions)
+                .orderBy(
+                  schema.jobQueue.jobAttempts,
+                  schema.jobQueue.availableAt,
+                  schema.jobQueue.id,
+                )
+                .limit(limit)
+                .for("update", { skipLocked: true }),
+            )
 
           const result = yield* db
             .with(candidate)
             .update(schema.jobQueue)
             .set({
               lockedUntil,
-              claimReceipt: receipt,
+              claimReceipt: sql`md5(${receipt} || ${schema.jobQueue.id})`,
               jobAttempts: sql`${schema.jobQueue.jobAttempts} + 1`,
             })
             .where(sql`${schema.jobQueue.id} IN (SELECT id FROM candidate)`)
@@ -220,6 +252,8 @@ export const PostgresQueueServiceLive = Layer.effect(
               jobRetryLimit: schema.jobQueue.jobRetryLimit,
               availableAt: schema.jobQueue.availableAt,
               lockedUntil: schema.jobQueue.lockedUntil,
+              // The UPDATE always sets a fresh non-null receipt.
+              claimReceipt: sql<string>`${schema.jobQueue.claimReceipt}`,
             })
             .pipe(
               Effect.catchTag("SqlError", (error: SqlError) => {
@@ -239,21 +273,57 @@ export const PostgresQueueServiceLive = Layer.effect(
               }),
             )
 
-          if (!result[0]) {
-            return Option.none()
-          }
+          return result
+            .sort(
+              (left, right) =>
+                left.jobAttempts - right.jobAttempts ||
+                DateTime.toEpochMillis(left.availableAt) -
+                  DateTime.toEpochMillis(right.availableAt) ||
+                (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+            )
+            .map(
+              (row): RawJob => ({
+                jobId: row.id,
+                receipt: row.claimReceipt,
+                queue: row.queue,
+                payload: row.jobPayload,
+                attempts: row.jobAttempts,
+                maxAttempts: row.jobRetryLimit,
+                availableAt: row.availableAt,
+                lockedUntil,
+              }),
+            )
+        }),
 
-          const row = result[0]
-          return Option.some<RawJob>({
-            jobId: row.id,
-            receipt,
-            queue: row.queue,
-            payload: row.jobPayload,
-            attempts: row.jobAttempts,
-            maxAttempts: row.jobRetryLimit,
-            availableAt: row.availableAt,
-            lockedUntil: lockedUntil,
-          })
+      acknowledgeBatch: (claims: readonly JobClaim[]) =>
+        Effect.gen(function* () {
+          const first = claims[0]
+          if (!first) return []
+          const db = yield* TypedPostgresDrizzle
+          const rows = yield* db
+            .delete(schema.jobQueue)
+            .where(
+              or(
+                ...claims.map(({ jobId, receipt }) =>
+                  and(
+                    eq(schema.jobQueue.id, jobId),
+                    eq(schema.jobQueue.claimReceipt, receipt),
+                  ),
+                ),
+              ),
+            )
+            .returning({ id: schema.jobQueue.id })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AcknowledgeError({
+                    jobId: first.jobId,
+                    message: `Failed to acknowledge batch: ${formatSqlError(cause)}`,
+                    cause,
+                  }),
+              ),
+            )
+          return rows.map((row) => row.id)
         }),
 
       acknowledge: (jobId: string, receipt: string) =>
@@ -449,7 +519,7 @@ export const PostgresQueueServiceLive = Layer.effect(
           const db = yield* TypedPostgresDrizzle
           const now = yield* DateTime.now
           const newLock = DateTime.add(now, {
-            millis: Duration.toMillis(timeout),
+            milliseconds: Duration.toMillis(timeout),
           })
 
           // Atomic UPDATE with WHERE clause checking both existence and lock status
@@ -557,7 +627,7 @@ export const PostgresQueueServiceLive = Layer.effect(
               ),
             )
             .pipe(
-              Effect.tapErrorCause((cause) =>
+              Effect.onError((cause) =>
                 Effect.logWarning("getStats query failed").pipe(
                   Effect.annotateLogs({
                     queue,
@@ -565,7 +635,7 @@ export const PostgresQueueServiceLive = Layer.effect(
                   }),
                 ),
               ),
-              Effect.catchAll(() =>
+              Effect.catch(() =>
                 Effect.succeed([
                   { pending: "0", processing: "0", deadLetter: "0" },
                 ]),

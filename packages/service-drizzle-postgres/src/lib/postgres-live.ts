@@ -9,16 +9,16 @@ import { DatabaseConnectionInfo } from "@pf/db-info"
 const ConnectionInfoLayer = Layer.effect(
   DatabaseConnectionInfo,
   Effect.gen(function* () {
-    const username = yield* Config.string("POSTGRES_USERNAME").pipe(
+    const username = yield* Config.String("POSTGRES_USERNAME").pipe(
       Config.withDefault("postgres"),
     )
-    const database = yield* Config.string("POSTGRES_DATABASE").pipe(
+    const database = yield* Config.String("POSTGRES_DATABASE").pipe(
       Config.withDefault("postgres"),
     )
-    const host = yield* Config.string("POSTGRES_HOST").pipe(
+    const host = yield* Config.String("POSTGRES_HOST").pipe(
       Config.withDefault("localhost"),
     )
-    const port = yield* Config.number("POSTGRES_PORT").pipe(
+    const port = yield* Config.Number("POSTGRES_PORT").pipe(
       Config.withDefault(5432),
     )
     return `postgresql://${username}@${host}:${port}/${database}`
@@ -44,11 +44,13 @@ const ConnectionInfoLayer = Layer.effect(
  * ```
  */
 const PgLive = PgClient.layerConfig({
-  password: Config.redacted("POSTGRES_PASSWORD"),
-  username: Config.withDefault(Config.string("POSTGRES_USERNAME"), "postgres"),
-  database: Config.withDefault(Config.string("POSTGRES_DATABASE"), "postgres"),
-  host: Config.withDefault(Config.string("POSTGRES_HOST"), "localhost"),
-  port: Config.withDefault(Config.number("POSTGRES_PORT"), 5432),
+  // Preserve the v3 node-pg unnamed-query planning (partial-index upserts).
+  prepare: Config.succeed(false),
+  password: Config.Redacted("POSTGRES_PASSWORD"),
+  username: Config.withDefault(Config.String("POSTGRES_USERNAME"), "postgres"),
+  database: Config.withDefault(Config.String("POSTGRES_DATABASE"), "postgres"),
+  host: Config.withDefault(Config.String("POSTGRES_HOST"), "localhost"),
+  port: Config.withDefault(Config.Number("POSTGRES_PORT"), 5432),
 })
 
 export const DatabaseLive = Layer.mergeAll(PgLive, ConnectionInfoLayer)

@@ -1,5 +1,4 @@
 import { createHmac } from "node:crypto"
-import { FetchHttpClient } from "@effect/platform"
 import {
   type PublicCompletionDeliveryCallback,
   WebhookCallbackError,
@@ -7,7 +6,8 @@ import {
   type WebhookCallbackResult,
   dispatchServerPluginWebhook,
 } from "@processfocus/runtime"
-import { ConfigProvider, Data, Effect, Layer } from "effect"
+import { ConfigProvider, type Context, Data, Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/http"
 import {
   ResendServerPlugin,
   ResendServerPluginJobLayer,
@@ -74,7 +74,7 @@ const handleResendWebhookRequest = (
   request: Request,
   dependencies: TestDependencies,
 ) => {
-  const callbackHost: WebhookCallbackHost["Type"] = {
+  const callbackHost: Context.Service.Shape<typeof WebhookCallbackHost> = {
     lookupDeferredTodo: (todoId: string) =>
       mapTestError(
         dependencies
@@ -145,7 +145,12 @@ const handleResendWebhookRequest = (
     registrations: [ResendServerPlugin],
     callbackHost,
   }).pipe(
-    Effect.provide(Layer.setConfigProvider(ConfigProvider.fromMap(config))),
+    Effect.provide(
+      Layer.succeed(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnvRecord(Object.fromEntries(config)),
+      ),
+    ),
   )
 }
 
@@ -1004,18 +1009,30 @@ describe("handleResendWebhookRequest", () => {
 
 describe("ResendServerPlugin job layer", () => {
   it("resolves its default services from runtime configuration", async () => {
-    const config = ConfigProvider.fromMap(
-      new Map([
-        ["RESEND_API_KEY", "re_test_key"],
-        ["PF_ENV", "test"],
-      ]),
+    const config = ConfigProvider.fromEnvRecord(
+      Object.fromEntries(
+        new Map([
+          ["RESEND_API_KEY", "re_test_key"],
+          ["RESEND_ENABLED", "true"],
+          ["PF_ENV", "test"],
+        ]),
+      ),
     )
 
     await Effect.runPromise(
       Layer.build(ResendServerPluginJobLayer).pipe(
         Effect.scoped,
-        Effect.provide(FetchHttpClient.layer),
-        Effect.provide(Layer.setConfigProvider(config)),
+        Effect.provide(
+          FetchHttpClient.layer.pipe(
+            Layer.provide(
+              Layer.effect(
+                FetchHttpClient.Fetch,
+                Effect.sync(() => globalThis.fetch),
+              ),
+            ),
+          ),
+        ),
+        Effect.provide(Layer.succeed(ConfigProvider.ConfigProvider, config)),
       ),
     )
   })

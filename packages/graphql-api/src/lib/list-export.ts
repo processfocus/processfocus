@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { Effect, Layer, Stream } from "effect"
-import { AuthorizationService, ListRef } from "@pf/auth-policy"
 import {
   type DocumentStoreError,
   DocumentStoreService,
   sanitizeDownloadFilename,
-} from "@pf/document-store-service"
+} from "@processfocus/runtime"
+import { Context, Effect, Layer, Stream } from "effect"
+import { AuthorizationService, ListRef } from "@pf/auth-policy"
 import {
   ExportNonScalarError,
   ExportRowLimitError,
@@ -18,6 +18,7 @@ import {
   OrganisationProvider,
   normalizePath,
 } from "@pf/process"
+import { listFieldDisplayLabel } from "./actor-presentation"
 import { buildPrincipal } from "./authorization"
 import { rolePathsForList } from "./list-field-authorization"
 import type { UserContext } from "./types"
@@ -72,7 +73,13 @@ function generateCsv(
             valueType: typeof value,
           })
         }
-        cells.push(escapeCsvField(value))
+        cells.push(
+          escapeCsvField(
+            typeof value === "string"
+              ? listFieldDisplayLabel(field, value)
+              : value,
+          ),
+        )
       }
 
       rows.push(cells.join(","))
@@ -131,9 +138,7 @@ const validateListSortInput = (
   return Effect.succeed(sort)
 }
 
-export class ListExportService extends Effect.Tag(
-  "@pf/graphql-api/ListExportService",
-)<
+export class ListExportService extends Context.Service<
   ListExportService,
   {
     readonly exportListCsv: (
@@ -142,7 +147,7 @@ export class ListExportService extends Effect.Tag(
       options?: ListExportOptions,
     ) => Effect.Effect<ExportResult, ExportError, never>
   }
->() {}
+>()("@pf/graphql-api/ListExportService") {}
 
 export const ListExportServiceLive = Layer.effect(
   ListExportService,

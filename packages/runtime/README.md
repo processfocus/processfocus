@@ -1,18 +1,15 @@
 # @processfocus/runtime
 
-Provider-neutral Process Focus runtime engine and contracts.
+Provider-neutral runtime engine and contracts for executing Process Focus
+organisations.
 
-The package owns the queue contract, shared job dispatch and classification,
-runtime artifact envelope parsing, and the composition operations used by local
-and hosted adapters. Platform startup, storage mechanics, queue transports, and
-deployment policy stay in their adapters.
+It defines queues, job dispatch, runtime artifacts, configuration, document
+storage, and notification interfaces. Local and hosted adapters supply platform
+startup, storage, and delivery infrastructure.
 
-## Build
+[`@pf/job-handler`](../job-handler/README.md) provides shared process-job
+behavior. Organisation models are authored through
+[`processfocus`](../sdk/README.md).
 
-Run `bun scripts/nx-quiet.ts run @processfocus/runtime:build` from the workspace
-root.
-
-## Test
-
-Run `bun scripts/nx-quiet.ts run @processfocus/runtime:test` from the workspace
-root.
+See [configuration authoring](../../docs/cloud-hosting/configuration-authoring.md)
+for the contract shared by runtime consumers and deployment preflight.

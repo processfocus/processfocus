@@ -1,3 +1,4 @@
+export * from "./lib/audit"
 export {
   SqliteAuthenticationDatabaseLive,
   SqliteOpenAuthStorageServiceLive,
@@ -15,6 +16,7 @@ export * from "./lib/graphql-db-operations"
 export * from "./lib/org-to-db"
 export { SqliteFlowQueriesLive } from "./lib/query-flows"
 export { SqliteOAuthClientQueriesLive } from "./lib/query-oauth-client"
+export { SqliteProviderUserQueriesLive } from "./lib/query-provider-user"
 export { SqliteWorkflowQueriesLive } from "./lib/query-workflow"
 export { SqliteScheduledFlowOperationsLive } from "./lib/scheduled-flow"
 export { SqliteSettingsQueriesLive } from "./lib/settings-queries"

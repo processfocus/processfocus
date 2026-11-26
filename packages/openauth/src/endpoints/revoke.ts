@@ -3,8 +3,9 @@
  * POST /oauth/revoke
  * @packageDocumentation
  */
-import type { HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import type { HttpServerResponse } from "effect/http"
 import { errorJson, json } from "../response"
 import { Storage, type StorageError, type StorageService } from "../storage/storage"
 

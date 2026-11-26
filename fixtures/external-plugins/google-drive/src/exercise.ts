@@ -50,3 +50,17 @@ if (
 ) {
   throw new Error("Google Drive plugin public surfaces failed")
 }
+
+// Installed subpath must execute real codecs without importing a server registry.
+const { GoogleDriveField: portableField } = await import(
+  "@processfocus/plugin-google-drive/field"
+)
+const { Schema, Option } = await import("effect")
+const portablePdf = portableField({ generatePdf: store })
+if (
+  Schema.decodeUnknownSync(portablePdf)(JSON.stringify(generatedPdf)) !==
+  JSON.stringify(generatedPdf)
+)
+  throw new Error("Installed field codec failed")
+if (Option.isSome(Schema.decodeUnknownOption(portablePdf)("invalid")))
+  throw new Error("Installed field accepted invalid PDF reference")

@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { describe, expect, test } from "vitest"
 
 const toDosPageSource = readFileSync(
-  join(import.meta.dir, "../app/(protected)/to-dos/page.tsx"),
+  join(import.meta.dir, "../app/(protected)/to-dos/to-dos-client.tsx"),
   "utf8",
 )
 

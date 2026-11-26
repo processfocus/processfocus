@@ -1,6 +1,5 @@
-import { FileSystem } from "@effect/platform"
 import { NodeFileSystem } from "@effect/platform-node"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, FileSystem, Layer } from "effect"
 import {
   Application,
   AuthorizationService,
@@ -15,7 +14,6 @@ import {
   RoleRef,
   ServiceAccountPrincipal,
   Step,
-  TodoRef,
 } from "@pf/auth-policy"
 import { RequestTime } from "@pf/request-time"
 import {
@@ -28,10 +26,10 @@ import {
 import { describe, expect, it } from "bun:test"
 
 // Create a fixed request time for testing
-const fixedRequestTime = DateTime.unsafeMake(new Date("2024-06-15T10:30:00Z"))
+const fixedRequestTime = DateTime.makeUnsafe(new Date("2024-06-15T10:30:00Z"))
 const RequestTimeTest = Layer.effect(
   RequestTime,
-  FiberRef.make(fixedRequestTime),
+  Effect.succeed(fixedRequestTime),
 )
 
 describe("LocalCedarAuthorization", () => {
@@ -511,37 +509,44 @@ permit (
       ))
   })
 
-  describe("canCompletePublicTodo", () => {
+  describe("public-link step completion", () => {
     it("allows a public link to complete its bound todo", () =>
       runTest(
         Effect.gen(function* () {
           const auth = yield* AuthorizationService
 
-          const result = yield* auth.canCompletePublicTodo(
+          const result = yield* auth.canCompleteStep(
             new PublicLinkPrincipal("todo-1"),
-            new TodoRef("todo-1"),
+            new Step({ stepPath: "/work/approve", processPath: "/work" }),
+            { todoId: "todo-1" },
           )
 
           expect(result).toBe(true)
         }),
       ))
 
-    it("denies a public link completing a different todo", () =>
+    it("denies a different Todo on the same Step and missing context without leaking cached context", () =>
       runTest(
         Effect.gen(function* () {
           const auth = yield* AuthorizationService
 
-          const result = yield* auth.canCompletePublicTodo(
-            new PublicLinkPrincipal("todo-1"),
-            new TodoRef("todo-2"),
-          )
-
-          expect(result).toBe(false)
+          const principal = new PublicLinkPrincipal("todo-1")
+          const step = new Step({
+            stepPath: "/work/approve",
+            processPath: "/work",
+          })
+          expect(
+            yield* auth.canCompleteStep(principal, step, { todoId: "todo-1" }),
+          ).toBe(true)
+          expect(
+            yield* auth.canCompleteStep(principal, step, { todoId: "todo-2" }),
+          ).toBe(false)
+          expect(yield* auth.canCompleteStep(principal, step)).toBe(false)
         }),
       ))
   })
 
-  describe("canCompleteTodo", () => {
+  describe("step completion with Todo context", () => {
     it("allows a role holder to complete an unassigned todo", () =>
       runTest(
         Effect.gen(function* () {
@@ -552,13 +557,14 @@ permit (
             orgUnitId: "/",
           })
 
-          const result = yield* auth.canCompleteTodo(
+          const result = yield* auth.canCompleteStep(
             alice,
-            new TodoRef("todo-1", {
+            new Step({
               stepPath: "/key-request/Pickup",
               rolePath: "/Employee",
               processPath: "/key-request",
             }),
+            { todoId: "todo-1" },
           )
 
           expect(result).toBe(true)
@@ -578,15 +584,23 @@ permit (
             roles: ["/Employee"],
             orgUnitId: "/",
           })
-          const todo = new TodoRef("todo-2", {
+          const step = new Step({
             stepPath: "/key-request/Pickup",
             rolePath: "/Employee",
             processPath: "/key-request",
-            assignedToProviderUserEmail: "assignee@example.com",
           })
+          const context = {
+            todoId: "todo-2",
+            assignedToProviderUserEmail: "assignee@example.com",
+          }
 
-          expect(yield* auth.canCompleteTodo(assignee, todo)).toBe(true)
-          expect(yield* auth.canCompleteTodo(other, todo)).toBe(false)
+          expect(yield* auth.canCompleteStep(assignee, step, context)).toBe(
+            true,
+          )
+          expect(yield* auth.canCompleteStep(other, step, context)).toBe(false)
+          expect(
+            yield* auth.canCompleteStep(other, step, { todoId: "todo-3" }),
+          ).toBe(true)
         }),
       ))
 
@@ -599,13 +613,14 @@ permit (
             "/finance/Manager",
           ])
 
-          const result = yield* auth.canCompleteTodo(
+          const result = yield* auth.canCompleteStep(
             serviceAccount,
-            new TodoRef("todo-3", {
+            new Step({
               stepPath: "/finance/purchase-request/Manager approval",
               rolePath: "/finance/Manager",
               processPath: "/finance/purchase-request",
             }),
+            { todoId: "todo-3" },
           )
 
           expect(result).toBe(true)
@@ -621,14 +636,17 @@ permit (
             "/finance/Manager",
           ])
 
-          const result = yield* auth.canCompleteTodo(
+          const result = yield* auth.canCompleteStep(
             serviceAccount,
-            new TodoRef("todo-4", {
+            new Step({
               stepPath: "/finance/purchase-request/Manager approval",
               rolePath: "/finance/Manager",
               processPath: "/finance/purchase-request",
-              assignedToProviderUserEmail: "manager@example.com",
             }),
+            {
+              todoId: "todo-4",
+              assignedToProviderUserEmail: "manager@example.com",
+            },
           )
 
           expect(result).toBe(false)
@@ -649,11 +667,12 @@ permit (
 
           const result = yield* auth.canCorrectPublicCompletionTodo(
             alice,
-            new TodoRef("todo-correction-1", {
+            new Step({
               stepPath: "/key-request/Pickup",
               rolePath: "/Employee",
               processPath: "/key-request",
             }),
+            { todoId: "todo-correction-1" },
           )
 
           expect(result).toBe(true)
@@ -673,19 +692,22 @@ permit (
             roles: ["/Employee"],
             orgUnitId: "/",
           })
-          const todo = new TodoRef("todo-correction-2", {
+          const step = new Step({
             stepPath: "/key-request/Pickup",
             rolePath: "/Employee",
             processPath: "/key-request",
-            assignedToProviderUserEmail: "assignee@example.com",
           })
+          const context = {
+            todoId: "todo-correction-2",
+            assignedToProviderUserEmail: "assignee@example.com",
+          }
 
           expect(
-            yield* auth.canCorrectPublicCompletionTodo(assignee, todo),
+            yield* auth.canCorrectPublicCompletionTodo(assignee, step, context),
           ).toBe(true)
-          expect(yield* auth.canCorrectPublicCompletionTodo(other, todo)).toBe(
-            false,
-          )
+          expect(
+            yield* auth.canCorrectPublicCompletionTodo(other, step, context),
+          ).toBe(false)
         }),
       ))
 
@@ -698,26 +720,22 @@ permit (
             roles: ["/Oversight"],
             orgUnitId: "/",
           })
-          const assignedTodo = new TodoRef("todo-correction-3", {
-            stepPath: "/key-request/Pickup",
-            rolePath: "/Oversight",
-            processPath: "/key-request",
-            assignedToProviderUserEmail: "assignee@example.com",
-          })
-          const correctionCandidateTodo = new TodoRef("todo-correction-3", {
+          const step = new Step({
             stepPath: "/key-request/Pickup",
             rolePath: "/Oversight",
             processPath: "/key-request",
           })
 
-          expect(yield* auth.canCompleteTodo(oversight, assignedTodo)).toBe(
-            false,
-          )
           expect(
-            yield* auth.canCorrectPublicCompletionTodo(
-              oversight,
-              correctionCandidateTodo,
-            ),
+            yield* auth.canCompleteStep(oversight, step, {
+              todoId: "todo-correction-3",
+              assignedToProviderUserEmail: "assignee@example.com",
+            }),
+          ).toBe(false)
+          expect(
+            yield* auth.canCorrectPublicCompletionTodo(oversight, step, {
+              todoId: "todo-correction-3",
+            }),
           ).toBe(true)
         }),
       ))
@@ -1011,7 +1029,7 @@ permit (
   })
 
   describe("frontend embed permissions", () => {
-    it("denies provider users without roles for embed-tagged GraphQL fields", () =>
+    it("denies provider users without roles for shared lookup fields", () =>
       runTest(
         Effect.gen(function* () {
           const auth = yield* AuthorizationService
@@ -1020,7 +1038,7 @@ permit (
             roles: [],
             orgUnitId: "/school",
           })
-          const field = new GraphQLField("Query.lookupSuggestions", "embed")
+          const field = new GraphQLField("Query.lookupSuggestions")
 
           const result = yield* auth.canAccessField(eve, field, "query")
 
@@ -1028,9 +1046,7 @@ permit (
         }),
       ))
 
-    // Internal authenticated forms still use lookupSuggestions, so provider
-    // users keep access when the field is tagged for the frontend embed path.
-    it("allows provider users to access embed-tagged GraphQL fields", () =>
+    it("allows provider users to access shared lookup fields", () =>
       runTest(
         Effect.gen(function* () {
           const auth = yield* AuthorizationService
@@ -1039,7 +1055,7 @@ permit (
             roles: ["/Office Staff"],
             orgUnitId: "/school",
           })
-          const field = new GraphQLField("Query.lookupSuggestions", "embed")
+          const field = new GraphQLField("Query.lookupSuggestions")
 
           const result = yield* auth.canAccessField(alice, field, "query")
 
@@ -1047,20 +1063,59 @@ permit (
         }),
       ))
 
-    it("allows frontend service account to access embed-tagged GraphQL fields", () =>
+    it("allows generated operations only for embedded start steps", () =>
       runTest(
         Effect.gen(function* () {
           const auth = yield* AuthorizationService
 
           const frontend = new ServiceAccountPrincipal("frontend", [])
-          const field = new GraphQLField(
-            "Mutation.startSchoolEnrolment",
-            "embed",
-          )
-
-          const result = yield* auth.canAccessField(frontend, field, "mutation")
-
-          expect(result).toBe(true)
+          for (const [embedded, startsProcess, allowed] of [
+            [true, true, true],
+            [false, true, false],
+            [true, false, false],
+          ] as const) {
+            const step = new Step({
+              stepPath: "/school/enrolment/Submit enquiry",
+              processPath: "/school/enrolment",
+              embedded,
+              startsProcess,
+            })
+            for (const [name, action] of [
+              ["Mutation.startSchoolEnrolment", "mutation"],
+              ["Query.lookupSchoolEnrolmentStage", "query"],
+            ] as const) {
+              expect(
+                yield* auth.canAccessField(
+                  frontend,
+                  new GraphQLField(name, undefined, step),
+                  action,
+                ),
+              ).toBe(allowed)
+            }
+            expect(yield* auth.canViewEmbeddedForm(frontend, step)).toBe(
+              allowed,
+            )
+            expect(
+              yield* auth.canViewEmbeddedForm(
+                new ServiceAccountPrincipal("other", []),
+                step,
+              ),
+            ).toBe(false)
+          }
+          expect(
+            yield* auth.canAccessField(
+              frontend,
+              new GraphQLField("Query.embeddedFormMetadata"),
+              "query",
+            ),
+          ).toBe(true)
+          expect(
+            yield* auth.canAccessField(
+              frontend,
+              new GraphQLField("Query.formMetadata"),
+              "query",
+            ),
+          ).toBe(false)
         }),
       ))
 
@@ -1171,7 +1226,7 @@ permit (
         }),
       ))
 
-    it("allows scheduler service account to start role-less start steps only", () =>
+    it("allows the scheduler to start only roleless cron steps by default", () =>
       runTest(
         Effect.gen(function* () {
           const auth = yield* AuthorizationService
@@ -1196,10 +1251,12 @@ permit (
           const canStartCron = yield* auth.canCompleteStep(
             scheduler,
             cronStartStep,
+            { cronStart: true },
           )
           const canStartRegular = yield* auth.canCompleteStep(
             scheduler,
             regularStartStep,
+            { cronStart: true },
           )
           const canCompleteNonStart = yield* auth.canCompleteStep(
             scheduler,
@@ -1207,6 +1264,9 @@ permit (
           )
 
           expect(canStartCron).toBe(true)
+          expect(yield* auth.canCompleteStep(scheduler, cronStartStep)).toBe(
+            false,
+          )
           expect(canStartRegular).toBe(false)
           expect(canCompleteNonStart).toBe(false)
         }),

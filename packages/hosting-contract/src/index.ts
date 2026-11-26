@@ -1,5 +1,7 @@
+export * from "./lib/configuration-preflight.js"
 export * from "./lib/conformance-fixture.js"
 export * from "./lib/contract.js"
+export * from "./lib/deploy-phase-failure.js"
 export * from "./lib/errors.js"
 export * from "./lib/negotiate.js"
 export * from "./lib/schema.js"

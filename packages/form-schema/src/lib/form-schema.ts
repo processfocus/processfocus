@@ -1,10 +1,11 @@
-import type { Arbitrary, DateTime, Effect } from "effect"
+import type { DateTime, Effect } from "effect"
 import { Schema } from "effect"
 import isURL from "validator/lib/isURL"
 import type { DeferredValue, FormValue } from "./deferred-value"
 import {
   FormAutoComplete,
   FormCalendarSlotInput,
+  FormCheckboxGroupInput,
   FormDateInput,
   FormDefault,
   FormDescription,
@@ -160,9 +161,9 @@ export type LookupMarker = { readonly __lookup: unique symbol }
 export type CalendarSlotMarker = { readonly __calendarSlot: unique symbol }
 /** Preserve read-only classification in downstream process-state inference. */
 export const ReadOnly = <A, I, R>(
-  schema: Schema.Schema<A, I, R>,
-): Schema.Schema<A, I, R> & ReadOnlyMarker =>
-  schema.annotations({ [FormReadOnly]: true }) as Schema.Schema<A, I, R> &
+  schema: Schema.Codec<A, I, R, R>,
+): Schema.Codec<A, I, R, R> & ReadOnlyMarker =>
+  schema.annotate({ [FormReadOnly]: true }) as Schema.Codec<A, I, R, R> &
     ReadOnlyMarker
 
 type PresentationOnly<Field> = Field extends StructuralOnlyMarker
@@ -194,21 +195,28 @@ export type StableFormFields<Fields> = {
 // Wrapper function - creates an annotated struct for semantic grouping with flattened type
 export const Wrapper = <Fields extends Schema.Struct.Fields>(
   fields: Fields & StableFormFields<NoInfer<Fields>>,
+  options?: { readonly label?: string; readonly description?: string },
 ): Schema.Struct<Fields> & FlattenMarker =>
-  Schema.Struct<Fields>(fields).annotations({
+  Schema.Struct<Fields>(fields).annotate({
     [FLATTEN_SYMBOL]: true,
+    ...(options?.label !== undefined && { [FormLabel]: options.label }),
+    ...(options?.description !== undefined && {
+      [FormDescription]: options.description,
+    }),
   }) as Schema.Struct<Fields> & FlattenMarker
 
 // Helper to create custom structural-only elements
 const structuralElement = <T extends Record<string, unknown>>(
   type: string,
   data?: T,
-): Schema.Schema.Any & StructuralOnlyMarker =>
-  Schema.Undefined.annotations({
+): Schema.Codec<unknown, unknown> & StructuralOnlyMarker =>
+  Schema.make<Schema.Codec<unknown, unknown>>(
+    Schema.optionalKey(Schema.Undefined).ast,
+  ).annotate({
     [STRUCTURAL_ONLY_SYMBOL]: true,
     [STRUCTURAL_TYPE_SYMBOL]: type,
     ...data,
-  }) as unknown as Schema.Schema.Any & StructuralOnlyMarker
+  }) as Schema.Codec<unknown, unknown> & StructuralOnlyMarker
 
 // Generic structural-only marker for custom use cases
 export const StructuralOnly = structuralElement("structural")
@@ -217,6 +225,12 @@ export const StructuralOnly = structuralElement("structural")
 export const Divider = structuralElement("divider")
 export const TextBlock = (text: string) =>
   structuralElement("textblock", { [TEXTBLOCK_CONTENT_SYMBOL]: text })
+/** Display-only list: blank lines separate items; an empty body hides the list. */
+export const TextList = (heading: string) =>
+  structuralElement("text-list", {
+    [FormLabel]: heading,
+    [TEXTBLOCK_CONTENT_SYMBOL]: "",
+  })
 export const DynamicTextBlock = (options: DynamicTextBlockOptions) =>
   structuralElement("textblock", {
     [TEXTBLOCK_CONTENT_SYMBOL]: options.text,
@@ -394,9 +408,9 @@ export const isFieldPermissionMetadata = (
 // Note: options type is separate from schema type to allow each field helper
 // to enforce its own type constraint on default values
 export const applyFieldAnnotations = <A, I, R>(
-  schema: Schema.Schema<A, I, R>,
+  schema: Schema.Codec<A, I, R, R>,
   options?: FieldOptions<unknown>,
-): Schema.Schema<A, I, R> => {
+): Schema.Codec<A, I, R, R> => {
   if (!options) return schema
 
   const annotations: Record<symbol, unknown> = {}
@@ -420,7 +434,7 @@ export const applyFieldAnnotations = <A, I, R>(
   }
 
   return Object.getOwnPropertySymbols(annotations).length > 0
-    ? schema.annotations(annotations)
+    ? schema.annotate(annotations)
     : schema
 }
 
@@ -436,27 +450,27 @@ export const applyFieldAnnotations = <A, I, R>(
  */
 export function TextField(
   options: FieldOptions<string> & { readonly readOnly: true },
-): Schema.Schema<string, string, never> & ReadOnlyMarker
+): Schema.Codec<string, string, never, never> & ReadOnlyMarker
 export function TextField(
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never>
+): Schema.Codec<string, string, never, never>
 export function TextField(
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never> {
+): Schema.Codec<string, string, never, never> {
   return applyFieldAnnotations(Schema.String, options)
 }
 
 export function TextArea(
   options: FieldOptions<string> & { readonly readOnly: true },
-): Schema.Schema<string, string, never> & ReadOnlyMarker
+): Schema.Codec<string, string, never, never> & ReadOnlyMarker
 export function TextArea(
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never>
+): Schema.Codec<string, string, never, never>
 export function TextArea(
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never> {
+): Schema.Codec<string, string, never, never> {
   return applyFieldAnnotations(
-    Schema.String.annotations({ [FormTextAreaInput]: true }),
+    Schema.String.annotate({ [FormTextAreaInput]: true }),
     options,
   )
 }
@@ -472,9 +486,9 @@ export function TextArea(
  * ```
  */
 export const TextFieldFrom = <I, R>(
-  schema: Schema.Schema<string, I, R>,
+  schema: Schema.Codec<string, I, R, R>,
   options?: FieldOptions<I>,
-): Schema.Schema<string, I, R> => applyFieldAnnotations(schema, options)
+): Schema.Codec<string, I, R, R> => applyFieldAnnotations(schema, options)
 
 /**
  * Validate that a string is a well-formed HTTPS URL.
@@ -495,15 +509,16 @@ export const isHttpsUrl = (value: string): boolean =>
 
 const httpsUrlSchema = Schema.String.pipe(
   // Strict runtime validation via validator.js.
-  Schema.filter(isHttpsUrl, {
-    message: () => "Must be a valid HTTPS URL (e.g. https://example.com/path)",
-  }),
-  // Guide arbitrary generation for auto-gen test data only — not a
-  // runtime filter.
-  Schema.annotations({
-    arbitrary: (): Arbitrary.LazyArbitrary<string> => (fc) =>
-      fc.webUrl({ validSchemes: ["https"] }),
-  }),
+  Schema.check(
+    Schema.makeFilter(isHttpsUrl, {
+      message: "Must be a valid HTTPS URL (e.g. https://example.com/path)",
+      arbitraryConstraint: {
+        patterns: [
+          { source: "^https://[a-z]{3,12}\\.example\\.com$", flags: "" },
+        ],
+      },
+    }),
+  ),
 )
 
 /**
@@ -523,7 +538,7 @@ const httpsUrlSchema = Schema.String.pipe(
  */
 export const HttpsUrlField = (
   options?: FieldOptions<string>,
-): Schema.Schema<string, string, never> => {
+): Schema.Codec<string, string, never, never> => {
   return applyFieldAnnotations(httpsUrlSchema, options)
 }
 
@@ -539,7 +554,7 @@ export const HttpsUrlField = (
  */
 export const NumberField = (
   options?: FieldOptions<number>,
-): Schema.Schema<number, number, never> =>
+): Schema.Codec<number, number, never, never> =>
   applyFieldAnnotations(Schema.Number, options)
 
 /**
@@ -548,21 +563,31 @@ export const NumberField = (
  * @example
  * ```typescript
  * const schema = Schema.Struct({
- *   age: NumberFieldFrom(Schema.NumberFromString, { label: "Your age" })
+ *   age: NumberFieldFrom(NumberFromString, { label: "Your age" })
  * })
  * ```
  */
 export const NumberFieldFrom = <I, R>(
-  schema: Schema.Schema<number, I, R>,
+  schema: Schema.Codec<number, I, R, R>,
   options?: FieldOptions<I> & { required?: boolean },
-): Schema.Schema<number, I, R> => {
+): Schema.Codec<number, I, R, R> => {
   const base = options?.required
-    ? schema.annotations({
-        jsonSchema: { minLength: 1 },
-        [FormRequired]: true,
-        [FormNumberInput]: true,
-      })
-    : schema.annotations({
+    ? schema
+        .pipe(
+          Schema.encodeTo(
+            Schema.toEncoded(schema).check(
+              Schema.makeFilter(
+                (value) => typeof value !== "string" || value.length > 0,
+                { toJsonSchema: () => ({ minLength: 1 }) },
+              ),
+            ),
+          ),
+        )
+        .annotate({
+          [FormRequired]: true,
+          [FormNumberInput]: true,
+        })
+    : schema.annotate({
         [FormNumberInput]: true,
       })
   return applyFieldAnnotations(base, options)
@@ -570,18 +595,20 @@ export const NumberFieldFrom = <I, R>(
 
 export const DateField = (
   options?: FieldOptions<string>,
-): Schema.Schema<DateTime.Utc, string, never> =>
+): Schema.Codec<DateTime.Utc, string, never, never> =>
   applyFieldAnnotations(
-    Schema.DateTimeUtc.annotations({ [FormDateInput]: true }),
+    Schema.DateTimeUtcFromString.annotate({ [FormDateInput]: true }),
     options,
   )
 
 const requiredBooleanSchema = Schema.Boolean.pipe(
-  Schema.filter((b): b is boolean => b === true, {
-    message: () => "This field is required",
-    jsonSchema: { type: "boolean", enum: [true] },
-    [FormRequired]: true,
-  }),
+  Schema.check(
+    Schema.makeFilter((b): b is boolean => b === true, {
+      message: "This field is required",
+      toJsonSchema: () => ({ type: "boolean", enum: [true] }),
+      [FormRequired]: true,
+    }),
+  ),
 )
 
 /**
@@ -599,7 +626,7 @@ const requiredBooleanSchema = Schema.Boolean.pipe(
  */
 export const BooleanField = (
   options?: FieldOptions<boolean> & { required?: boolean },
-): Schema.Schema<boolean, boolean, never> => {
+): Schema.Codec<boolean, boolean, never, never> => {
   const base = options?.required ? requiredBooleanSchema : Schema.Boolean
   return applyFieldAnnotations(base, options)
 }
@@ -638,7 +665,7 @@ export const FileField = (
     accept?: string
     maxSize?: number
   },
-): Schema.Schema<string, string, never> => {
+): Schema.Codec<string, string, never, never> => {
   const storePath = options.documentStore.node.path.startsWith("/")
     ? options.documentStore.node.path
     : `/${options.documentStore.node.path}`
@@ -648,7 +675,7 @@ export const FileField = (
     ...(options.accept != null && { accept: options.accept }),
     ...(options.maxSize != null && { maxSize: options.maxSize }),
   }
-  const base = Schema.String.annotations({
+  const base = Schema.String.annotate({
     [FormFileInput]: metadata,
   })
   return applyFieldAnnotations(base, options)
@@ -677,7 +704,7 @@ export const ListField = <Fields extends Schema.Struct.Fields>(
   const annotatedSchema =
     options?.addButtonLabel === undefined
       ? schema
-      : schema.annotations({
+      : schema.annotate({
           [FormListInput]: {
             addButtonLabel: options.addButtonLabel,
           } satisfies ListFieldMetadata,
@@ -686,10 +713,11 @@ export const ListField = <Fields extends Schema.Struct.Fields>(
   return applyFieldAnnotations(
     annotatedSchema,
     options,
-  ) as unknown as Schema.Schema<
+  ) as unknown as Schema.Codec<
     ReadonlyArray<Schema.Struct.Type<Fields>>,
     ReadonlyArray<Schema.Struct.Encoded<Fields>>,
-    Schema.Struct.Context<Fields>
+    Schema.Struct<Fields>["DecodingServices"],
+    Schema.Struct<Fields>["DecodingServices"]
   > &
     ListFieldMarker<Fields>
 }
@@ -714,13 +742,14 @@ export const TableField = <Fields extends Schema.Struct.Fields>(
   >,
 ) =>
   applyFieldAnnotations(
-    Schema.Array(Schema.Struct<Fields>(itemFields)).annotations({
+    Schema.Array(Schema.Struct<Fields>(itemFields)).annotate({
       [FormTableInput]: true,
     }),
     { ...options, readOnly: true },
-  ) as Schema.Schema<
+  ) as Schema.Codec<
     ReadonlyArray<Schema.Schema.Type<Schema.Struct<Fields>>>,
-    ReadonlyArray<Schema.Schema.Encoded<Schema.Struct<Fields>>>,
+    ReadonlyArray<Schema.Codec.Encoded<Schema.Struct<Fields>>>,
+    never,
     never
   > &
     TableFieldMarker &
@@ -732,12 +761,39 @@ export const TableField = <Fields extends Schema.Struct.Fields>(
 export interface LookupItem {
   readonly value: string
   readonly label: string
+  /** Additional authored search text; IDs are not implicitly searchable. */
+  readonly searchText?: string
 }
 
 export interface RadioFieldOption<Value extends string = string> {
   readonly value: Value
   readonly label: string
 }
+
+export interface CheckboxGroupOption {
+  readonly value: string
+  readonly label: string
+  readonly description?: string
+}
+
+/** Choices are presentation, not an eligibility constraint: retain unavailable IDs. */
+export const CheckboxGroupField = (
+  options: FieldOptions<readonly string[]> & {
+    readonly options: readonly CheckboxGroupOption[]
+  },
+) =>
+  applyFieldAnnotations(
+    Schema.Array(Schema.String)
+      .check(
+        Schema.makeFilter(
+          (values) =>
+            new Set(values).size === values.length ||
+            "Select each value only once.",
+        ),
+      )
+      .annotate({ [FormCheckboxGroupInput]: { options: options.options } }),
+    options,
+  )
 
 export interface RadioFieldMetadata<Value extends string = string> {
   readonly options: readonly [
@@ -764,9 +820,10 @@ export const RadioField = <
   options: FieldOptions<RadioOptionValues<Options>> & {
     readonly options: Options
   },
-): Schema.Schema<
+): Schema.Codec<
   RadioOptionValues<Options>,
   RadioOptionValues<Options>,
+  never,
   never
 > &
   RadioFieldMarker => {
@@ -779,11 +836,12 @@ export const RadioField = <
   }
 
   return applyFieldAnnotations(
-    Schema.Literal(...values).annotations({ [FormRadioInput]: metadata }),
+    Schema.Literals(values).annotate({ [FormRadioInput]: metadata }),
     options,
-  ) as Schema.Schema<
+  ) as Schema.Codec<
     RadioOptionValues<Options>,
     RadioOptionValues<Options>,
+    never,
     never
   > &
     RadioFieldMarker
@@ -795,7 +853,15 @@ export const RadioField = <
  * When no query is provided, the field is still marked as a lookup
  * but the query must be supplied via `Form.lookups.<field>.setQuery()`.
  */
-export interface LookupFieldMetadata {
+export type LookupMode =
+  | { readonly mode?: "server"; readonly maxItems?: never }
+  | { readonly mode: "local"; readonly maxItems: number }
+
+export type LookupFieldMetadata = LookupMode & {
+  /** Resolve one currently eligible identity independently of choice loading. */
+  readonly resolve?: (
+    value: string,
+  ) => Effect.Effect<LookupItem | null, unknown, unknown>
   readonly query?: (
     filter: string,
     limit: number,
@@ -872,24 +938,40 @@ export type CalendarSlotFieldOptions = FieldOptions<string> & {
  * ```
  */
 export const LookupField = (
-  options: FieldOptions<string> & {
-    query?: QueryValue<
-      (
-        filter: string,
-        limit: number,
-      ) => Effect.Effect<ReadonlyArray<LookupItem>, unknown, unknown>
-    >
-  },
-): Schema.Schema<string, string, never> & LookupMarker => {
+  options: FieldOptions<string> &
+    LookupMode & {
+      readonly resolve?: LookupFieldMetadata["resolve"]
+      query?: QueryValue<
+        (
+          filter: string,
+          limit: number,
+        ) => Effect.Effect<ReadonlyArray<LookupItem>, unknown, unknown>
+      >
+    },
+): Schema.Codec<string, string, never, never> & LookupMarker => {
+  if (
+    options.mode === "local" &&
+    (!Number.isSafeInteger(options.maxItems) || options.maxItems < 1)
+  )
+    throw new Error("Local lookup maxItems must be a positive safe integer")
   const metadata = {
+    ...(options.resolve != null && { resolve: options.resolve }),
+    ...(options.mode != null && { mode: options.mode }),
+    ...(options.mode === "local" && { maxItems: options.maxItems }),
     ...(options.query != null && { query: options.query }),
   }
-  const base = Schema.String.annotations({
+  const value = Schema.String.check(
+    Schema.isMinLength(1, {
+      message: "Select an option from the suggestions.",
+    }),
+  )
+  const base = value.annotate({
     [FormLookupInput]: metadata,
   })
-  return applyFieldAnnotations(base, options) as Schema.Schema<
+  return applyFieldAnnotations(base, options) as Schema.Codec<
     string,
     string,
+    never,
     never
   > &
     LookupMarker
@@ -911,17 +993,18 @@ export const SuggestionField = (
       ) => Effect.Effect<ReadonlyArray<LookupItem>, unknown, unknown>
     >
   },
-): Schema.Schema<string, string, never> & LookupMarker => {
+): Schema.Codec<string, string, never, never> & LookupMarker => {
   const metadata = {
     ...(options.query != null && { query: options.query }),
   }
-  const base = Schema.String.annotations({
+  const base = Schema.String.annotate({
     [FormLookupInput]: metadata,
     [FormSuggestionInput]: true,
   })
-  return applyFieldAnnotations(base, options) as Schema.Schema<
+  return applyFieldAnnotations(base, options) as Schema.Codec<
     string,
     string,
+    never,
     never
   > &
     LookupMarker
@@ -929,7 +1012,7 @@ export const SuggestionField = (
 
 export const CalendarSlotField = (
   options: CalendarSlotFieldOptions,
-): Schema.Schema<string, string, never> & CalendarSlotMarker => {
+): Schema.Codec<string, string, never, never> & CalendarSlotMarker => {
   const metadata = {
     timeZone: options.timeZone,
     locale: options.locale ?? "en",
@@ -943,9 +1026,9 @@ export const CalendarSlotField = (
     }),
   }
   return applyFieldAnnotations(
-    Schema.String.annotations({ [FormCalendarSlotInput]: metadata }),
+    Schema.String.annotate({ [FormCalendarSlotInput]: metadata }),
     options,
-  ) as Schema.Schema<string, string, never> & CalendarSlotMarker
+  ) as Schema.Codec<string, string, never, never> & CalendarSlotMarker
 }
 
 export type ProviderUserDefault = string | typeof CurrentProviderUser
@@ -968,8 +1051,8 @@ export type ProviderUserFieldOptions = Omit<
  */
 export const ProviderUserField = (
   options?: ProviderUserFieldOptions,
-): Schema.Schema<string, string, never> & ProviderUserMarker =>
+): Schema.Codec<string, string, never, never> & ProviderUserMarker =>
   applyFieldAnnotations(
-    Schema.String.annotations({ [FormProviderUserInput]: true }),
+    Schema.String.annotate({ [FormProviderUserInput]: true }),
     options,
-  ) as Schema.Schema<string, string, never> & ProviderUserMarker
+  ) as Schema.Codec<string, string, never, never> & ProviderUserMarker

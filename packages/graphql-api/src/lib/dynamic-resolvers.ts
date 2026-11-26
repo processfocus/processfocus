@@ -1,13 +1,12 @@
-import { FileSystem } from "@effect/platform"
-import { Effect, Either, Option, Schema } from "effect"
+import { Effect, FileSystem, Option, Result, Schema } from "effect"
 import type { GraphQLResolveInfo } from "graphql"
-import { FormPermission, isFieldPermissionMetadata } from "@pf/form-schema"
-import { submissionSchemaSync } from "@pf/form-submission-schema"
 import {
-  ProcessQueries,
-  type ProcessState,
-  StepCompletionOperations,
-} from "@pf/graphql-db-operations"
+  FormLookupInput,
+  FormPermission,
+  isFieldPermissionMetadata,
+} from "@pf/form-schema"
+import { submissionSchemaSync } from "@pf/form-submission-schema"
+import { ProcessQueries, type ProcessState } from "@pf/graphql-db-operations"
 import {
   InputValidationError,
   MissingGeneratedSchemaError,
@@ -24,219 +23,93 @@ import {
   normalizePath,
   pathToPascalCase,
 } from "@pf/process"
+import { completeTodo, startProcess } from "@pf/process-execution"
+import { checkProviderUserTargetFields } from "@pf/process-execution/authorization"
+import { presentListActors } from "./actor-presentation"
 import {
   checkListAuthorization,
   checkListCreateAuthorization,
   checkListDeleteAuthorization,
   checkListUpdateAuthorization,
-  checkScheduleModeAuthorization,
   checkStepAuthorization,
-  checkTodoAuthorization,
 } from "./authorization"
 import { createPaginatedCollectionResolver } from "./collection-resolvers"
+import { executionIdentity } from "./execution-adapter"
 import { DynamicSchemaConfig } from "./graphql-api"
 import {
   canModifyListFieldForAnyRole,
   rolePathsForList,
 } from "./list-field-authorization"
 import {
-  checkProviderUserTargetFields,
-  completeStep,
-  startProcess,
-  startProcessExecution,
-} from "./process-operations"
-import {
   deepMerge,
   extractValidationErrors,
   getSchemaAnnotationDeep,
   getSubmissionFields,
 } from "./resolver-utils"
-import { processStartTriggerForSession } from "./session-guards"
 import type { UserContext } from "./types"
 
-/**
- * Creates a start mutation resolver with proper closure and input validation.
- * Authorization check first, then delegates to startProcess for validation + execution.
- */
-const createStartMutationResolver = (
-  processId: string,
-  processPath: string,
-  startStepPath: string,
-  step: Form<
-    Record<string, unknown>,
-    Record<string, StepMeta | FormStepMeta>,
-    // biome-ignore lint/suspicious/noExplicitAny: Form generics erased at runtime
-    any,
-    string
-  >,
-  inputSchema: Schema.Schema.Any,
-) => {
-  return (
+// Track the resolver instances, not field names: custom resolvers can replace
+// generated entries during schema composition.
+const processPermissionResolvers = new WeakMap<object, string>()
+
+export const isProcessPermissionResolver = (
+  fieldName: string,
+  resolver: unknown,
+): boolean =>
+  typeof resolver === "function" &&
+  processPermissionResolvers.get(resolver) === fieldName
+
+const processPermissionResolver = <Resolve extends object>(
+  fieldName: string,
+  resolve: Resolve,
+): { resolve: Resolve } => {
+  processPermissionResolvers.set(resolve, fieldName)
+  // The schema composer binds bare functions; an explicit resolve config
+  // preserves function identity so validation sees the actual wiring.
+  return { resolve }
+}
+
+const createStartMutationResolver =
+  (processPath: string) =>
+  (
     _parent: unknown,
     args: {
-      input: ProcessState
+      input?: ProcessState
       executionId?: string | null
       withoutWaiting?: boolean | null
     },
     context: UserContext,
     _info: GraphQLResolveInfo,
   ) =>
-    Effect.gen(function* () {
-      const completingRolePath = yield* checkStepAuthorization(
-        context,
-        startStepPath,
-      )
-      const withoutWaiting = args.withoutWaiting ?? false
-      yield* checkScheduleModeAuthorization(
-        context,
-        processPath,
-        withoutWaiting,
-      )
-      const startOptions = {
-        withoutWaiting,
-        ...(args.executionId == null ? {} : { executionId: args.executionId }),
-        ...(completingRolePath ? { completingRolePath } : {}),
-      }
-
-      return yield* startProcess(
-        processId,
-        processPath,
-        startStepPath,
-        args.input,
-        inputSchema,
-        step,
-        context,
-        startOptions,
-      )
+    startProcess({
+      processPath,
+      ...(args.input == null ? {} : { input: args.input }),
+      identity: executionIdentity(context),
+      ...(args.executionId == null ? {} : { executionId: args.executionId }),
+      withoutWaiting: args.withoutWaiting ?? false,
     })
-}
 
-/**
- * Creates a start mutation resolver for processes without input.
- * Authorization check first, then delegates to startProcessExecution.
- */
-const createStartMutationResolverNoInput = (
-  processId: string,
-  processPath: string,
-  startStepPath: string,
-  options?: {
-    readonly enqueueStartSystemStep?: boolean
-  },
-) => {
-  return (
-    _parent: unknown,
-    args: { executionId?: string | null; withoutWaiting?: boolean | null },
-    context: UserContext,
-    _info: GraphQLResolveInfo,
+export const createCompleteMutationResolver =
+  (
+    step: { readonly node: { readonly path: string } },
+    _inputSchema?: Schema.Top,
   ) =>
-    Effect.gen(function* () {
-      const completingRolePath = yield* checkStepAuthorization(
-        context,
-        startStepPath,
-      )
-      const withoutWaiting = args.withoutWaiting ?? false
-      yield* checkScheduleModeAuthorization(
-        context,
-        processPath,
-        withoutWaiting,
-      )
-      const startOptions = {
-        withoutWaiting,
-        trigger: processStartTriggerForSession(context.jwt?.properties),
-        ...(options ?? {}),
-        ...(args.executionId == null ? {} : { executionId: args.executionId }),
-        ...(completingRolePath ? { completingRolePath } : {}),
-      }
-
-      return yield* startProcessExecution(
-        processId,
-        processPath,
-        startStepPath,
-        {},
-        startOptions,
-      )
-    })
-}
-
-/**
- * Creates a complete mutation resolver.
- * Authorization check first, then delegates to completeStep for validation + execution.
- */
-export const createCompleteMutationResolver = (
-  step: Form<
-    Record<string, unknown>,
-    Record<string, StepMeta | FormStepMeta>,
-    // biome-ignore lint/suspicious/noExplicitAny: Form generics erased at runtime
-    any,
-    string
-  >,
-  inputSchema?: Schema.Schema.Any,
-) => {
-  return (
+  (
     _parent: unknown,
     args: { todoId: string; input?: ProcessState },
     context: UserContext,
     _info: GraphQLResolveInfo,
-  ): Effect.Effect<
-    Effect.Effect.Success<ReturnType<typeof completeStep>>,
-    Effect.Effect.Error<
-      | ReturnType<typeof completeStep>
-      | ReturnType<typeof checkTodoAuthorization>
-    >,
-    Effect.Effect.Context<
-      | ReturnType<typeof completeStep>
-      | ReturnType<typeof checkTodoAuthorization>
-    >
-  > =>
-    Effect.gen(function* () {
-      const stepCompletionOps = yield* StepCompletionOperations
-      const todo = yield* stepCompletionOps.queryTodoForCompletionById(
-        args.todoId,
-      )
-      if (!todo) {
-        return yield* new NotAuthorized({
-          action: "complete",
-          resource: args.todoId,
-          message: "Not authorized to complete step",
-        })
-      }
-      // Correction-required Todos remain active, but the normal completion route
-      // cannot update recipient data. Keep it blocked until correction handling
-      // gets its own submission mutation.
-      if (todo.correctionRequiredAt !== null) {
-        return yield* new NotAuthorized({
-          action: "complete",
-          resource: args.todoId,
-          message: "Correction required todos must use correction handling",
-        })
-      }
-      const completingRolePath = yield* checkTodoAuthorization(context, todo)
-      return yield* completeStep(
-        args.todoId,
-        args.input ?? {},
-        step,
-        inputSchema,
-        context,
-        {
-          ...(completingRolePath ? { completingRolePath } : {}),
-        },
-      )
+  ): ReturnType<typeof completeTodo> =>
+    completeTodo({
+      todoId: args.todoId,
+      input: args.input ?? {},
+      expectedStepPath: step.node.path,
+      actor: { kind: "authenticated", identity: executionIdentity(context) },
     })
-}
 
-/**
- * Creates a complete mutation resolver for steps without input.
- */
-const createCompleteMutationResolverNoInput = (
-  step: Form<
-    Record<string, unknown>,
-    Record<string, StepMeta | FormStepMeta>,
-    Schema.Struct.Fields,
-    string
-  >,
-) => {
-  return createCompleteMutationResolver(step, undefined)
-}
+const createCompleteMutationResolverNoInput = (step: {
+  readonly node: { readonly path: string }
+}) => createCompleteMutationResolver(step)
 
 /**
  * Type alias for list queries
@@ -298,7 +171,6 @@ const createListQueryResolver = (list: AnyList) => {
         yield* checkListAuthorization(context, listPath, rolePaths)
         const sort = yield* validateListSortInput(sortableFields, args.sort)
 
-        // Build query context
         const queryContext = {
           page: pagination.page,
           limit: pagination.limit,
@@ -306,8 +178,8 @@ const createListQueryResolver = (list: AnyList) => {
           ...(sort !== undefined ? { sort } : {}),
         } satisfies ListQueryContext
 
-        // Execute the list query
-        return yield* list.executeQuery(queryContext)
+        const result = yield* list.executeQuery(queryContext)
+        return { ...result, items: result.items.map(presentListActors) }
       }),
   )
 }
@@ -361,6 +233,7 @@ const createListItemQueryResolver = (list: AnyList) => {
       return yield* list
         .executeItemQuery(args.id, { controls: selectedControls })
         .pipe(
+          Effect.map(presentListActors),
           Effect.catchTag("ListItemQueryNotDefinedError", () =>
             Effect.succeed(null),
           ),
@@ -384,7 +257,7 @@ const checkListFieldPermissions = (
       if (!Object.hasOwn(input, fieldName)) continue
 
       const permission = getSchemaAnnotationDeep(
-        fieldSchema as Schema.Schema.Any,
+        fieldSchema as Schema.Top,
         FormPermission,
       )
       if (!Option.isSome(permission)) continue
@@ -413,7 +286,7 @@ const checkListFieldPermissions = (
  * Creates a record only after List and field authorization and authoritative schema validation.
  */
 const createListCreateMutationResolver =
-  (list: AnyList, inputSchema: Schema.Schema<Record<string, unknown>>) =>
+  (list: AnyList, inputSchema: Schema.Codec<Record<string, unknown>>) =>
   (
     _parent: unknown,
     args: { input: Record<string, unknown> },
@@ -424,18 +297,22 @@ const createListCreateMutationResolver =
       const roles = rolePathsForList(list.roles)
       yield* checkListAuthorization(context, listPath, roles)
       yield* checkListCreateAuthorization(context, listPath, roles)
-      const result = Schema.decodeUnknownEither(inputSchema, {
+      const result = Schema.decodeUnknownResult(inputSchema, {
         errors: "all",
         onExcessProperty: "error",
       })(args.input)
-      if (Either.isLeft(result))
+      if (Result.isFailure(result))
         return yield* new InputValidationError({
-          errors: extractValidationErrors(result.left),
+          errors: extractValidationErrors(result.failure),
         })
-      const input = result.right
+      const input = result.success
       const fields = getSubmissionFields(list.createFormFields ?? {})
       yield* checkListFieldPermissions(list, input, fields, context)
-      yield* checkProviderUserTargetFields(context, input, fields)
+      yield* checkProviderUserTargetFields(
+        executionIdentity(context),
+        input,
+        fields,
+      )
       return yield* list.executeCreate(input).pipe(
         Effect.catchTag("ListCreateError", (error) =>
           Effect.fail(
@@ -449,7 +326,7 @@ const createListCreateMutationResolver =
 
 const createListUpdateMutationResolver = (
   list: AnyList,
-  inputSchema: Schema.Schema<unknown, unknown, never>,
+  inputSchema: Schema.Codec<unknown, unknown, never, never>,
 ) => {
   const listPath = normalizePath(list.node.path)
   const rolePaths = rolePathsForList(list.roles)
@@ -475,16 +352,16 @@ const createListUpdateMutationResolver = (
       // Validate input against the Effect Schema, collecting all errors.
       // Nullable omitted fields validate as null, but only provided fields are
       // authorized and passed to the list update implementation.
-      const validationResult = Schema.decodeUnknownEither(inputSchema, {
+      const validationResult = Schema.decodeUnknownResult(inputSchema, {
         errors: "all",
       })(validationInput)
 
-      if (Either.isLeft(validationResult)) {
-        const errors = extractValidationErrors(validationResult.left)
+      if (Result.isFailure(validationResult)) {
+        const errors = extractValidationErrors(validationResult.failure)
         return yield* new InputValidationError({ errors })
       }
 
-      const validatedInput = validationResult.right as Record<string, unknown>
+      const validatedInput = validationResult.success as Record<string, unknown>
       const providedInput = Object.fromEntries(
         Object.keys(args.input).map((field) => [field, validatedInput[field]]),
       )
@@ -495,12 +372,11 @@ const createListUpdateMutationResolver = (
         context,
       )
       yield* checkProviderUserTargetFields(
-        context,
+        executionIdentity(context),
         providedInput,
         submissionFields,
       )
 
-      // Execute the update
       return yield* list.executeUpdate(args.id, providedInput).pipe(
         Effect.catchTag("ListItemUpdateNotDefinedError", () =>
           Effect.succeed(null),
@@ -575,9 +451,20 @@ const createLookupQueryResolver = (
       yield* checkStepAuthorization(context, stepPath)
 
       const filter = args.input["filter"] ?? ""
-      const limit = Math.min(args.limit ?? 20, 100)
+      const field = getSubmissionFields(form.output)[fieldName]
+      const metadata = field
+        ? Option.getOrUndefined(getSchemaAnnotationDeep(field, FormLookupInput))
+        : undefined
+      const limit =
+        typeof metadata === "object" &&
+        metadata !== null &&
+        "mode" in metadata &&
+        metadata.mode === "local" &&
+        "maxItems" in metadata &&
+        typeof metadata.maxItems === "number"
+          ? metadata.maxItems + 1
+          : Math.min(args.limit ?? 20, 100)
 
-      // Extract dependency values from input
       const deps: Record<string, string | undefined> = {}
       for (const dep of dependencies) {
         deps[dep] = args.input[dep]
@@ -593,7 +480,6 @@ export const dynamicSchema = Effect.gen(function* () {
   const config = yield* DynamicSchemaConfig
   const schemaPath = config.schemaPath
 
-  // Check if file exists
   const fileExists = yield* fs.exists(schemaPath)
   if (!fileExists) {
     return yield* new MissingGeneratedSchemaError({
@@ -601,7 +487,6 @@ export const dynamicSchema = Effect.gen(function* () {
     })
   }
 
-  // Read the schema file
   const dynamicTypeDefs = yield* fs.readFileString(schemaPath)
 
   // Get the services needed for mutation resolvers
@@ -645,42 +530,11 @@ export const dynamicSchema = Effect.gen(function* () {
       continue
     }
 
-    // Normalize start step path for DB storage
-    const startStepPath = normalizePath(startNode.node.path)
-
-    // Generate start mutation resolver.
-    // Only Form start nodes accept user input. System steps may have output
-    // fields, but those are produced by the worker rather than supplied by
-    // the caller. Zero-field forms intentionally share the no-input path.
-    const hasStartInput =
-      startNode.isForm && Object.keys(startNode.output ?? {}).length > 0
-    const startSchema = hasStartInput
-      ? startNode.submissionEffectSchema
-      : undefined
-    if (startSchema) {
-      // Has output schema: create start mutation with validation
-      mutationResolvers[startMutationName] = createStartMutationResolver(
-        processId,
-        processPath,
-        startStepPath,
-        startNode as Form<
-          Record<string, unknown>,
-          Record<string, StepMeta | FormStepMeta>,
-          // biome-ignore lint/suspicious/noExplicitAny: Form generics erased at runtime
-          any,
-          string
-        >,
-        startSchema,
-      )
-    } else {
-      // No input: create start mutation
-      mutationResolvers[startMutationName] = createStartMutationResolverNoInput(
-        processId,
-        processPath,
-        startStepPath,
-        { enqueueStartSystemStep: startNode.isSystemStep },
-      )
-    }
+    const startResolver = createStartMutationResolver(processPath)
+    mutationResolvers[startMutationName] =
+      process.props.cron && startNode.isSystemStep
+        ? startResolver
+        : processPermissionResolver(startMutationName, startResolver)
 
     // Generate complete mutation resolvers for all Form steps in this process
     for (const { form, path: stepPath } of process.forms()) {
@@ -689,15 +543,13 @@ export const dynamicSchema = Effect.gen(function* () {
       // Use submissionEffectSchema (flat, excludes read-only/structural)
       // for server-side validation instead of the wrapped outputSchema.
       const completeSchema = form.submissionEffectSchema
-      if (completeSchema) {
-        mutationResolvers[mutationName] = createCompleteMutationResolver(
-          form,
-          completeSchema,
-        )
-      } else {
-        mutationResolvers[mutationName] =
-          createCompleteMutationResolverNoInput(form)
-      }
+      const resolver = completeSchema
+        ? createCompleteMutationResolver(form, completeSchema)
+        : createCompleteMutationResolverNoInput(form)
+      mutationResolvers[mutationName] = processPermissionResolver(
+        mutationName,
+        resolver,
+      )
     }
   }
 
@@ -705,7 +557,6 @@ export const dynamicSchema = Effect.gen(function* () {
   // biome-ignore lint/suspicious/noExplicitAny: legacy code
   const queryResolvers: Record<string, any> = {}
 
-  // Get all lists from the organization
   const allLists = org.lists()
 
   for (const list of allLists) {
@@ -723,7 +574,7 @@ export const dynamicSchema = Effect.gen(function* () {
       mutationResolvers[list.createMutationName()] =
         createListCreateMutationResolver(
           list,
-          Schema.make<Record<string, unknown>>(createSchema.ast),
+          Schema.make<Schema.Codec<Record<string, unknown>>>(createSchema.ast),
         )
     }
 
@@ -736,11 +587,10 @@ export const dynamicSchema = Effect.gen(function* () {
       const updateMutationName = list.updateMutationName()
       mutationResolvers[updateMutationName] = createListUpdateMutationResolver(
         list,
-        submission as unknown as Schema.Schema<unknown, unknown, never>,
+        submission as unknown as Schema.Codec<unknown, unknown, never, never>,
       )
     }
 
-    // Register delete mutation resolver if list has delete
     if (list.hasDelete) {
       const deleteMutationName = list.deleteMutationName()
       mutationResolvers[deleteMutationName] =
@@ -751,6 +601,21 @@ export const dynamicSchema = Effect.gen(function* () {
   // Register lookup query resolvers for dependent lookups
   for (const process of allProcesses) {
     for (const { form } of process.forms()) {
+      const prefill = form.prefillQuery()
+      if (prefill) {
+        queryResolvers[form.prefillQueryName()] = (
+          _parent: unknown,
+          args: { value: string },
+          context: UserContext,
+        ) =>
+          Effect.gen(function* () {
+            yield* checkStepAuthorization(
+              context,
+              normalizePath(form.node.path),
+            )
+            return yield* prefill.load(args.value)
+          })
+      }
       const overrides = form.lookupOverrides()
 
       for (const [fieldName, override] of overrides) {

@@ -1,5 +1,5 @@
-import { SqlClient } from "@effect/sql"
 import { DateTime, Effect, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-sqlite"
 import { BusinessCalendarQueries } from "@pf/graphql-db-operations"
 import {
@@ -18,7 +18,7 @@ it("loads only live calendar entries and uses org-unit indexes", async () => {
       const db = yield* TypedSqliteDrizzle
       const sql = yield* SqlClient.SqlClient
       const calendars = yield* BusinessCalendarQueries
-      const day = DateTime.unsafeMake("2026-09-23T00:00:00Z")
+      const day = DateTime.makeUnsafe("2026-09-23T00:00:00Z")
       for (const orgUnitId of ["ou-calendar", "ou-other"]) {
         yield* db.insert(schema.orgUnit).values({
           id: orgUnitId,

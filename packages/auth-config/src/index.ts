@@ -5,6 +5,7 @@ export {
   type SecretClientsConfig,
   isAuthenticationConfig,
 } from "./lib/authentication-config"
+export * from "./lib/aws-role-binding"
 export {
   CedarPoliciesDirNotFoundError,
   CedarPoliciesProvider,
@@ -19,11 +20,13 @@ export {
   type CustomEntitiesConfigProps,
   isCustomEntitiesConfig,
 } from "./lib/custom-entities-config"
+export { localFixtureSecretClients } from "./lib/local-fixture-secret-clients"
 export {
   PoliciesConfig,
   type PoliciesConfigProps,
   isPoliciesConfig,
 } from "./lib/policies-config"
+export * from "./lib/project-workload"
 export {
   type AppleOAuthProviderConfig,
   AppleOAuthProviderConfigSchema,
@@ -48,3 +51,4 @@ export {
   type SlackOAuthProviderConfig,
   SlackOAuthProviderConfigSchema,
 } from "./lib/provider-types"
+export * from "./lib/workload-trust"

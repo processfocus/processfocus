@@ -3,6 +3,10 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs as utilParseArgs } from "node:util"
 import type { ExecutionArgs } from "@envelop/types"
+import {
+  formatContentDisposition,
+  hasInvalidDownloadFilename,
+} from "@processfocus/runtime"
 import type { ServerWebSocket } from "bun"
 import {
   Data,
@@ -19,10 +23,7 @@ import { GraphQLError } from "graphql"
 import type { SubscribePayload, Context as WsContext } from "graphql-ws"
 import { handleProtocols, makeHandler } from "graphql-ws/use/bun"
 import { DatabaseConnectionInfo } from "@pf/db-info"
-import {
-  formatContentDisposition,
-  hasInvalidDownloadFilename,
-} from "@pf/document-store-service"
+import { NumberFromString } from "@pf/form-schema"
 import {
   type ExecutionChangeEvent,
   ExecutionCollectionOps,
@@ -72,7 +73,7 @@ const constantTimeEqual = (a: string, b: string): boolean => {
  * Simple mutex for serializing async operations.
  * Ensures only one operation runs at a time, with proper error isolation.
  *
- * Note: We use a plain Promise-based mutex instead of Effect.Semaphore because
+ * Note: We use a plain Promise-based mutex instead of Semaphore.Semaphore because
  * this runs in graphql-ws's onSubscribe callback which expects normal async/await
  * error propagation. Effect.tryPromise wraps errors in UnknownException which
  * breaks the error message propagation that graphql-ws needs.
@@ -100,16 +101,17 @@ class Mutex {
  * Service for providing the callback secret used for internal API authentication.
  * This allows the secret to be injected via layers in tests instead of environment variables.
  */
-export class CallbackSecret extends EffectContext.Tag(
-  "@pf/runtime-local/CallbackSecret",
-)<CallbackSecret, Option.Option<string>>() {}
+export class CallbackSecret extends EffectContext.Service<
+  CallbackSecret,
+  Option.Option<string>
+>()("@pf/runtime-local/CallbackSecret") {}
 
 /**
  * Live layer that reads the internal API secret from the INTERNAL_API_SECRET environment variable.
  */
 export const CallbackSecretLive = Layer.effect(
   CallbackSecret,
-  Effect.sync(() => Option.fromNullable(process.env["INTERNAL_API_SECRET"])),
+  Effect.sync(() => Option.fromNullishOr(process.env["INTERNAL_API_SECRET"])),
 )
 
 // OpenTelemetry metrics for tracking WebSocket connections and subscriptions
@@ -134,7 +136,10 @@ class InvalidUsageError extends Data.TaggedError("InvalidUsageError")<{
 
 const ParsedArgsSchema = Schema.Struct({
   port: Schema.optional(
-    Schema.NumberFromString.pipe(Schema.int(), Schema.between(0, 65535)),
+    NumberFromString.pipe(
+      Schema.check(Schema.isInt()),
+      Schema.check(Schema.isBetween({ minimum: 0, maximum: 65535 })),
+    ),
   ),
   org: Schema.String,
 })
@@ -167,7 +172,7 @@ export const parseArgs = (
       return yield* new InvalidUsageError({ _: undefined })
     }
 
-    return yield* Schema.decodeUnknown(ParsedArgsSchema)({
+    return yield* Schema.decodeUnknownEffect(ParsedArgsSchema)({
       port: parseResult.values.port,
       org,
     }).pipe(Effect.mapError(() => new InvalidUsageError({ _: undefined })))
@@ -196,13 +201,10 @@ export const makeServerEffect = (port: Option.Option<number>) =>
     const resolverRuntime = yield* ResolverRuntime
     const routeServerPluginWebhook = yield* makeServerPluginWebhookRouter
 
-    // Get callback secret from service (allows injection via layers in tests)
     const callbackSecret = yield* CallbackSecret
 
-    // Get document store config for file upload/download endpoints
     const docStoreConfig = yield* LocalDocumentStoreConfig
 
-    // Log database connection
     const dbConnectionInfo = yield* DatabaseConnectionInfo
     yield* Effect.log(`💾 Connecting to database: ${dbConnectionInfo}`)
 
@@ -237,7 +239,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
         const connId = connectionIdCounter
         connectionToId.set(ctx, connId)
 
-        // Store the WebSocket for later cleanup
         wsToContext.set(ctx.extra.socket, ctx)
 
         console.log(
@@ -245,9 +246,8 @@ export const makeServerEffect = (port: Option.Option<number>) =>
         )
         console.log(`   Timestamp: ${new Date().toISOString()}`)
 
-        // Update OpenTelemetry metric for active connections
         resolverRuntime.runFork(
-          Metric.set(activeWebSocketConnections, connectionCounter),
+          Metric.update(activeWebSocketConnections, connectionCounter),
         )
 
         return true
@@ -268,9 +268,8 @@ export const makeServerEffect = (port: Option.Option<number>) =>
         }
         console.log(`📊 [WS] Active subscriptions: ${activeSubscriptions.size}`)
 
-        // Update OpenTelemetry metric for active subscriptions
         resolverRuntime.runFork(
-          Metric.set(activeGraphqlSubscriptions, activeSubscriptions.size),
+          Metric.update(activeGraphqlSubscriptions, activeSubscriptions.size),
         )
       },
 
@@ -291,9 +290,8 @@ export const makeServerEffect = (port: Option.Option<number>) =>
         console.log(`   Timestamp: ${new Date().toISOString()}`)
         console.log(`📊 [WS] Active subscriptions: ${activeSubscriptions.size}`)
 
-        // Update OpenTelemetry metric for active subscriptions
         resolverRuntime.runFork(
-          Metric.set(activeGraphqlSubscriptions, activeSubscriptions.size),
+          Metric.update(activeGraphqlSubscriptions, activeSubscriptions.size),
         )
 
         const grouped = new Map<string, number>()
@@ -381,12 +379,10 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           return resolverRuntime.runPromise(webhookEffect)
         }
 
-        // Handle internal callback endpoint for todo events
         if (
           url.pathname === "/internal/todo-event" &&
           request.method === "POST"
         ) {
-          // Validate callback secret (required)
           const providedSecret = request.headers.get("x-callback-secret")
 
           if (Option.isNone(callbackSecret)) {
@@ -405,7 +401,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           // Note: in local runtime, schema is unused but required by interface
           const { schema } = yoga.getEnveloped({ req: request })
 
-          // Emit event to subscribers using Effect error handling
           const emitEffect = Effect.flatMap(TodoEvents, (todoEvents) =>
             todoEvents.emit(event, schema),
           )
@@ -423,12 +418,10 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           return new Response(null, { status: 204 })
         }
 
-        // Handle internal callback endpoint for process events
         if (
           url.pathname === "/internal/process-event" &&
           request.method === "POST"
         ) {
-          // Validate callback secret (required)
           const providedSecret = request.headers.get("x-callback-secret")
 
           if (Option.isNone(callbackSecret)) {
@@ -447,7 +440,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           // Note: in local runtime, schema is unused but required by interface
           const { schema } = yoga.getEnveloped({ req: request })
 
-          // Emit event to subscribers using Effect error handling
           const emitEffect = Effect.flatMap(ProcessEvents, (processEvents) =>
             processEvents.emit(event, schema),
           )
@@ -465,12 +457,10 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           return new Response(null, { status: 204 })
         }
 
-        // Handle internal callback endpoint for execution events
         if (
           url.pathname === "/internal/execution-event" &&
           request.method === "POST"
         ) {
-          // Validate callback secret (required)
           const providedSecret = request.headers.get("x-callback-secret")
 
           if (Option.isNone(callbackSecret)) {
@@ -489,7 +479,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           // Note: in local runtime, schema is unused but required by interface
           const { schema } = yoga.getEnveloped({ req: request })
 
-          // Emit event to subscribers using Effect error handling
           const emitEffect = Effect.flatMap(
             ExecutionEvents,
             (executionEvents) => executionEvents.emit(event, schema),
@@ -513,7 +502,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           url.pathname === "/internal/import-completed" &&
           request.method === "POST"
         ) {
-          // Validate callback secret (required)
           const providedSecret = request.headers.get("x-callback-secret")
 
           if (Option.isNone(callbackSecret)) {
@@ -721,7 +709,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
             return new Response("Bad Request", { status: 400 })
           }
 
-          // Check expiry
           const expiresNum = Number(expires)
           if (Number.isNaN(expiresNum) || Date.now() / 1000 > expiresNum) {
             return new Response("URL expired", { status: 403 })
@@ -801,7 +788,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
             }
           }
 
-          // Ensure storage subdirectory exists
           const storeDir = join(docStoreConfig.storagePath, storePrefix)
           if (!existsSync(storeDir)) {
             mkdirSync(storeDir, { recursive: true })
@@ -868,8 +854,8 @@ export const makeServerEffect = (port: Option.Option<number>) =>
               yield* fileOps.markFileUploaded(fileId, bytesWritten, contentType)
             }).pipe(
               Effect.retry(
-                Schedule.exponential("100 millis").pipe(
-                  Schedule.compose(Schedule.recurs(2)),
+                Schedule.exponential("100 millis").pipe((schedule) =>
+                  Schedule.max([schedule, Schedule.recurs(2)]),
                 ),
               ),
             ),
@@ -916,7 +902,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
             return new Response("Bad Request", { status: 400 })
           }
 
-          // Check expiry
           const expiresNum = Number(expires)
           if (Number.isNaN(expiresNum) || Date.now() / 1000 > expiresNum) {
             return new Response("URL expired", { status: 403 })
@@ -963,7 +948,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           return new Response(file, { headers: responseHeaders })
         }
 
-        // Check if this is a WebSocket upgrade request
         const upgradeHeader = request.headers.get("upgrade")
 
         if (upgradeHeader === "websocket") {
@@ -987,8 +971,14 @@ export const makeServerEffect = (port: Option.Option<number>) =>
           return new Response()
         }
 
-        // Otherwise handle as HTTP request via Yoga
-        return yoga.fetch(request, srv)
+        // Quiet SSE subscriptions can outlive Bun's ordinary HTTP idle timeout.
+        const response = await yoga.fetch(request, srv)
+        if (
+          response.headers.get("content-type")?.includes("text/event-stream")
+        ) {
+          srv.timeout(request, 0)
+        }
+        return response
       },
       websocket: {
         ...websocketHandler,
@@ -1007,9 +997,8 @@ export const makeServerEffect = (port: Option.Option<number>) =>
             )
             console.log(`   Timestamp: ${new Date().toISOString()}`)
 
-            // Update OpenTelemetry metric for active connections
             resolverRuntime.runFork(
-              Metric.set(activeWebSocketConnections, connectionCounter),
+              Metric.update(activeWebSocketConnections, connectionCounter),
             )
 
             // Clean up orphaned subscriptions from this connection
@@ -1023,7 +1012,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
                   .map(([id, s]) => `${id.slice(0, 8)}:${s.operation}`)
                   .join(", "),
               )
-              // Remove orphaned subscriptions
               for (const [id] of remaining) {
                 activeSubscriptions.delete(id)
               }
@@ -1031,9 +1019,8 @@ export const makeServerEffect = (port: Option.Option<number>) =>
                 `📊 [WS] Active subscriptions: ${activeSubscriptions.size}`,
               )
 
-              // Update OpenTelemetry metric for active subscriptions
               resolverRuntime.runFork(
-                Metric.set(
+                Metric.update(
                   activeGraphqlSubscriptions,
                   activeSubscriptions.size,
                 ),
@@ -1041,7 +1028,6 @@ export const makeServerEffect = (port: Option.Option<number>) =>
             }
           }
 
-          // Call graphql-ws close handler
           return websocketHandler.close?.(ws, code, reason)
         },
       },

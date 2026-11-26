@@ -1,0 +1,42 @@
+---
+title: System steps
+description: Add automated work to a process with NodeStep.
+---
+
+Use `NodeStep` from `@pf/process` to run automated work, such as calling an
+external service or saving a record. Unlike a form step, a system step does
+not have a role and does not wait for a person to complete it.
+
+This example adds an automated step between receiving an order and confirming
+dispatch. In the [Processes example](/docs/reference/processes/#adding-steps),
+replace the final line that connects the steps with the code below, and add
+the imports alongside the existing ones.
+
+```typescript
+import { NodeStep } from "@pf/process"
+import { Effect, Schema } from "effect"
+
+const received = orderFulfilment.start(receiveOrder)
+
+const normaliseShippingCode = new NodeStep(received, "Normalise shipping code", {
+  input: () => Effect.succeed({ code: " nz " }),
+  output: { shippingCode: Schema.String },
+  execute: ({ code }) =>
+    Effect.succeed({ shippingCode: code.trim().toUpperCase() }),
+})
+
+received.next(normaliseShippingCode).next(confirmDispatch).end()
+```
+
+`input` prepares the data for `execute`. In practice, it can read data from
+earlier steps rather than use a fixed value. `output` declares the fields the
+step adds to the process state.
+
+Set `retries` to control how many times the runtime retries the step after a
+failure. Use `0` for no retries or omit it to use the system default.
+
+# To discuss
+
+- more input examples
+- how does output works
+- what if execute doesn't return a conforming type? Compile error?

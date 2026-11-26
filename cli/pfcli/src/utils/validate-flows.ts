@@ -64,7 +64,6 @@ export const validateFlows = (
   | MultipleElseBranchError
 > =>
   Effect.gen(function* () {
-    // Check for flow errors
     const flowErrors = org.validateAllFlows()
     if (flowErrors.length > 0) {
       yield* Console.error("\n❌ Flow Validation Error:")
@@ -117,7 +116,6 @@ export const validateFlows = (
       return yield* new FlowValidationError({ flowErrors })
     }
 
-    // Check for multiple start nodes
     for (const process of org.processes()) {
       const startNodes = process.startNodes()
       if (startNodes.length > 1) {

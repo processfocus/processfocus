@@ -1,4 +1,4 @@
-import { Data, Effect, Either, Schema, SchemaAST } from "effect"
+import { Data, Effect, Result, Schema, SchemaAST } from "effect"
 import {
   type FlattenMarker,
   type ListFieldMarker,
@@ -7,7 +7,6 @@ import {
   hasFlattenAnnotation,
   hasStructuralOnlyAnnotation,
   isReadOnlyField,
-  mapFormPropertySignature,
 } from "@pf/form-schema"
 
 // Error for field name collisions during flattening
@@ -34,7 +33,6 @@ export class InvalidFlattenAnnotationError extends Data.TaggedError(
   }
 }
 
-// Type utility to convert union to intersection
 type UnionToIntersection<U> = (
   U extends unknown
     ? (k: U) => void
@@ -45,69 +43,81 @@ type UnionToIntersection<U> = (
 
 type IsExcluded<Field> = Field extends StructuralOnlyMarker | ReadOnlyMarker
   ? true
-  : Field extends { readonly from: infer From }
-    ? IsExcluded<From>
-    : Field extends { readonly members: ReadonlyArray<infer Member> }
-      ? true extends IsExcluded<Member>
-        ? true
+  : Field extends { readonly schema: infer Inner }
+    ? IsExcluded<Inner>
+    : Field extends { readonly from: infer From }
+      ? IsExcluded<From>
+      : Field extends { readonly members: ReadonlyArray<infer Member> }
+        ? true extends IsExcluded<Member>
+          ? true
+          : false
         : false
-      : false
 
-type ProjectedStruct<Fields extends Schema.Struct.Fields> = Schema.Struct<
-  FlattenFields<Fields> extends infer F extends Schema.Struct.Fields ? F : never
+type ProjectedStruct<
+  Fields extends Schema.Struct.Fields,
+  KeepReadOnly extends boolean,
+> = Schema.Struct<
+  (
+    KeepReadOnly extends true
+      ? FlattenFieldsKeepingReadOnly<Fields>
+      : FlattenFields<Fields>
+  ) extends infer F extends Schema.Struct.Fields
+    ? F
+    : never
 >
 
 // Preserve wrapper contracts while projecting their contained schemas.
-type ProjectSchema<S extends Schema.Schema.All> =
+// Detail arrays recurse like ListField; ordinary submission arrays retain their
+// existing projection.
+type ProjectSchema<
+  S extends Schema.Constraint,
+  KeepReadOnly extends boolean = false,
+> =
   S extends Schema.Struct<infer Fields>
-    ? ProjectedStruct<Fields>
+    ? ProjectedStruct<Fields, KeepReadOnly>
     : S extends ListFieldMarker<infer Items>
-      ? Schema.Array$<ProjectedStruct<Items>>
+      ? Schema.$Array<ProjectedStruct<Items, KeepReadOnly>>
       : S extends Schema.Union<infer Members>
         ? Schema.Union<{
-            [K in keyof Members]: ProjectSchema<Members[K]>
+            [K in keyof Members]: ProjectSchema<Members[K], KeepReadOnly>
           }>
-        : S extends Schema.transformOrFail<infer From, infer To, infer R>
-          ? Schema.Schema<
-              Schema.Schema.Type<ProjectSchema<To>>,
-              Schema.Schema.Encoded<ProjectSchema<From>>,
-              | R
-              | Schema.Schema.Context<ProjectSchema<From>>
-              | Schema.Schema.Context<ProjectSchema<To>>
-            >
-          : S extends Schema.refine<infer A, infer From>
-            ? Schema.Schema<
-                Schema.Schema.Type<ProjectSchema<From>> &
-                  Omit<A, keyof Schema.Schema.Type<From>>,
-                Schema.Schema.Encoded<ProjectSchema<From>>,
-                Schema.Schema.Context<ProjectSchema<From>>
-              >
-            : S
+        : S extends Schema.optionalKey<infer Inner>
+          ? Schema.optionalKey<ProjectSchema<Inner, KeepReadOnly>>
+          : S extends Schema.optional<infer Inner>
+            ? Schema.optional<ProjectSchema<Inner, KeepReadOnly>>
+            : S extends Schema.decodeTo<
+                  infer To,
+                  infer From,
+                  infer RD,
+                  infer RE
+                >
+              ? Schema.decodeTo<
+                  ProjectSchema<To, KeepReadOnly>,
+                  ProjectSchema<From, KeepReadOnly>,
+                  RD,
+                  RE
+                >
+              : S extends Schema.toType<infer Inner>
+                ? Schema.toType<ProjectSchema<Inner, KeepReadOnly>>
+                : S extends Schema.toEncoded<infer Inner>
+                  ? Schema.toEncoded<ProjectSchema<Inner, KeepReadOnly>>
+                  : KeepReadOnly extends true
+                    ? S extends Schema.$Array<infer Item>
+                      ? Schema.$Array<ProjectSchema<Item, KeepReadOnly>>
+                      : S
+                    : S
 
 type ProjectField<Field extends Schema.Struct.Fields[string]> =
-  Field extends Schema.PropertySignature<
-    infer TT,
-    infer A,
-    infer Key,
-    infer ET,
-    infer I,
-    infer Default,
-    infer _R
-  > & { readonly from: infer From extends Schema.Schema.All }
-    ? Schema.PropertySignature<
-        TT,
-        | Schema.Schema.Type<ProjectSchema<From>>
-        | Exclude<A, Schema.Schema.Type<From>>,
-        Key,
-        ET,
-        | Schema.Schema.Encoded<ProjectSchema<From>>
-        | Exclude<I, Schema.Schema.Encoded<From>>,
-        Default,
-        Schema.Schema.Context<ProjectSchema<From>>
-      >
-    : Field extends Schema.Schema.All
-      ? ProjectSchema<Field>
-      : Field
+  ProjectSchema<Field>
+
+type WrapperFields<Field> = Field extends Schema.Struct<infer Fields> &
+  FlattenMarker
+  ? FlattenFields<Fields>
+  : Field extends Schema.toEncoded<infer Inner>
+    ? WrapperFields<Inner> extends infer Fields extends Schema.Struct.Fields
+      ? { [K in keyof Fields]: Schema.toEncoded<Fields[K]> }
+      : never
+    : never
 
 // Wrapper fields flatten; ordinary containers keep their keys and optionality.
 export type FlattenFields<Fields extends Schema.Struct.Fields> =
@@ -115,16 +125,56 @@ export type FlattenFields<Fields extends Schema.Struct.Fields> =
     {
       [K in keyof Fields]: IsExcluded<Fields[K]> extends true
         ? never
-        : Fields[K] extends Schema.Struct<infer F> & FlattenMarker
-          ? FlattenFields<F>
-          : { [P in K]: ProjectField<Fields[K]> }
+        : [WrapperFields<Fields[K]>] extends [never]
+          ? { [P in K]: ProjectField<Fields[K]> }
+          : WrapperFields<Fields[K]>
+    }[keyof Fields]
+  >
+
+type IsStructuralOnly<Field> = Field extends StructuralOnlyMarker
+  ? true
+  : Field extends { readonly schema: infer Inner }
+    ? IsStructuralOnly<Inner>
+    : Field extends { readonly from: infer From }
+      ? IsStructuralOnly<From>
+      : Field extends { readonly members: ReadonlyArray<infer Member> }
+        ? true extends IsStructuralOnly<Member>
+          ? true
+          : false
+        : false
+
+type WrapperFieldsKeepingReadOnly<Field> = Field extends Schema.Struct<
+  infer Fields
+> &
+  FlattenMarker
+  ? FlattenFieldsKeepingReadOnly<Fields>
+  : Field extends Schema.toEncoded<infer Inner>
+    ? WrapperFieldsKeepingReadOnly<Inner> extends infer Fields extends
+        Schema.Struct.Fields
+      ? { [K in keyof Fields]: Schema.toEncoded<Fields[K]> }
+      : never
+    : never
+
+/**
+ * Flatten wrapper fields like `FlattenFields`, but keep read-only fields:
+ * detail/output data is display-only content that queries still return.
+ * Structural-only elements are omitted, matching GraphQL output walking.
+ */
+export type FlattenFieldsKeepingReadOnly<Fields extends Schema.Struct.Fields> =
+  UnionToIntersection<
+    {
+      [K in keyof Fields]: IsStructuralOnly<Fields[K]> extends true
+        ? never
+        : [WrapperFieldsKeepingReadOnly<Fields[K]>] extends [never]
+          ? { [P in K]: ProjectSchema<Fields[K], true> }
+          : WrapperFieldsKeepingReadOnly<Fields[K]>
     }[keyof Fields]
   >
 
 export const isStructSchema = (
-  field: Schema.Schema.Any,
+  field: Schema.Constraint,
 ): field is Schema.Struct<Schema.Struct.Fields> =>
-  field.ast._tag === "TypeLiteral" && "fields" in field
+  field.ast._tag === "Objects" && "fields" in field
 
 type FlattenedSubmissionStruct<Fields extends Schema.Struct.Fields> =
   Schema.Struct<
@@ -139,12 +189,12 @@ export type SubmissionSchemaError =
 
 // Checks whether a field is a flattenable Wrapper struct (errors on invalid annotation).
 const isFlattenableStruct = (
-  field: Schema.Schema.Any,
+  field: Schema.Constraint,
   fieldName: string,
 ): Effect.Effect<boolean, InvalidFlattenAnnotationError> =>
   Effect.gen(function* () {
     const hasFlatten = hasFlattenAnnotation(field)
-    const isStructAst = field.ast._tag === "TypeLiteral"
+    const isStructAst = field.ast._tag === "Objects"
 
     // Defensive: if has flatten annotation but isn't a struct, that's a programming error
     if (hasFlatten && !isStructAst) {
@@ -165,7 +215,7 @@ export const submissionSchema = <Fields extends Schema.Struct.Fields>(
     const flatFields: Record<string, Schema.Struct.Fields[string]> = {}
 
     for (const [key, field] of Object.entries(schema.fields)) {
-      const fieldAsAny = field as Schema.Schema.Any
+      const fieldAsAny = field as Schema.Top
 
       if (hasStructuralOnlyAnnotation(fieldAsAny)) {
         // Skip structural-only fields (UI-only, not in submission)
@@ -193,7 +243,7 @@ export const submissionSchema = <Fields extends Schema.Struct.Fields>(
               wrapperField: `${key}...${nestedKey}`,
             })
           }
-          flatFields[nestedKey] = nestedValue as Schema.Schema.Any
+          flatFields[nestedKey] = nestedValue as Schema.Top
         }
       } else {
         if (key in flatFields)
@@ -216,51 +266,33 @@ export const submissionSchema = <Fields extends Schema.Struct.Fields>(
 const projectField = (
   field: Schema.Struct.Fields[string],
 ): Effect.Effect<Schema.Struct.Fields[string], SubmissionSchemaError> =>
-  Effect.gen(function* () {
-    if (!Schema.isPropertySignature(field))
-      return Schema.make(yield* projectNested(field.ast))
-    const signature = field.ast
-    const input = yield* projectNested(
-      signature._tag === "PropertySignatureDeclaration"
-        ? signature.type
-        : signature.from.type,
-    )
-    const output =
-      signature._tag === "PropertySignatureDeclaration"
-        ? input
-        : yield* projectNested(signature.to.type)
-    return mapFormPropertySignature(field, (_ast, side) =>
-      side === "input" ? input : output,
-    )
-  })
+  Effect.map(projectNested(field.ast), (ast) => Schema.make(ast))
 
 const projectNested = (
   ast: SchemaAST.AST,
 ): Effect.Effect<SchemaAST.AST, SubmissionSchemaError> =>
   Effect.gen(function* () {
-    if (ast._tag === "TypeLiteral") {
+    const encoding = ast.encoding
+      ? yield* Effect.forEach(ast.encoding, (link) =>
+          Effect.map(
+            projectNested(link.to),
+            (to) => new SchemaAST.Link(to, link.transformation),
+          ),
+        )
+      : undefined
+    if (ast._tag === "Objects") {
       const properties: SchemaAST.PropertySignature[] = []
       const names = new Set<PropertyKey>()
       for (const property of ast.propertySignatures) {
-        const field = Schema.make(
-          SchemaAST.annotations(property.type, property.annotations),
-        )
+        const field = Schema.make(property.type)
         if (hasStructuralOnlyAnnotation(field) || isReadOnlyField(field))
           continue
         const flatten = yield* isFlattenableStruct(field, String(property.name))
         const projected = yield* projectNested(property.type)
         const children =
-          flatten && projected._tag === "TypeLiteral"
+          flatten && projected._tag === "Objects"
             ? projected.propertySignatures
-            : [
-                new SchemaAST.PropertySignature(
-                  property.name,
-                  projected,
-                  property.isOptional,
-                  property.isReadonly,
-                  property.annotations,
-                ),
-              ]
+            : [new SchemaAST.PropertySignature(property.name, projected)]
         for (const child of children) {
           if (names.has(child.name))
             return yield* new FieldNameCollisionError({
@@ -271,74 +303,42 @@ const projectNested = (
           properties.push(child)
         }
       }
-      return new SchemaAST.TypeLiteral(
+      return new SchemaAST.Objects(
         properties,
         ast.indexSignatures,
         ast.annotations,
+        ast.checks,
+        encoding,
+        ast.context,
+        ast.encodingChecks,
       )
     }
     if (ast._tag === "Union")
-      return SchemaAST.Union.make(
+      return new SchemaAST.Union(
         yield* Effect.forEach(ast.types, projectNested),
+        ast.options,
         ast.annotations,
+        ast.checks,
+        encoding,
+        ast.context,
+        ast.encodingChecks,
       )
-    if (ast._tag === "Refinement")
-      return new SchemaAST.Refinement(
-        yield* projectNested(ast.from),
-        ast.filter,
+    if (ast._tag === "Arrays")
+      return new SchemaAST.Arrays(
+        ast.isMutable,
+        yield* Effect.forEach(ast.elements, projectNested),
+        yield* Effect.forEach(ast.rest, projectNested),
         ast.annotations,
+        ast.checks,
+        encoding,
+        ast.context,
+        ast.encodingChecks,
       )
-    if (ast._tag === "Transformation") {
-      const from = yield* projectNested(ast.from)
-      const to = yield* projectNested(ast.to)
-      // Removed fields must not be reintroduced by an intrinsic property default.
-      const transformation =
-        ast.transformation._tag === "TypeLiteralTransformation" &&
-        from._tag === "TypeLiteral" &&
-        to._tag === "TypeLiteral"
-          ? new SchemaAST.TypeLiteralTransformation(
-              ast.transformation.propertySignatureTransformations.filter(
-                (property) =>
-                  from.propertySignatures.some(
-                    (p) => p.name === property.from,
-                  ) &&
-                  to.propertySignatures.some((p) => p.name === property.to),
-              ),
-            )
-          : ast.transformation
-      return new SchemaAST.Transformation(
-        from,
-        to,
-        transformation,
-        ast.annotations,
-      )
-    }
-    if (ast._tag === "TupleType") {
-      const elements = yield* Effect.forEach(ast.elements, (element) =>
-        projectNested(element.type).pipe(
-          Effect.map(
-            (type) =>
-              new SchemaAST.OptionalType(
-                type,
-                element.isOptional,
-                element.annotations,
-              ),
-          ),
-        ),
-      )
-      const rest = yield* Effect.forEach(ast.rest, (element) =>
-        projectNested(element.type).pipe(
-          Effect.map((type) => new SchemaAST.Type(type, element.annotations)),
-        ),
-      )
-      return new SchemaAST.TupleType(
-        elements,
-        rest,
-        ast.isReadonly,
-        ast.annotations,
-      )
-    }
-    return ast
+    return encoding
+      ? Object.assign(Object.create(Object.getPrototypeOf(ast)), ast, {
+          encoding,
+        })
+      : ast
   })
 
 /**
@@ -348,11 +348,11 @@ const projectNested = (
 export const submissionSchemaSync = <Fields extends Schema.Struct.Fields>(
   schema: Schema.Struct<Fields>,
 ): FlattenedSubmissionStruct<Fields> => {
-  const result = Effect.runSync(Effect.either(submissionSchema(schema)))
-  if (Either.isLeft(result)) {
-    throw result.left
+  const result = Effect.runSync(Effect.result(submissionSchema(schema)))
+  if (Result.isFailure(result)) {
+    throw result.failure
   }
-  return result.right
+  return result.success
 }
 
 export const expandSubmissionInput = <Fields extends Schema.Struct.Fields>(
@@ -384,7 +384,7 @@ const prepareExpansion = (source: SchemaAST.AST) =>
     if (cached) return cached
     // Keep authored annotations: encodedAST drops them when rebuilding codec containers.
     // Traversal follows .from at each codec, so expansion still operates on wire values.
-    const ast = source
+    const ast = SchemaAST.toEncoded(source)
     const members = new Map<SchemaAST.AST, ReadonlyArray<UnionMember>>()
     const visit = (
       node: SchemaAST.AST,
@@ -399,31 +399,22 @@ const prepareExpansion = (source: SchemaAST.AST) =>
                 yield* visit(member)
                 return {
                   ast: member,
-                  matches: Schema.is(
-                    Schema.encodedSchema(Schema.make(projected)),
-                  ),
+                  matches: Schema.is(Schema.toEncoded(Schema.make(projected))),
                 }
               }),
             ),
           )
-        } else if (node._tag === "TypeLiteral") {
+        } else if (node._tag === "Objects") {
           yield* Effect.forEach(node.propertySignatures, (property) => {
-            const field = Schema.make(
-              SchemaAST.annotations(property.type, property.annotations),
-            )
+            const field = Schema.make(property.type)
             return hasStructuralOnlyAnnotation(field) || isReadOnlyField(field)
               ? Effect.void
               : visit(property.type)
           })
-        } else if (node._tag === "TupleType") {
+        } else if (node._tag === "Arrays") {
           yield* Effect.forEach([...node.elements, ...node.rest], (element) =>
-            visit(element.type),
+            visit(element),
           )
-        } else if (
-          node._tag === "Refinement" ||
-          node._tag === "Transformation"
-        ) {
-          yield* visit(node.from)
         }
       })
     yield* visit(ast)
@@ -441,20 +432,18 @@ const expandNestedInput = (
   input: unknown,
   members: UnionMembers,
 ): unknown => {
-  if (ast._tag === "Transformation" || ast._tag === "Refinement")
-    return expandNestedInput(ast.from, input, members)
   if (ast._tag === "Union") {
     const member = members
       .get(ast)
       ?.find((candidate) => candidate.matches(input))
     return member ? expandNestedInput(member.ast, input, members) : input
   }
-  if (ast._tag === "TypeLiteral" && isInputRecord(input))
+  if (ast._tag === "Objects" && isInputRecord(input))
     return expandStructInput(ast, input, members)
-  if (ast._tag === "TupleType" && Array.isArray(input))
+  if (ast._tag === "Arrays" && Array.isArray(input))
     return input.map((value, index) => {
       const element = ast.elements[index] ?? ast.rest[0]
-      return element ? expandNestedInput(element.type, value, members) : value
+      return element ? expandNestedInput(element, value, members) : value
     })
   return input
 }
@@ -464,16 +453,12 @@ const expandStructInput = (
   input: Record<string, unknown>,
   members: UnionMembers,
 ): Record<string, unknown> => {
-  if (ast._tag === "Transformation" || ast._tag === "Refinement")
-    return expandStructInput(ast.from, input, members)
-  if (ast._tag !== "TypeLiteral") return input
+  if (ast._tag !== "Objects") return input
   const expanded: Record<string, unknown> = {}
   for (const property of ast.propertySignatures) {
     if (typeof property.name !== "string") continue
     const key = property.name
-    const field = Schema.make(
-      SchemaAST.annotations(property.type, property.annotations),
-    )
+    const field = Schema.make(property.type)
     if (hasStructuralOnlyAnnotation(field) || isReadOnlyField(field)) continue
     if (hasFlattenAnnotation(field)) {
       expanded[key] = expandNestedInput(property.type, input, members)
@@ -483,7 +468,7 @@ const expandStructInput = (
       expanded[key] = expandNestedInput(property.type, input[key], members)
       continue
     }
-    if (!property.isOptional && property.type._tag === "TypeLiteral")
+    if (!property.type.context?.isOptional && property.type._tag === "Objects")
       expanded[key] = expandStructInput(property.type, {}, members)
   }
   return expanded

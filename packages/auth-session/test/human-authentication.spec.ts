@@ -87,12 +87,9 @@ for (const humanSession of [undefined, true] as const) {
       // Altering a claim without re-signing cannot establish trusted evidence.
       const parts = tokens.access.split(".")
       const payload = Schema.decodeUnknownSync(
-        Schema.parseJson(
+        Schema.fromJsonString(
           Schema.Struct({
-            properties: Schema.Record({
-              key: Schema.String,
-              value: Schema.Unknown,
-            }),
+            properties: Schema.Record(Schema.String, Schema.Unknown),
           }),
         ),
         { onExcessProperty: "preserve" },

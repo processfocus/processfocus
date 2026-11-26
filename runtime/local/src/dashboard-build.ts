@@ -17,7 +17,7 @@ import { prepareDashboardStyles } from "./dashboard-styles"
 const SourceManifest = Schema.Struct({
   format: Schema.Literal(1),
   sha256: Schema.String,
-  dependencies: Schema.Record({ key: Schema.String, value: Schema.String }),
+  dependencies: Schema.Record(Schema.String, Schema.String),
 })
 const BuildManifest = Schema.Struct({
   format: Schema.Literal(1),
@@ -157,6 +157,7 @@ export const dashboardEnvironment = (
 ): NodeJS.ProcessEnv => ({
   ...env,
   NODE_ENV: "production",
+  PF_RUNTIME_MODE: "local",
   PF_DASHBOARD_SOURCE_ROOT: resolve(
     env["PF_RUNTIME_ROOT"] ?? process.cwd(),
     ".processfocus/dashboard",

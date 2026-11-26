@@ -26,29 +26,6 @@
       "inputs": ["default", "^production"],
       "outputs": ["{projectRoot}/test-output/coverage"],
       "dependsOn": ["^build"]
-    },
-    "lint-react-compiler": {
-      "executor": "nx:run-commands",
-      "cache": true,
-      "inputs": [
-        "{projectRoot}/src/**/*.{ts,tsx}",
-        "!{projectRoot}/**/*.{test,spec}.{ts,tsx}",
-        "{workspaceRoot}/tools/eslint-react-compiler/**/*",
-        {
-          "externalDependencies": [
-            "eslint",
-            "eslint-plugin-react-hooks",
-            "typescript-eslint"
-          ]
-        }
-      ],
-      "outputs": [],
-      "options": {
-        "command": "node tools/eslint-react-compiler/run.mjs --config tools/eslint-react-compiler/eslint.config.mjs --max-warnings 0 \"{projectRoot}/src\""
-      },
-      "metadata": {
-        "description": "React Compiler diagnostics via eslint-plugin-react-hooks (usage-costs client source only)"
-      }
     }
   }
 }

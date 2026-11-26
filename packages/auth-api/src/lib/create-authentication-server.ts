@@ -1,7 +1,16 @@
-import type { HttpClient } from "@effect/platform"
-import { HttpServerRequest, HttpServerResponse } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
-import { Data, DateTime, Effect, Layer, Option, Runtime, Schema } from "effect"
+import {
+  Config,
+  type Context,
+  Data,
+  DateTime,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+} from "effect"
+import type { HttpClient } from "effect/http"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
+import { SqlClient } from "effect/sql"
 import { SignJWT } from "jose"
 import {
   getAudience,
@@ -9,6 +18,7 @@ import {
   stripTrailingSlash,
   subjects,
 } from "@pf/auth-session"
+import { DelegationCredentialService } from "@pf/delegation"
 import {
   type AllowCallbackInput,
   type ClientRegistryError,
@@ -37,9 +47,8 @@ import {
   resolveIssuerClients,
 } from "@pf/openauth"
 import { makeDelegationExchangeHandler } from "./delegation-exchange.js"
-import { makeDelegationManagementHandler } from "./delegation-management.js"
-import { DelegationSessionService } from "./delegation-session.js"
 import { InvariantViolationError } from "./invariant-violation-error.js"
+import { makeLogoutHandler } from "./logout.js"
 import { makePasskeyManagementHandler } from "./passkey-management.js"
 import {
   exchangePasskeyRecoveryLink,
@@ -49,6 +58,13 @@ import {
   resolvePasskeyRecoverySession,
 } from "./passkey-recovery.js"
 import { getPasskeyUserHandle } from "./passkey-user-handle.js"
+import { makeProjectSubscriptionHandler } from "./project-subscription.js"
+import {
+  captureRoleAuthority,
+  checkProviderUserAssignments,
+  redeemRoleSwitch,
+} from "./role-switch.js"
+import { makeWorkloadExchange } from "./workload-exchange.js"
 
 const FRONTEND_JWT_TTL_SECONDS = 10 * 365 * 24 * 60 * 60
 
@@ -161,6 +177,8 @@ type ProviderResult =
   | (PasskeyProperties & { provider: "passkey" }) // Passkey authentication
   | CredentialsValue // M2M client credentials
 
+import { Audit, captureAudit } from "@pf/audit"
+import { withDeferredTransaction, withImmediateTransaction } from "@pf/db-info"
 import { AppleProvider } from "@pf/openauth/provider/apple"
 import { CognitoProvider } from "@pf/openauth/provider/cognito"
 import { DiscordProvider } from "@pf/openauth/provider/discord"
@@ -271,24 +289,26 @@ export class InvalidRoleScopeError extends Data.TaggedError(
  * Schema for validating OAuth2 provider configuration from database.
  * Requires base Oauth2WrappedConfig fields but allows additional provider-specific fields.
  */
-const Oauth2WrappedConfigSchema = Schema.Struct({
-  clientID: Schema.String,
-  clientSecret: Schema.String,
-  scopes: Schema.mutable(Schema.Array(Schema.String)),
-  pkce: Schema.optional(Schema.Boolean),
-  query: Schema.optional(
-    Schema.Record({ key: Schema.String, value: Schema.String }),
-  ),
-  responseMode: Schema.optional(Schema.Literal("query", "form_post")),
-  tenant: Schema.optional(Schema.String),
-  team: Schema.optional(Schema.String),
-  baseUrl: Schema.optional(Schema.String),
-  realm: Schema.optional(Schema.String),
-  domain: Schema.optional(Schema.String),
-  region: Schema.optional(Schema.String),
-  userPoolId: Schema.optional(Schema.String),
-}).pipe(
-  Schema.extend(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+const Oauth2WrappedConfigSchema = Schema.StructWithRest(
+  Schema.Struct({
+    clientID: Schema.String,
+    clientSecret: Schema.String,
+    scopes: Schema.mutable(Schema.Array(Schema.String)),
+    pkce: Schema.optional(Schema.Boolean),
+    query: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+    responseMode: Schema.optional(Schema.Literals(["query", "form_post"])),
+    tenant: Schema.optional(Schema.String),
+    team: Schema.optional(Schema.String),
+    baseUrl: Schema.optional(Schema.String),
+    realm: Schema.optional(Schema.String),
+    domain: Schema.optional(Schema.String),
+    region: Schema.optional(Schema.String),
+    userPoolId: Schema.optional(Schema.String),
+    allowedWorkspaceDomains: Schema.optional(
+      Schema.mutable(Schema.Array(Schema.NonEmptyString)),
+    ),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
 )
 
 const hasRequiredProviderConfig = (
@@ -310,12 +330,13 @@ const hasRequiredProviderConfig = (
  * Schema for validating Passkey provider configuration from database.
  */
 const PasskeyConfigSchema = Schema.Struct({
+  accountLabel: Schema.optional(Schema.String),
   rpName: Schema.String,
   rpID: Schema.String,
-  origin: Schema.Union(
+  origin: Schema.Union([
     Schema.String,
     Schema.mutable(Schema.Array(Schema.String)),
-  ),
+  ]),
 })
 
 type Oauth2Provider = Provider<VerifiedHumanIdentity | ProviderSubjectIdentity>
@@ -351,7 +372,10 @@ const providerFactories: Record<string, Oauth2ProviderFactory> = {
  * Check if the dummy provider is allowed based on environment.
  * Only enabled when NODE_ENV is not 'production'.
  */
-const isDummyProviderAllowed = () => process.env["NODE_ENV"] !== "production"
+const isDummyProviderAllowed = Config.String("NODE_ENV").pipe(
+  Config.withDefault(""),
+  Config.map((nodeEnv) => nodeEnv !== "production"),
+)
 
 /**
  * Build frontend client configuration for local development.
@@ -359,29 +383,38 @@ const isDummyProviderAllowed = () => process.env["NODE_ENV"] !== "production"
  *
  * Frontend client authenticates with a client JWT and defaults to id "frontend".
  */
-export const buildFrontendClients = async (): Promise<IssuerClient[]> => {
-  if (process.env["NODE_ENV"] !== "development") {
-    return []
-  }
-  const clients = process.env["OPENAUTH_CLIENTS"]
-  if (clients) {
-    return []
-  }
+export const buildFrontendClients = (): Effect.Effect<
+  IssuerClient[],
+  Config.ConfigError
+> =>
+  Effect.gen(function* () {
+    if (
+      (yield* Config.String("NODE_ENV").pipe(Config.withDefault(""))) !==
+      "development"
+    ) {
+      return []
+    }
+    const clients = yield* Config.String("OPENAUTH_CLIENTS").pipe(
+      Config.withDefault(""),
+    )
+    if (clients) {
+      return []
+    }
 
-  const clientId = getClientId()
-  const audience = getAudience()
-  // http://localhost (without port) acts as a wildcard for any localhost port
-  const redirectUris = ["http://localhost/api/auth/callback"]
+    const clientId = getClientId()
+    const audience = getAudience()
+    // http://localhost (without port) acts as a wildcard for any localhost port
+    const redirectUris = ["http://localhost/api/auth/callback"]
 
-  return [
-    {
-      id: clientId,
-      redirectUris,
-      audience,
-      tokenEndpointAuthMethod: "client_jwt" as const,
-    },
-  ]
-}
+    return [
+      {
+        id: clientId,
+        redirectUris,
+        audience,
+        tokenEndpointAuthMethod: "client_jwt" as const,
+      },
+    ]
+  })
 
 /**
  * Options for creating the authentication server.
@@ -425,7 +458,7 @@ export interface AuthenticationServerResult {
    * Runtime with all services required by the app's request handlers.
    * Use this with HttpApp.toWebHandlerRuntime(runtime)(app) to handle requests.
    */
-  readonly runtime: Runtime.Runtime<never>
+  readonly runtime: Context.Context<never>
 }
 
 /**
@@ -452,34 +485,36 @@ export const createAuthenticationServer = (
   options?: CreateAuthenticationServerOptions,
 ): Effect.Effect<
   AuthenticationServerResult,
+  | Config.ConfigError
   | ProviderConfigurationError
   | InvalidProviderConfigError
   | ProviderUserAuthenticationError
   | ResolveIssuerClientsError
   | ClientRegistryError,
   | AuthenticationDatabase
+  | Audit
   | HttpClient.HttpClient
   | StorageService
   | SqlClient.SqlClient
 > =>
   Effect.gen(function* () {
-    // Get the database to load OAuth providers
     const authDb = yield* AuthenticationDatabase
+    const audit = yield* Audit
+    const authorityContext = yield* captureRoleAuthority
     const frontendClientId = getClientId()
     const delegationSessions = yield* Effect.serviceOption(
-      DelegationSessionService,
+      DelegationCredentialService,
     )
     const authenticationDatabaseLayer = Layer.succeed(
       AuthenticationDatabase,
       authDb,
     )
 
-    // Get storage service from context
     const storage = yield* StorageServiceTag
 
     // Capture the SqlClient instance from context so we can provide it to callbacks
     const sql = yield* SqlClient.SqlClient
-    const callbackRuntime = yield* Effect.runtime<
+    const callbackRuntime = yield* Effect.context<
       AuthenticationDatabase | StorageService
     >()
 
@@ -492,7 +527,7 @@ export const createAuthenticationServer = (
 
     // Check if dummy provider should be used (bypasses database)
     if (options?.dummyConfig) {
-      if (!isDummyProviderAllowed()) {
+      if (!(yield* isDummyProviderAllowed)) {
         return yield* new ProviderConfigurationError({
           message:
             "Dummy provider is only allowed in non-production environments",
@@ -504,7 +539,6 @@ export const createAuthenticationServer = (
       )
     }
 
-    // Resolve clients from options and environment
     const configuredClients = yield* resolveIssuerClients([
       ...(options?.clients ?? []),
     ])
@@ -530,10 +564,10 @@ export const createAuthenticationServer = (
 
             // Handle passkey provider separately (different config shape)
             if (name === "passkey") {
-              const passkeyConfig = yield* Schema.decodeUnknown(
+              const passkeyConfig = yield* Schema.decodeUnknownEffect(
                 PasskeyConfigSchema,
               )(record.config).pipe(
-                Effect.catchAll((cause) => {
+                Effect.catch((cause) => {
                   return Effect.gen(function* () {
                     yield* Effect.logError(
                       `Failed to validate passkey config`,
@@ -547,10 +581,11 @@ export const createAuthenticationServer = (
               yield* Effect.log(`Loaded OAuth provider 'passkey' from database`)
               const providerConfig: PasskeyConfig = {
                 rpName: passkeyConfig.rpName,
+                accountLabel: passkeyConfig.accountLabel,
                 rpID: passkeyConfig.rpID,
                 origin: passkeyConfig.origin as string | string[],
                 canRegister: async (email) => {
-                  const runPromise = Runtime.runPromise(callbackRuntime)
+                  const runPromise = Effect.runPromiseWith(callbackRuntime)
                   // Open Registration only: revalidates inviteOnly, no existing
                   // Provider User, and no pending Invitation with one public error.
                   return runPromise(
@@ -590,7 +625,7 @@ export const createAuthenticationServer = (
                   )
                 },
                 exchangeRegistrationLink: async (token) => {
-                  const runPromise = Runtime.runPromise(callbackRuntime)
+                  const runPromise = Effect.runPromiseWith(callbackRuntime)
                   return runPromise(
                     Effect.gen(function* () {
                       return isPasskeyRecoveryLink(token)
@@ -613,7 +648,7 @@ export const createAuthenticationServer = (
                           ),
                         }
                       }),
-                      Effect.catchAll((error) =>
+                      Effect.catch((error) =>
                         Effect.gen(function* () {
                           yield* Effect.logError(
                             "Registration Link exchange failed",
@@ -632,29 +667,41 @@ export const createAuthenticationServer = (
                   )
                 },
                 resolveInvitationRegistrationSession: async (sessionBearer) => {
-                  const runPromise = Runtime.runPromise(callbackRuntime)
+                  const runPromise = Effect.runPromiseWith(callbackRuntime)
                   if (isPasskeyRecoverySession(sessionBearer)) {
                     return runPromise(
-                      resolvePasskeyRecoverySession(sessionBearer).pipe(
-                        Effect.map((result) =>
-                          Option.isNone(result)
-                            ? {
-                                allowed: false as const,
-                                error: INVITATION_REGISTRATION_INVALID_MESSAGE,
-                              }
-                            : {
-                                allowed: true as const,
-                                context: {
-                                  registrationKind: "recovery" as const,
-                                  email: result.value.email,
-                                  userId: result.value.userId,
-                                  userHandle: result.value.userHandle,
-                                  recoveryId: result.value.recoveryId,
-                                  sessionTokenHash:
-                                    hashPasskeyRecoveryBearer(sessionBearer),
-                                },
-                              },
-                        ),
+                      Effect.gen(function* () {
+                        const result =
+                          yield* resolvePasskeyRecoverySession(sessionBearer)
+                        if (Option.isNone(result)) {
+                          return {
+                            allowed: false as const,
+                            error: INVITATION_REGISTRATION_INVALID_MESSAGE,
+                          }
+                        }
+                        const credentials =
+                          yield* authDb.listPasskeyCredentialsForUser(
+                            result.value.userId,
+                          )
+                        return {
+                          allowed: true as const,
+                          context: {
+                            registrationKind: "recovery" as const,
+                            email: result.value.email,
+                            userId: result.value.userId,
+                            userHandle: result.value.userHandle,
+                            recoveryId: result.value.recoveryId,
+                            sessionTokenHash:
+                              hashPasskeyRecoveryBearer(sessionBearer),
+                          },
+                          excludeCredentials: credentials.map((credential) => ({
+                            id: credential.credentialId,
+                            ...(credential.transports && {
+                              transports: credential.transports,
+                            }),
+                          })),
+                        }
+                      }).pipe(
                         Effect.orElseSucceed(() => ({
                           allowed: false as const,
                           error: INVITATION_REGISTRATION_INVALID_MESSAGE,
@@ -684,7 +731,7 @@ export const createAuthenticationServer = (
                             },
                           }
                         }),
-                        Effect.catchAll((error) =>
+                        Effect.catch((error) =>
                           Effect.gen(function* () {
                             yield* Effect.logError(
                               "Registration Session resolve failed",
@@ -703,7 +750,7 @@ export const createAuthenticationServer = (
                   )
                 },
                 findCredential: async (credentialId) => {
-                  const runPromise = Runtime.runPromise(callbackRuntime)
+                  const runPromise = Effect.runPromiseWith(callbackRuntime)
                   return runPromise(
                     authDb.findPasskeyCredentialById(credentialId).pipe(
                       Effect.map((credential) =>
@@ -716,7 +763,7 @@ export const createAuthenticationServer = (
                             }
                           : undefined,
                       ),
-                      Effect.catchAll((error) =>
+                      Effect.catch((error) =>
                         Effect.gen(function* () {
                           yield* Effect.logError(
                             "Passkey findCredential failed",
@@ -743,10 +790,10 @@ export const createAuthenticationServer = (
               return undefined
             }
 
-            const validatedConfig = yield* Schema.decodeUnknown(
+            const validatedConfig = yield* Schema.decodeUnknownEffect(
               Oauth2WrappedConfigSchema,
             )(record.config).pipe(
-              Effect.catchAll((cause) => {
+              Effect.catch((cause) => {
                 return Effect.gen(function* () {
                   yield* Effect.logError(
                     `Failed to validate config for provider '${name}'`,
@@ -767,7 +814,7 @@ export const createAuthenticationServer = (
             return factory(validatedConfig as Oauth2WrappedConfig)
           }).pipe(
             Effect.withSpan(`auth.resolveProvider.${name}`),
-            Effect.catchAll((e) =>
+            Effect.catch((e) =>
               Effect.logError(`Failed to load provider '${name}'`, e).pipe(
                 Effect.annotateLogs({ provider: name }),
                 Effect.as(undefined),
@@ -788,7 +835,7 @@ export const createAuthenticationServer = (
           }).pipe(
             Effect.withSpan("auth.listProviders"),
             Effect.provide(authenticationDatabaseLayer),
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.gen(function* () {
                 yield* Effect.logError(
                   "Failed to list OAuth providers from database",
@@ -806,6 +853,7 @@ export const createAuthenticationServer = (
         const maybeClient = yield* authDb.findOAuthClientById(clientId)
         if (Option.isNone(maybeClient)) return undefined
         const client = maybeClient.value
+        if (client.workloadTrust != null || !client.secretHash) return undefined
         return {
           id: client.clientId,
           redirectUris: [] as string[],
@@ -814,7 +862,7 @@ export const createAuthenticationServer = (
         }
       }).pipe(
         Effect.withSpan("auth.resolveClient"),
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.gen(function* () {
             yield* Effect.logError(
               "Failed to lookup OAuth client from database",
@@ -825,7 +873,6 @@ export const createAuthenticationServer = (
         Effect.provide(authenticationDatabaseLayer),
       )
 
-    // Build service layers
     const storageLayer = Layer.succeed(StorageServiceTag, storage)
 
     const keyMgmtLayer = KeyManagementServiceLive.pipe(
@@ -855,7 +902,7 @@ export const createAuthenticationServer = (
           }).pipe(
             Effect.withSpan("auth.isPasskeyOpenRegistration"),
             Effect.provideService(AuthenticationDatabase, authDb),
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.gen(function* () {
                 yield* Effect.logError(
                   "Failed to resolve passkey Open Registration availability",
@@ -881,12 +928,47 @@ export const createAuthenticationServer = (
     const subjectsConfigLayer = makeSubjectsConfig(subjects)
 
     // Build the callbacks layer with all the application-specific logic
+    const exchange = yield* makeWorkloadExchange.pipe(
+      Effect.provide(clientRegistryLayer),
+      Effect.provide(keyMgmtLayer),
+    )
     const callbacksLayer = makeIssuerCallbacks<ProviderResult>({
+      exchange,
       resolveSubject: defaultResolveSubject,
       start: undefined,
       onRefresh: ({ type, properties, scope, clientId }) =>
         Effect.gen(function* () {
-          if (!("delegation" in properties)) return { properties }
+          if (scope?.split(/\s+/).some((part) => part.startsWith("email:")))
+            return yield* new OnRefreshScopeError({
+              message: "Email scope is no longer supported",
+            })
+          if ("workload" in properties)
+            return yield* new OnRefreshScopeError({
+              message: "Workload access requires token exchange",
+            })
+          if (!("delegation" in properties)) {
+            if (type !== "providerUser") return { properties }
+            const parsed = yield* Effect.promise(async () =>
+              subjects.providerUser["~standard"].validate(properties),
+            )
+            // Pre-marker machine-derived refresh payloads can look like old
+            // user logins. Require issuer evidence rather than inferring it
+            // from the current Provider User record.
+            if (
+              parsed.issues ||
+              (!parsed.value.sso &&
+                !parsed.value.authenticationMethod &&
+                !parsed.value.humanAuthentication &&
+                !parsed.value.humanSession) ||
+              !(yield* checkProviderUserAssignments(parsed.value).pipe(
+                Effect.provide(authorityContext),
+              ))
+            )
+              return yield* new OnRefreshScopeError({
+                message: "Session authority revoked",
+              })
+            return { properties: parsed.value }
+          }
           if (type !== "providerUser" || Option.isNone(delegationSessions))
             return yield* new OnRefreshScopeError({
               message: "Delegated access unavailable",
@@ -924,7 +1006,6 @@ export const createAuthenticationServer = (
         ),
       onRefreshScope: ({ userId, clientId, scope, currentProperties }) =>
         Effect.gen(function* () {
-          // Parse scope parts
           const scopeParts = scope.split(/\s+/)
           // CLI export keeps the live session and selected roles, including delegation.
           // It takes priority over role switching; the issuer still caps its TTL.
@@ -986,106 +1067,21 @@ export const createAuthenticationServer = (
           }
 
           if (requestedRoles.length === 0) {
-            // No recognized scopes requested, return current properties unchanged
             return { properties: currentProperties }
           }
 
-          // First, check if these roles are in employee_role table
-          const providerUserRoles = yield* authDb.findProviderUserRoles(userId)
-          const providerUserRoleSet = new Set(providerUserRoles)
-
-          // Then check permitted_role table for roles not in employee_role
-          // This also returns org unit info for each permitted role
-          const permittedRolesWithOrgUnit =
-            yield* authDb.findPermittedRolesWithOrgUnit(userId)
-          const permittedRoleMap = new Map(
-            permittedRolesWithOrgUnit.map((r) => [r.rolePath, r]),
+          const role = requestedRoles[0]
+          const parsed = yield* Effect.promise(async () =>
+            subjects.providerUser["~standard"].validate(currentProperties),
           )
-
-          // Validate all requested roles
-          const invalidRoles = requestedRoles.filter(
-            (r) => !providerUserRoleSet.has(r) && !permittedRoleMap.has(r),
-          )
-
-          if (invalidRoles.length > 0) {
-            yield* Effect.logWarning("User requested invalid role scopes").pipe(
-              Effect.annotateLogs({
-                userId,
-                requestedRoles,
-                invalidRoles,
-                providerUserRoles,
-                permittedRoles: [...permittedRoleMap.keys()],
-              }),
-            )
+          if (parsed.issues || !role || scopeParts.length !== 1)
             return yield* new OnRefreshScopeError({
-              message: "User requested invalid role scopes",
-              cause: new InvalidRoleScopeError({
-                invalidRoles,
-                requestedRoles,
-                userId,
-              }),
+              message: "Invalid role preparation",
             })
-          }
-
-          // Determine org unit context based on the first requested role
-          // If the first role is from employee_role, use the employee's org unit
-          // If the first role is from permitted_role (not in employee_role), use that role's org unit
-          const firstRole = requestedRoles[0]
-          // Safety: requestedRoles.length > 0 is guaranteed by early return above
-          if (firstRole === undefined) {
-            return yield* new OnRefreshScopeError({
-              message: "requestedRoles is non-empty but firstRole is undefined",
-              cause: new InvariantViolationError({
-                message:
-                  "requestedRoles is non-empty but firstRole is undefined",
-              }),
-            })
-          }
-          const isProviderUserRole = providerUserRoleSet.has(firstRole)
-          const permittedRole = !isProviderUserRole
-            ? permittedRoleMap.get(firstRole)
-            : undefined
-
-          let orgUnitId: string | undefined
-          let orgUnitPath: string | undefined
-
-          if (permittedRole) {
-            // Switching to a permitted role - use that role's org unit
-            orgUnitId = permittedRole.orgUnitId
-            orgUnitPath = permittedRole.orgUnitPath
-          } else {
-            // Switching to own role - look up provider user's org unit from database
-            const employeeOption =
-              yield* authDb.findProviderUserByUserId(userId)
-            if (Option.isSome(employeeOption)) {
-              orgUnitId = employeeOption.value.orgUnitId
-              orgUnitPath = employeeOption.value.orgUnitPath
-            } else {
-              // Fallback to current properties if provider user not found
-              orgUnitId = currentProperties["orgUnitId"] as string | undefined
-              orgUnitPath = currentProperties["orgUnitPath"] as
-                | string
-                | undefined
-            }
-          }
-
-          yield* Effect.log("User switching roles").pipe(
-            Effect.annotateLogs({
-              userId,
-              requestedRoles,
-              orgUnitId,
-              orgUnitPath,
-            }),
-          )
-
-          // Return properties with the requested roles and updated org unit
           return {
-            properties: {
-              ...currentProperties,
-              roles: requestedRoles,
-              orgUnitId,
-              orgUnitPath,
-            },
+            properties: yield* redeemRoleSwitch(parsed.value, role).pipe(
+              Effect.provide(authorityContext),
+            ),
           }
         }).pipe(
           Effect.mapError((error) =>
@@ -1124,14 +1120,27 @@ export const createAuthenticationServer = (
           // All database operations happen within the transaction, but the
           // ctx.subject() call (which creates the HTTP response) happens after
           // the transaction commits to avoid holding the connection.
-          // Non-critical updates such as updateLastLoggedIn retry at their
-          // provider-user-auth and passkey-auth call sites, so the whole
+          // Non-critical profile updates retry at their
+          // provider-user-auth call sites, so the whole
           // transaction is not retried.
-          const subjectData = yield* sql.withTransaction(
+          // OAuth/dummy reads need no writer reservation. Conditional profile
+          // updates and first-user creation still write within this transaction.
+          const transaction = <A, E, R>(body: Effect.Effect<A, E, R>) => {
+            switch (input.provider) {
+              case "passkey":
+                // Both registration and sign-in write after validating DB state.
+                // Reserve the writer before those reads, not when advancing the counter.
+                return withImmediateTransaction(sql, body)
+              case "credentials":
+                return sql.withTransaction(body)
+              default:
+                return withDeferredTransaction(sql, body)
+            }
+          }
+          const { subjectData, event } = yield* transaction(
             Effect.gen(function* () {
               // Passkey authentication (no tokenset, has userId directly)
               if (input.provider === "passkey") {
-                // Safe cast: discriminant checked above
                 return yield* handlePasskeySuccess(
                   input as PasskeyProperties & { provider: "passkey" },
                 )
@@ -1139,29 +1148,60 @@ export const createAuthenticationServer = (
 
               // M2M client credentials authentication (no user, just client)
               if (input.provider === "credentials") {
-                // Safe cast: discriminant checked above
                 return yield* handleConfidentialClientSuccess(
                   input as CredentialsValue,
                 )
               }
 
               // OAuth authentication (Google, GitHub, etc. and dummy provider)
-              // Safe cast: passkey and credentials ruled out above
               return yield* handleOauth2Success(
                 input as
                   | Oauth2Value
                   | VerifiedHumanIdentity
                   | ProviderSubjectIdentity,
               )
-            }),
+            }).pipe(
+              Effect.flatMap((subjectData) =>
+                Effect.gen(function* () {
+                  const event =
+                    !(subjectData instanceof Response) &&
+                    subjectData.type === "providerUser" &&
+                    subjectData.properties.humanSession
+                      ? yield* captureAudit({
+                          type: "login",
+                          details: {
+                            actorUserId: subjectData.properties.userId,
+                            authenticationMethod:
+                              input.provider === "passkey"
+                                ? "passkey"
+                                : input.provider === "dummy"
+                                  ? "dummy"
+                                  : "oauth",
+                          },
+                        })
+                      : undefined
+                  return { subjectData, event }
+                }),
+              ),
+            ),
           )
+
+          if (event) yield* audit.deliver(event)
 
           // Create the subject token after the transaction commits
           // subjectData is either { type, properties } or a Response (for errors)
           if (subjectData instanceof Response) {
             return HttpServerResponse.fromWeb(subjectData)
           }
-          return yield* ctx.subject(subjectData.type, subjectData.properties)
+          return yield* ctx.subject(
+            subjectData.type,
+            subjectData.type === "providerUser"
+              ? { ...subjectData.properties, sessionId: crypto.randomUUID() }
+              : subjectData.properties,
+            subjectData.type === "providerUser" && subjectData.properties.sso
+              ? { expiresAt: subjectData.properties.sso.expiresAt }
+              : undefined,
+          )
         }).pipe(
           Effect.withSpan("auth.success"),
           Effect.provideService(AuthenticationDatabase, authDb),
@@ -1291,7 +1331,7 @@ export const createAuthenticationServer = (
           }),
           // Catch non-interface errors (like database errors) and convert to error response
           // Interface errors (HttpBodyError, StorageError, MissingHostError) pass through
-          Effect.catchAllCause((cause) =>
+          Effect.catchCause((cause) =>
             Effect.gen(function* () {
               yield* Effect.logError(
                 "Authentication success handler failed unexpectedly",
@@ -1304,7 +1344,6 @@ export const createAuthenticationServer = (
         ),
     })
 
-    // Combine all layers
     const allLayers = Layer.mergeAll(
       storageLayer,
       keyMgmtLayer,
@@ -1322,23 +1361,26 @@ export const createAuthenticationServer = (
     // captures auth services AND outer context (OTEL, storage, etc.)
     return yield* Effect.gen(function* () {
       const oauthApp = yield* issuer
-      const delegationApp = yield* makeDelegationManagementHandler
+      const logoutApp = yield* makeLogoutHandler
+      const projectSubscription = yield* makeProjectSubscriptionHandler
       const passkeyManagementApp = yield* makePasskeyManagementHandler
       const delegationExchange = yield* makeDelegationExchangeHandler
       const app: Issuer = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         const pathname = new URL(request.url, "http://localhost").pathname
+        if (pathname === "/oauth/logout") return yield* logoutApp
         if (
           pathname === "/oauth/delegation" ||
           pathname === "/oauth/delegation/availability" ||
           pathname === "/oauth/delegation/session"
         )
           return yield* delegationExchange
-        if (pathname === "/delegations") return yield* delegationApp
+        if (pathname === "/oauth/project-subscription")
+          return yield* projectSubscription
         if (pathname === "/oauth/passkeys") return yield* passkeyManagementApp
         return yield* oauthApp
       })
-      const runtime = yield* Effect.runtime<never>()
+      const runtime = yield* Effect.context<never>()
       return { app, runtime } satisfies AuthenticationServerResult
     }).pipe(Effect.provide(allLayers))
   })

@@ -28,7 +28,6 @@ export const flattenOrgUnits = (
 ): FlatOrgUnit[] => {
   const result: FlatOrgUnit[] = []
 
-  // Add the current unit
   const flatUnit: FlatOrgUnit = {
     id: orgUnit.id,
     name: orgUnit.name,
@@ -41,7 +40,6 @@ export const flattenOrgUnits = (
 
   result.push(flatUnit)
 
-  // Recursively process subunits
   for (const subunit of orgUnit.subunits) {
     result.push(...flattenOrgUnits(subunit, orgUnit.id))
   }

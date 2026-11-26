@@ -5,6 +5,8 @@ import { SqliteTest } from "@pf/layer-sqlite-bun"
 import { runSqliteTestMigrations } from "./test-migrations"
 import { TypedSqliteDrizzleLayer } from "./typed-drizzle"
 
+export { SqliteTest, runSqliteTestMigrations }
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const defaultMigrationsFolder = join(
@@ -16,7 +18,7 @@ const defaultMigrationsFolder = join(
  * Config for the migrations folder path.
  * Can be overridden using ConfigProvider.fromMap({ MIGRATIONS_FOLDER: "/custom/path" })
  */
-export const MigrationsFolderConfig = Config.string("MIGRATIONS_FOLDER").pipe(
+export const MigrationsFolderConfig = Config.String("MIGRATIONS_FOLDER").pipe(
   Config.withDefault(defaultMigrationsFolder),
 )
 

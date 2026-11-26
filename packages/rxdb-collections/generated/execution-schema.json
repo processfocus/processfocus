@@ -81,13 +81,13 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "id",
-          "name",
-          "path",
-          "status"
-        ],
         "properties": {
+          "deadlineActivity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
             "type": "string"
           },
@@ -105,7 +105,8 @@
               "Potential",
               "Failed",
               "Correction Required",
-              "Not started"
+              "Not started",
+              "Interrupted"
             ]
           },
           "failureReason": {
@@ -125,10 +126,6 @@
               "object",
               "null"
             ],
-            "required": [
-              "id",
-              "name"
-            ],
             "properties": {
               "id": {
                 "type": "string"
@@ -136,7 +133,11 @@
               "name": {
                 "type": "string"
               }
-            }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
           },
           "submittedViaEmbeddedForm": {
             "type": [
@@ -161,13 +162,6 @@
               "object",
               "null"
             ],
-            "required": [
-              "id",
-              "firstName",
-              "lastName",
-              "picture",
-              "orgUnit"
-            ],
             "properties": {
               "id": {
                 "type": "string"
@@ -184,11 +178,24 @@
               "orgUnit": {
                 "type": "string"
               }
-            }
+            },
+            "required": [
+              "id",
+              "firstName",
+              "lastName",
+              "picture",
+              "orgUnit"
+            ]
           },
           "startedAt": {},
           "completedAt": {}
-        }
+        },
+        "required": [
+          "id",
+          "name",
+          "path",
+          "status"
+        ]
       }
     },
     "completedSteps": {

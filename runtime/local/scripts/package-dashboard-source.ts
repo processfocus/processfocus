@@ -10,7 +10,8 @@ import {
 } from "node:fs"
 import { dirname, relative, resolve } from "node:path"
 import { Schema } from "effect"
-import ts from "typescript"
+// TypeScript 7 supplies the packaged Dashboard compiler but not this AST API.
+import ts from "typescript-api"
 
 // Preserve source directives (especially use client/use server) until the
 // consumer's Next compiler processes them. Only local import paths change.
@@ -36,14 +37,12 @@ export async function packageDashboardSource({
   }
   const PackageManifest = Schema.Struct({
     version: Schema.String,
-    dependencies: Schema.optional(
-      Schema.Record({ key: Schema.String, value: Schema.String }),
-    ),
+    dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
     devDependencies: Schema.optional(
-      Schema.Record({ key: Schema.String, value: Schema.String }),
+      Schema.Record(Schema.String, Schema.String),
     ),
     peerDependencies: Schema.optional(
-      Schema.Record({ key: Schema.String, value: Schema.String }),
+      Schema.Record(Schema.String, Schema.String),
     ),
   })
   const manifestAt = (path: string): typeof PackageManifest.Type =>
@@ -185,6 +184,7 @@ export async function packageDashboardSource({
       )
         continue
       const path = resolve(directory, entry.name)
+      // Next regenerates next-env.d.ts; copying it would follow imports into .next.
       if (
         directory === frontend &&
         ![
@@ -197,7 +197,6 @@ export async function packageDashboardSource({
           "proxy.ts",
           "instrumentation.ts",
           "instrumentation-client.ts",
-          "next-env.d.ts",
           "index.d.ts",
         ].includes(entry.name)
       )

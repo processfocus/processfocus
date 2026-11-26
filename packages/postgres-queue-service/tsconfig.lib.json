@@ -11,6 +11,9 @@
   "exclude": ["src/**/*.spec.ts"],
   "references": [
     {
+      "path": "../db-info/tsconfig.lib.json"
+    },
+    {
       "path": "../runtime/tsconfig.lib.json"
     },
     {
@@ -18,9 +21,6 @@
     },
     {
       "path": "../request-time/tsconfig.lib.json"
-    },
-    {
-      "path": "../queue-service/tsconfig.lib.json"
     },
     {
       "path": "../graphql-db-operations/tsconfig.lib.json"

@@ -1,6 +1,6 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import type { DateTime } from "effect"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import { parseNotificationPreferences } from "./settings-queries"
 import type { UserDetails } from "./user-details"
@@ -23,6 +23,7 @@ export interface FlowWithCondition {
   readonly fallbackBranch: boolean
   /** Whether this branch runs after terminal system-step failure */
   readonly isOnError: boolean
+  readonly deadlineName?: string | null
   /** Optional case-sensitive outer error tags matched by this error branch */
   readonly taggedErrors: readonly string[] | null
 }
@@ -117,11 +118,9 @@ export const mapNotificationRecipientRow = (row: {
  * Service providing flow execution database operations.
  *
  * These are simple database operations without business logic.
- * Business logic belongs in the caller (e.g., the job handler).
+ * Business orchestration and transaction boundaries belong to the caller.
  */
-export class FlowExecutionOperations extends Context.Tag(
-  "@pf/graphql-db-operations/FlowExecutionOperations",
-)<
+export class FlowExecutionOperations extends Context.Service<
   FlowExecutionOperations,
   {
     /**
@@ -235,6 +234,22 @@ export class FlowExecutionOperations extends Context.Tag(
       receipt: string,
     ) => Effect.Effect<readonly FlowDispatchJob[], SqlError>
 
+    /** Lease available rows across ordered dispatch IDs in one write. */
+    readonly claimFlowDispatchJobsBatch: (
+      sourceScheduledFlowIds: readonly string[],
+      now: DateTime.Utc,
+      lockedUntil: DateTime.Utc,
+      receipt: string,
+    ) => Effect.Effect<
+      readonly (FlowDispatchJob & { readonly sourceScheduledFlowId: string })[],
+      SqlError
+    >
+
+    /** Delete only sent rows still owned by their receipt; return deleted IDs. */
+    readonly deleteFlowDispatchJobs: (
+      claims: readonly { readonly id: string; readonly receipt: string }[],
+    ) => Effect.Effect<readonly string[], SqlError>
+
     /** Release the remaining rows owned by a failed dispatch drain. */
     readonly releaseFlowDispatchJobs: (
       sourceScheduledFlowId: string,
@@ -245,6 +260,13 @@ export class FlowExecutionOperations extends Context.Tag(
       sourceScheduledFlowId: string,
       receipt: string,
       lockedUntil: DateTime.Utc,
+    ) => Effect.Effect<boolean, SqlError>
+
+    /** Read-only ownership check before sending without renewing the lease. */
+    readonly ownsFlowDispatchJob: (
+      id: string,
+      receipt: string,
+      now: DateTime.Utc,
     ) => Effect.Effect<boolean, SqlError>
 
     readonly deleteFlowDispatchJob: (
@@ -281,14 +303,18 @@ export class FlowExecutionOperations extends Context.Tag(
     ) => Effect.Effect<string | null, SqlError>
 
     /**
-     * Get execution details needed to calculate business duration on completion.
-     * Returns the execution start time (in epoch ms) and the process's org unit ID.
+     * Get execution details for completion and generation-fenced recovery.
+     * Returns the start time (epoch ms), org unit ID, and restart identity.
      * Returns null if not found.
      */
     readonly getExecutionDetailsForCompletion: (
       processExecutionId: string,
     ) => Effect.Effect<
-      { createdAtMs: number; orgUnitId: string } | null,
+      {
+        createdAtMs: number
+        orgUnitId: string
+        restartAttemptId: string | null
+      } | null,
       SqlError
     >
 
@@ -356,4 +382,4 @@ export class FlowExecutionOperations extends Context.Tag(
       rolePath: string,
     ) => Effect.Effect<readonly NotificationRecipientRow[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/FlowExecutionOperations") {}

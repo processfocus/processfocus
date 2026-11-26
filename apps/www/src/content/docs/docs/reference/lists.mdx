@@ -1,0 +1,367 @@
+---
+title: Lists
+---
+
+## Example
+
+Define a read-only [List](/docs/concepts/lists/) to let the Sales role
+browse web orders in the Dashboard. The `output` schema defines the
+fields returned for each row, and `query` supplies the current page.
+
+```typescript
+import { List, Organisation, Role } from "@pf/process"
+import { Effect, Schema } from "effect"
+
+export const org = new Organisation({ name: "Demo Store" })
+const sales = new Role(org, "Sales")
+
+const orders = [
+  { id: "ORD-101", sku: "ABC-123", quantity: 2 },
+  { id: "ORD-102", sku: "XYZ-456", quantity: 1 },
+]
+
+new List(org, "web-orders", {
+  name: "Web orders",
+  purpose: "Browse submitted web orders",
+  roles: [sales],
+  output: {
+    id: Schema.String.annotate({ title: "Order ID" }),
+    sku: Schema.String.annotate({ title: "SKU" }),
+    quantity: Schema.Number.annotate({ title: "Quantity" }),
+  },
+  query: ({ page, limit }) => {
+    const offset = (page - 1) * limit
+    return Effect.succeed({
+      items: orders.slice(offset, offset + limit),
+      totalCount: orders.length,
+    })
+  },
+})
+```
+
+Page numbers start at `1`. Return only the requested page in `items` and
+the number of matching records across all pages in `totalCount`. This
+example uses fixed sample data. For a live list, replace the array with a
+query against your organisation's data.
+
+## Edit a record
+
+To let Sales edit an order's quantity, add a detail form, a query that
+loads the selected order, and an update callback. Keep `id` in the List's
+`output` and query results so the Dashboard can open the right record.
+
+Put the form schema in a separate file:
+
+```typescript
+// src/order-forms.ts
+import { NumberField } from "@pf/form-schema"
+import { Schema } from "effect"
+
+export const editOrderForm = Schema.Struct({
+  quantity: NumberField({ label: "Quantity" }),
+})
+```
+
+Keep the schema in a separate file because it is sent to the browser. The
+front-end uses this schema in the browser to display the form and
+check what the user enters. The server checks those values again
+before saving.
+
+Keep database code and credentials out of this file.
+
+Import `editOrderForm` from that module and add these properties to the
+same `new List` configuration. This example updates the sample array in
+memory; in a deployed project, load and save the record in your database.
+
+```typescript
+form: () => editOrderForm.fields,
+browser: { entrypoint: "src/order-forms.ts", exportName: "editOrderForm" },
+itemQuery: (id) => {
+  const order = orders.find((order) => order.id === id)
+  return Effect.succeed(order ? { quantity: order.quantity } : null)
+},
+update: (id, { quantity }) =>
+  Effect.sync(() => {
+    const order = orders.find((order) => order.id === id)
+    if (!order) return null
+
+    order.quantity = quantity
+    return { quantity: order.quantity }
+  }),
+```
+
+`itemQuery` supplies the current quantity to the form. On save, `update`
+receives the record ID and the submitted fields. The user needs permission
+to update the record as well as view the List.
+
+## Create a record
+
+Use `create` to offer a **Create record** button, even when the List is
+empty. The creation form asks for both SKU and quantity, while the edit
+form only exposes quantity.
+
+In `src/order-forms.ts`, add `TextField` to the `@pf/form-schema` import
+and export a second schema:
+
+```typescript
+export const createOrderForm = Schema.Struct({
+  sku: TextField({ label: "SKU" }),
+  quantity: NumberField({ label: "Quantity" }),
+})
+```
+
+Import `createOrderForm` and add this property to the List configuration:
+
+```typescript
+create: {
+  form: () => createOrderForm.fields,
+  browser: { entrypoint: "src/order-forms.ts", exportName: "createOrderForm" },
+  submit: ({ sku, quantity }) =>
+    Effect.sync(() => {
+      const id = crypto.randomUUID()
+      orders.push({ id, sku, quantity })
+      return id
+    }),
+},
+```
+
+The server generates and returns the new record's ID. In a deployed project,
+insert the record into your database before returning its ID. Users need a
+separate Cedar `create` grant in addition to List view permission. Direct
+creation adds a record without starting a process or creating a To-Do; use
+a process instead if new orders need approval or other follow-up work.
+
+## Deleting
+
+To let authorised users delete a web order, add a `delete` callback to the
+same List configuration. The server passes the selected record's ID to
+the callback.
+
+```typescript
+delete: (id) =>
+  Effect.sync(() => {
+    const index = orders.findIndex((order) => order.id === id)
+    if (index !== -1) {
+      orders.splice(index, 1)
+    }
+  }),
+```
+
+This example removes the order from the in-memory array. In a deployed
+project, delete the record from your database by ID. Users need Cedar
+`delete` permission as well as permission to view the List.
+
+## Filtering in memory
+
+The Dashboard passes the search text to `query` as `filter` and returns
+to page 1 when it changes. The List query decides which records match.
+Replace the Web orders `query` with this version to match order IDs and
+SKUs without regard to case:
+
+```typescript
+query: ({ page, limit, filter }) => {
+  const search = filter?.trim().toLowerCase()
+  const matches = search
+    ? orders.filter(
+        ({ id, sku }) =>
+          id.toLowerCase().includes(search) ||
+          sku.toLowerCase().includes(search),
+      )
+    : orders
+
+  const offset = (page - 1) * limit
+  return Effect.succeed({
+    items: matches.slice(offset, offset + limit),
+    totalCount: matches.length,
+  })
+},
+```
+
+Filter before paginating. `totalCount` is the number of matching records
+across all pages, not just the number on the current page.
+
+## Filtering large datasets
+
+For a database-backed List, filter and paginate in the database instead
+of loading every order into the application. For example, make the
+Web orders filter an exact SKU search. If you store SKUs in uppercase,
+trim and uppercase the search text before binding it as `:sku`.
+
+Create an index on `(sku, id)` so the database can find orders for the
+SKU and read them in order by ID:
+
+```sql
+CREATE INDEX web_orders_sku_id_idx ON web_orders (sku, id);
+```
+
+In the List's `query` callback, run a page query and a count query with
+the same filter:
+
+```sql
+SELECT id, sku, quantity
+FROM web_orders
+WHERE sku = :sku
+ORDER BY id
+LIMIT :limit OFFSET :offset;
+
+SELECT COUNT(*) AS total_count
+FROM web_orders
+WHERE sku = :sku;
+```
+
+Bind `:limit` to `limit` and `:offset` to `(page - 1) * limit`. Return
+the page rows as `items` and the count as `totalCount`. For an empty
+filter, omit the `WHERE` clause from both queries.
+
+Unlike the in-memory example, this matches a whole SKU, not a
+substring. A search like `LIKE '%123%'` generally can't use an ordinary
+index to find matching rows efficiently. Check the query plan with
+representative data: exact counts for broad filters and large offsets
+can still be expensive.
+
+## CSV
+
+Users who can view a List can select **Export CSV** in the Dashboard.
+No extra configuration is needed. By default, the export uses the List's
+`output` fields and runs its `query` with the current filter and sort.
+It exports matching records across pages, up to 10,000 rows. If the
+export exceeds that limit, narrow the filter and try again.
+
+To keep the quantity visible in the Dashboard but leave it out of the
+Web orders CSV, add `exportOutput` to the List configuration:
+
+```typescript
+exportOutput: {
+  id: Schema.String,
+  sku: Schema.String,
+},
+```
+
+The CSV now contains only `id` and `sku`. The Dashboard columns stay
+unchanged. The normal query already returns both fields, so no
+`exportQuery` is needed. If the CSV needs fields the List query doesn't
+return, provide an `exportQuery` that returns the fields in `exportOutput`
+and applies the requested filter and sort.
+
+## Starting processes
+
+Add process start buttons to a List so people can start work while
+browsing related records. From the Web orders List, Sales can enter a
+new order or request cancellation of an existing one.
+
+This simplified example defines both processes and connects them to the
+List. It uses sample rows; submitting either form captures the details
+in a process execution but does not add or cancel an order in the List.
+
+```typescript
+import { NumberField, TextField } from "@pf/form-schema"
+import { Form, List, Organisation, Process, Role } from "@pf/process"
+import { Effect, Schema } from "effect"
+
+export const org = new Organisation({ name: "Demo Store" })
+const sales = new Role(org, "Sales")
+
+const webOrder = new Process(org, "web-order", {
+  name: "Enter web order",
+  purpose: "Capture a new web order",
+})
+const captureOrder = new Form(webOrder, "Capture order", {
+  role: sales,
+  form: Schema.Struct({
+    sku: TextField({ label: "SKU" }),
+    quantity: NumberField({ label: "Quantity" }),
+  }),
+})
+webOrder.start(captureOrder).end()
+
+const cancelOrder = new Process(org, "cancel-web-order", {
+  name: "Request cancellation",
+  purpose: "Record a request to cancel a web order",
+})
+const requestCancellation = new Form(cancelOrder, "Request cancellation", {
+  role: sales,
+  form: Schema.Struct({
+    orderId: TextField({ label: "Order ID" }),
+    reason: TextField({ label: "Reason for cancellation" }),
+  }),
+})
+cancelOrder.start(requestCancellation).end()
+
+const orders = [{ id: "ORD-101", sku: "ABC-123", quantity: 2 }]
+
+new List(org, "web-orders", {
+  name: "Web orders",
+  purpose: "Browse submitted web orders",
+  roles: [sales],
+  output: {
+    id: Schema.String.annotate({ title: "Order ID" }),
+    sku: Schema.String.annotate({ title: "SKU" }),
+    quantity: Schema.Number.annotate({ title: "Quantity" }),
+  },
+  query: ({ page, limit }) => {
+    const offset = (page - 1) * limit
+    return Effect.succeed({
+      items: orders.slice(offset, offset + limit),
+      totalCount: orders.length,
+    })
+  },
+  startProcess: webOrder,
+  additionalStartProcesses: [cancelOrder],
+})
+```
+
+`startProcess` specifies the primary action. Use
+`additionalStartProcesses` for other actions. Each button opens the
+corresponding process's start form and is only shown to users who can
+start that process. Viewing the List does not grant start permission.
+
+Unlike **Create record**, submitting a start form starts a process
+execution. In a live project, later steps could save the new order or
+route the cancellation request for approval.
+
+## Permissions
+
+The List's `roles` option controls who can view it by default. For
+example, `roles: [sales]` lets users with the Sales role view Web orders.
+The default policy also lets them update records if the List defines an
+`update` callback. Creating and deleting records require separate Cedar
+grants as well as the corresponding callbacks.
+
+For example, add these rules to `cedar/custom.cedar` to let Sales users
+create and delete records in Web orders:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Sales",
+    action == PF::Action::"create",
+    resource == PF::List::"/web-orders"
+);
+
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Sales",
+    action == PF::Action::"delete",
+    resource == PF::List::"/web-orders"
+);
+```
+
+The rules are separate so you can allow creation without allowing deletion.
+They apply only to Web orders; users still need permission to view the List.
+
+### Give a system identity read access
+
+A [system identity](/docs/reference/authentication/system-identities/)
+doesn't get access through the List's `roles` option. To let a reporting
+service read Web orders, configure it to authenticate as `order-reporting`
+and add this rule to `cedar/custom.cedar`:
+
+```cedar
+permit (
+    principal == PF::ServiceAccount::"order-reporting",
+    action == PF::Action::"view",
+    resource == PF::List::"/web-orders"
+);
+```
+
+The resource ID is the full List path, including the leading `/`.
+This rule grants read access to that List only. It does not let the
+service create, update, or delete records or start a process.

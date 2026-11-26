@@ -23,7 +23,7 @@ import { Clock, Effect, Layer, Schema, Stream } from "effect"
 import { client } from "./aws"
 import { StorageError, StorageService, joinKey } from "./storage"
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 /**
  * Configure the DynamoDB table that's created.
@@ -137,7 +137,7 @@ export function DynamoStorageServiceLive(
         }
         const valueStr = result.Item["value"]?.S
         if (!valueStr) return undefined
-        return (yield* Schema.decodeUnknown(JsonValue)(valueStr).pipe(
+        return (yield* Schema.decodeUnknownEffect(JsonValue)(valueStr).pipe(
           Effect.mapError(mapStorageError("DynamoDB get decode failed")),
         )) as T
       }),
@@ -167,7 +167,7 @@ export function DynamoStorageServiceLive(
         }
         const valueStr = result.Attributes["value"]?.S
         if (!valueStr) return undefined
-        return (yield* Schema.decodeUnknown(JsonValue)(valueStr).pipe(
+        return (yield* Schema.decodeUnknownEffect(JsonValue)(valueStr).pipe(
           Effect.mapError(mapStorageError("DynamoDB take decode failed")),
         )) as T
       }),
@@ -175,7 +175,7 @@ export function DynamoStorageServiceLive(
     set: (key: string[], value: unknown, ttl?: number) =>
       Effect.gen(function* () {
         const parsed = parseKey(key)
-        const encoded = yield* Schema.encode(JsonValue)(value).pipe(
+        const encoded = yield* Schema.encodeEffect(JsonValue)(value).pipe(
           Effect.mapError(mapStorageError("DynamoDB set encode failed")),
         )
         const item: Record<string, { S: string } | { N: string }> = {
@@ -262,7 +262,7 @@ export function DynamoStorageServiceLive(
               const skValue = item[sk]?.S
               const valueStr = item["value"]?.S
               if (pkValue && skValue && valueStr) {
-                const decoded = (yield* Schema.decodeUnknown(JsonValue)(
+                const decoded = (yield* Schema.decodeUnknownEffect(JsonValue)(
                   valueStr,
                 ).pipe(
                   Effect.mapError(mapStorageError("DynamoDB scan decode failed")),

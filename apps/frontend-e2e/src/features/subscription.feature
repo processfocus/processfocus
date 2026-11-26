@@ -1,10 +1,13 @@
 Feature: GraphQL subscriptions
 
   Background:
-    Given I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager" using client "e2e-employee-finance-manager"
+    Given I am authenticated as provider user "employee-finance-manager@example.com" with roles "/Employee,/finance/Manager"
     When I visit the processes page
     And I wait for RxDB to populate local storage
 
+  # First use also registers a Passkey, logs out and signs in again. Leave room
+  # for that cold setup plus the existing 30s subscription wait and reload fallback.
+  @timeout:120000
   Scenario: Starting a purchase request delivers a new todo via subscription
     Given I note the current todo count in the sidebar
     When I start the "Purchase Request" process

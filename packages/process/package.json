@@ -29,17 +29,15 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@effect/platform": "^0.97.2",
     "@pf/business-calendar": "workspace:*",
-    "@pf/form-client-representation": "workspace:*",
-    "@pf/form-rule": "workspace:*",
     "@pf/form-schema": "workspace:*",
     "@pf/form-submission-schema": "workspace:*",
     "@pf/frontend-manifest": "workspace:*",
     "@processfocus/runtime": "workspace:*",
     "constructs": "^10.8.1",
     "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
-    "effect": "^3.22.2",
+    "effect": "4.1.4",
+    "graphology": "^0.26.0",
     "validator": "^13.15.35"
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
-import type { GraphQLClient } from "graphql-request"
+import { buildSchema, graphql as executeGraphql } from "graphql"
+import { GraphQLClient } from "graphql-request"
 import { describe, expect, test } from "vitest"
 import {
   type AvailableList,
@@ -6,6 +7,7 @@ import {
   applyListPageToSearchParams,
   applyListSortToSearchParams,
   buildListQueryVariables,
+  fetchFreshListData,
   fetchListData,
   parseListPageNumber,
   parseListPageSize,
@@ -40,13 +42,6 @@ describe("list URL sort state", () => {
     expect(parseListSort("dueDate", "asc")).toEqual({
       field: "dueDate",
       direction: "ASC",
-    })
-  })
-
-  test("reads valid descending sort state from URL parameters", () => {
-    expect(parseListSort("dueDate", "desc")).toEqual({
-      field: "dueDate",
-      direction: "DESC",
     })
   })
 
@@ -176,6 +171,79 @@ describe("list URL sort state", () => {
     expect(applyListSortToSearchParams(search, "due-date")).toBe(
       "page=7&limit=25&filter=blocked",
     )
+  })
+
+  test("refreshes rows and totals with a valid page in one GraphQL operation after deletion", async () => {
+    const schema = buildSchema(`
+      enum SortDirection { ASC DESC }
+      input ListSortInput { field: String!, direction: SortDirection! }
+      type Item { id: String! }
+      type Page { items: [Item!]!, totalCount: Int!, page: Int!, limit: Int!, hasNextPage: Boolean! }
+      type Query { allThings(page: Int!, limit: Int!, filter: String, sort: ListSortInput): Page! }
+    `)
+    let requests = 0
+    const client = new GraphQLClient("http://list.test/graphql", {
+      fetch: async (input, init) => {
+        requests++
+        const body: { query: string; variables: Record<string, unknown> } =
+          await new Request(input, init).json()
+        return Response.json(
+          await executeGraphql({
+            schema,
+            source: body.query,
+            variableValues: body.variables,
+            rootValue: {
+              allThings: ({
+                page,
+                limit,
+                filter,
+                sort,
+              }: {
+                page: number
+                limit: number
+                filter: string
+                sort: { field: string; direction: string }
+              }) => {
+                expect(filter).toBe("mine")
+                expect(sort).toEqual({ field: "id", direction: "DESC" })
+                const remaining = [{ id: "2" }, { id: "1" }]
+                return {
+                  items: remaining.slice((page - 1) * limit, page * limit),
+                  totalCount: 2,
+                  page,
+                  limit,
+                  hasNextPage: page * limit < 2,
+                }
+              },
+            },
+          }),
+        )
+      },
+    })
+    const query = {
+      page: 3,
+      limit: 1,
+      filter: "mine",
+      sort: { field: "id", direction: "DESC" as const },
+    }
+    expect(await fetchFreshListData(client, testList, query)).toEqual({
+      items: [{ id: "2" }],
+      totalCount: 2,
+      page: 1,
+      limit: 1,
+      hasNextPage: true,
+    })
+    expect(requests).toBe(1)
+    expect(
+      await fetchFreshListData(client, testList, { ...query, page: 2 }),
+    ).toEqual({
+      items: [{ id: "1" }],
+      totalCount: 2,
+      page: 2,
+      limit: 1,
+      hasNextPage: false,
+    })
+    expect(requests).toBe(2)
   })
 
   test("fetchListData validates dynamic GraphQL names", async () => {

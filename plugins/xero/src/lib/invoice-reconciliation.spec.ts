@@ -10,8 +10,7 @@ import { describe, expect, it } from "bun:test"
 const input = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
   customer: { name: "Ada Lovelace", email: "ada@example.com" },
   shippingAddress: { line1: "10 Customhouse Quay", city: "Wellington" },
-  productSku: "TBS-100",
-  agreedPrice: "100.00",
+  lines: [{ productSku: "TBS-100", quantity: 1, unitAmount: "100.00" }],
   currency: "NZD",
   reference: "ORD-1001",
   date: "2026-03-15",
@@ -27,10 +26,15 @@ const compatible = {
   date: "2026-03-15",
   dueDate: "2026-03-15",
   contactId: "00000000-0000-4000-8000-c00000000001",
-  itemCode: "TBS-100",
-  unitAmount: "100.00",
+  lines: [
+    {
+      itemCode: "TBS-100",
+      description: "TBS Product",
+      quantity: 1,
+      unitAmount: "100.00",
+    },
+  ],
   total: "100.00",
-  lineCount: 1,
 }
 
 describe("Sales Invoice material compatibility", () => {
@@ -83,14 +87,21 @@ describe("Sales Invoice material compatibility", () => {
     ).toBe(false)
     expect(
       isMateriallyCompatibleInvoice(
-        { ...compatible, itemCode: "OTHER" },
+        {
+          ...compatible,
+          lines: [{ ...compatible.lines[0]!, itemCode: "OTHER" }],
+        },
         input,
         compatible.contactId,
       ),
     ).toBe(false)
     expect(
       isMateriallyCompatibleInvoice(
-        { ...compatible, unitAmount: "90.00", total: "90.00" },
+        {
+          ...compatible,
+          lines: [{ ...compatible.lines[0]!, unitAmount: "90.00" }],
+          total: "90.00",
+        },
         input,
         compatible.contactId,
       ),

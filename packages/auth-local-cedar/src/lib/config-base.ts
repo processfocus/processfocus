@@ -1,7 +1,6 @@
 import * as path from "node:path"
-import { FileSystem } from "@effect/platform"
-import { NodeFileSystem } from "@effect/platform-node"
-import { Config, Context, Effect, Layer } from "effect"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import { Config, Context, Effect, FileSystem, Layer } from "effect"
 import { PolicyLoadError, SchemaLoadError } from "@pf/auth-policy"
 import { PolicyWatcherService, makePolicyWatcherLayer } from "./policy-watcher"
 
@@ -12,15 +11,13 @@ import { PolicyWatcherService, makePolicyWatcherLayer } from "./policy-watcher"
  * policiesText is an array to support merging default policies with
  * custom org-specific policies.
  */
-export class LocalCedarConfig extends Context.Tag(
-  "@pf/auth-local-cedar/LocalCedarConfig",
-)<
+export class LocalCedarConfig extends Context.Service<
   LocalCedarConfig,
   {
     readonly policiesText: readonly string[]
     readonly schemaText: string
   }
->() {}
+>()("@pf/auth-local-cedar/LocalCedarConfig") {}
 
 /**
  * Resolve the path to a file within a package.
@@ -29,13 +26,15 @@ export class LocalCedarConfig extends Context.Tag(
  * Note: Uses indirect require.resolve via eval to prevent bundlers (Turbopack, etc.)
  * from attempting static analysis on the dynamic package name.
  */
-const resolvePackagePath = (packageName: string, relativePath: string) => {
-  const packagedCedarRoot = process.env["PF_CEDAR_ROOT"]
+const resolvePackagePath = (
+  packageName: string,
+  relativePath: string,
+  packagedCedarRoot: string | undefined,
+) => {
   if (packageName === "@pf/auth-policy" && packagedCedarRoot) {
     return path.join(packagedCedarRoot, path.basename(relativePath))
   }
 
-  // Find the package.json location
   // biome-ignore lint/security/noGlobalEval: Required to hide dynamic require.resolve from bundler static analysis
   const packageJsonPath = eval(
     `require.resolve("${packageName}/package.json")`,
@@ -57,14 +56,22 @@ export const DEFAULT_SCHEMA_PATH = "cedar/schema.cedarschema"
 /**
  * Get the resolved path to the default policies file
  */
-export const getDefaultPoliciesPath = () =>
-  resolvePackagePath("@pf/auth-policy", DEFAULT_POLICIES_PATH)
+export const getDefaultPoliciesPath = (
+  packagedCedarRoot = process.env["PF_CEDAR_ROOT"],
+) =>
+  resolvePackagePath(
+    "@pf/auth-policy",
+    DEFAULT_POLICIES_PATH,
+    packagedCedarRoot,
+  )
 
 /**
  * Get the resolved path to the default schema file
  */
-export const getDefaultSchemaPath = () =>
-  resolvePackagePath("@pf/auth-policy", DEFAULT_SCHEMA_PATH)
+export const getDefaultSchemaPath = (
+  packagedCedarRoot = process.env["PF_CEDAR_ROOT"],
+) =>
+  resolvePackagePath("@pf/auth-policy", DEFAULT_SCHEMA_PATH, packagedCedarRoot)
 
 /**
  * Create a config layer from file paths.
@@ -112,7 +119,17 @@ export const localCedarConfigFromPaths = (
  * which would fail in serverless environments where @pf/auth-policy package.json isn't available.
  */
 export const LocalCedarConfigDefault = () =>
-  localCedarConfigFromPaths(getDefaultPoliciesPath(), getDefaultSchemaPath())
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const root = yield* Config.String("PF_CEDAR_ROOT").pipe(
+        Config.withDefault(""),
+      )
+      return localCedarConfigFromPaths(
+        getDefaultPoliciesPath(root),
+        getDefaultSchemaPath(root),
+      )
+    }),
+  )
 
 /**
  * Configuration layer that reads Cedar policies from a directory.
@@ -134,10 +151,10 @@ export const LocalCedarConfigFromEnvDir = Layer.provide(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
 
-      const policiesDir = yield* Config.string("CEDAR_PATH")
+      const policiesDir = yield* Config.String("CEDAR_PATH")
 
       // List all .cedar and .cedarschema files in the directory
-      const dirEntries = yield* fs.readDirectory(policiesDir)
+      const dirEntries = (yield* fs.readDirectory(policiesDir)).sort()
       const cedarFiles = dirEntries.filter((entry) => entry.endsWith(".cedar"))
       const schemaFiles = dirEntries.filter((entry) =>
         entry.endsWith(".cedarschema"),
@@ -150,7 +167,6 @@ export const LocalCedarConfigFromEnvDir = Layer.provide(
         })
       }
 
-      // Load all policy files
       const policiesText = yield* Effect.forEach(cedarFiles, (file) => {
         const fullPath = path.join(policiesDir, file)
         return fs
@@ -162,7 +178,6 @@ export const LocalCedarConfigFromEnvDir = Layer.provide(
           )
       })
 
-      // Load all schema files from the same directory
       const schemaTexts = yield* Effect.forEach(schemaFiles, (file) => {
         const fullPath = path.join(policiesDir, file)
         return fs
@@ -208,28 +223,34 @@ export const LocalCedarConfigStatic = (
       LocalCedarConfig,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
+        const root = yield* Config.String("PF_CEDAR_ROOT").pipe(
+          Config.withDefault(""),
+        )
 
-        // Load default policies
         const defaultPoliciesText = yield* fs
-          .readFileString(getDefaultPoliciesPath())
+          .readFileString(getDefaultPoliciesPath(root))
           .pipe(
             Effect.mapError(
               (cause) =>
-                new PolicyLoadError({ path: getDefaultPoliciesPath(), cause }),
+                new PolicyLoadError({
+                  path: getDefaultPoliciesPath(root),
+                  cause,
+                }),
             ),
           )
 
-        // Load default schema
         const defaultSchemaText = yield* fs
-          .readFileString(getDefaultSchemaPath())
+          .readFileString(getDefaultSchemaPath(root))
           .pipe(
             Effect.mapError(
               (cause) =>
-                new SchemaLoadError({ path: getDefaultSchemaPath(), cause }),
+                new SchemaLoadError({
+                  path: getDefaultSchemaPath(root),
+                  cause,
+                }),
             ),
           )
 
-        // Load custom policies if provided
         const customPoliciesText = customPolicyPaths
           ? yield* Effect.forEach(customPolicyPaths, (policyPath) =>
               fs
@@ -287,60 +308,75 @@ export const LocalCedarConfigHotReload = (
   basePath: string,
   customPolicyFiles: readonly string[],
   customSchemaFiles?: readonly string[],
-) => {
-  // Resolve custom policy paths relative to basePath
-  const resolvedCustomPaths = customPolicyFiles.map((f) =>
-    require("node:path").resolve(basePath, f),
-  )
-
-  // Combine default policy path with custom paths - all will be watched
-  const allPolicyPaths = [getDefaultPoliciesPath(), ...resolvedCustomPaths]
-
-  // Create watcher for all policy files (default + custom)
-  // Pass "/" as basePath since paths are already absolute
-  const policyWatcherLayer = makePolicyWatcherLayer("/", allPolicyPaths)
-
-  // Create config layer that gets policies from watcher and loads schema
-  const configLayer = Layer.effect(
-    LocalCedarConfig,
+) =>
+  Layer.unwrap(
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const watcher = yield* PolicyWatcherService
-      const policiesText = yield* watcher.currentPolicies
+      const root = yield* Config.String("PF_CEDAR_ROOT").pipe(
+        Config.withDefault(""),
+      )
+      // Resolve custom policy paths relative to basePath
+      const resolvedCustomPaths = customPolicyFiles.map((f) =>
+        require("node:path").resolve(basePath, f),
+      )
 
-      // Load default schema (not watched - schema changes are rare and require restart)
-      const defaultSchemaText = yield* fs
-        .readFileString(getDefaultSchemaPath())
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new SchemaLoadError({ path: getDefaultSchemaPath(), cause }),
-          ),
-        )
+      // Combine default policy path with custom paths - all will be watched
+      const allPolicyPaths = [
+        getDefaultPoliciesPath(root),
+        ...resolvedCustomPaths,
+      ]
 
-      // Load custom schema files and concatenate with default schema
-      const customSchemaTexts = customSchemaFiles
-        ? yield* Effect.forEach(customSchemaFiles, (schemaPath) =>
-            fs
-              .readFileString(schemaPath)
-              .pipe(
-                Effect.mapError(
-                  (cause) => new SchemaLoadError({ path: schemaPath, cause }),
-                ),
+      // Create watcher for all policy files (default + custom)
+      // Pass "/" as basePath since paths are already absolute
+      const policyWatcherLayer = makePolicyWatcherLayer("/", allPolicyPaths)
+
+      // Create config layer that gets policies from watcher and loads schema
+      const configLayer = Layer.effect(
+        LocalCedarConfig,
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const watcher = yield* PolicyWatcherService
+          const policiesText = yield* watcher.currentPolicies
+
+          // Load default schema (not watched - schema changes are rare and require restart)
+          const defaultSchemaText = yield* fs
+            .readFileString(getDefaultSchemaPath(root))
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new SchemaLoadError({
+                    path: getDefaultSchemaPath(root),
+                    cause,
+                  }),
               ),
+            )
+
+          // Load custom schema files and concatenate with default schema
+          const customSchemaTexts = customSchemaFiles
+            ? yield* Effect.forEach(customSchemaFiles, (schemaPath) =>
+                fs
+                  .readFileString(schemaPath)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new SchemaLoadError({ path: schemaPath, cause }),
+                    ),
+                  ),
+              )
+            : []
+
+          // Concatenate schemas: different namespaces (e.g. PF and Org) can coexist in one string
+          const schemaText = [defaultSchemaText, ...customSchemaTexts].join(
+            "\n\n",
           )
-        : []
 
-      // Concatenate schemas: different namespaces (e.g. PF and Org) can coexist in one string
-      const schemaText = [defaultSchemaText, ...customSchemaTexts].join("\n\n")
+          return { policiesText, schemaText }
+        }),
+      ).pipe(Layer.provide(NodeFileSystem.layer))
 
-      return { policiesText, schemaText }
+      // Combine: ConfigLayer needs PolicyWatcherService, and we want to provide both
+      return Layer.provideMerge(
+        Layer.provide(configLayer, policyWatcherLayer),
+        policyWatcherLayer,
+      )
     }),
-  ).pipe(Layer.provide(NodeFileSystem.layer))
-
-  // Combine: ConfigLayer needs PolicyWatcherService, and we want to provide both
-  return Layer.provideMerge(
-    Layer.provide(configLayer, policyWatcherLayer),
-    policyWatcherLayer,
   )
-}

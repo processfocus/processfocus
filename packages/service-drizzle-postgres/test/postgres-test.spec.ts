@@ -1,7 +1,8 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
-import { SqlClient } from "@effect/sql"
+
 import { expect, it } from "@effect/vitest"
 import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-postgres"
 import { TypedPostgresDrizzle } from "../src/lib/typed-drizzle"
 import { PostgresTest } from "./postgres-test"

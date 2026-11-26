@@ -10,7 +10,7 @@ import {
   type ExecutorInvocation,
   type ExecutorJobContext,
 } from "@processfocus/runtime"
-import { Data, Effect, Either, Layer, Schema } from "effect"
+import { Data, Effect, Layer, Result, Schema } from "effect"
 
 const localInternalApiSecret =
   process.env["INTERNAL_API_SECRET"] ?? "dev-secret"
@@ -79,7 +79,7 @@ type DockerStepResultEnvelope = {
   readonly stderrTail?: string
 }
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 class DockerStepResultParseError extends Data.TaggedError(
   "DockerStepResultParseError",
@@ -99,7 +99,7 @@ const parseResult = (resultPath: string) =>
         }),
     })
 
-    return yield* Schema.decodeUnknown(JsonValue)(resultText).pipe(
+    return yield* Schema.decodeUnknownEffect(JsonValue)(resultText).pipe(
       Effect.map((result) => result as DockerStepResultEnvelope),
       Effect.mapError(
         (cause) =>
@@ -162,7 +162,7 @@ export const acquireDockerStepWorkDir = Effect.acquireRelease(
       try: () => rm(hostWorkDir, { recursive: true, force: true }),
       catch: (cause) => cause,
     }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         Effect.logWarning("Failed to clean up Docker step work directory", {
           hostWorkDir,
           error: String(cause),
@@ -191,7 +191,7 @@ export const makeLocalExecutorHostLayer = (
           const hostWorkDir = yield* acquireDockerStepWorkDir
           const inputPath = join(hostWorkDir, "input.json")
           const resultPath = join(hostWorkDir, "result.json")
-          const encodedInput = yield* Schema.encode(JsonValue)(
+          const encodedInput = yield* Schema.encodeEffect(JsonValue)(
             invocation.input,
           ).pipe(
             Effect.mapError(
@@ -299,7 +299,7 @@ export const makeLocalExecutorHostLayer = (
               }),
           })
 
-          const resultEither = yield* Effect.either(
+          const resultEither = yield* Effect.result(
             parseResult(resultPath).pipe(
               Effect.mapError(
                 (error) =>
@@ -312,8 +312,8 @@ export const makeLocalExecutorHostLayer = (
           )
 
           if (runResult.exitCode !== 0) {
-            const result = Either.isRight(resultEither)
-              ? resultEither.right
+            const result = Result.isSuccess(resultEither)
+              ? resultEither.success
               : undefined
 
             return yield* new ExecutorError({
@@ -329,10 +329,10 @@ export const makeLocalExecutorHostLayer = (
             })
           }
 
-          if (Either.isLeft(resultEither)) {
+          if (Result.isFailure(resultEither)) {
             return yield* new ExecutorError({
               message: formatFailureMessage({
-                title: resultEither.left.message,
+                title: resultEither.failure.message,
                 error: undefined,
                 exitCode: runResult.exitCode,
                 stderrTail: undefined,
@@ -340,11 +340,11 @@ export const makeLocalExecutorHostLayer = (
                 stderr: runResult.stderr,
                 stdout: runResult.stdout,
               }),
-              cause: resultEither.left,
+              cause: resultEither.failure,
             })
           }
 
-          const result = resultEither.right
+          const result = resultEither.success
 
           if (result.status !== "success") {
             return yield* new ExecutorError({

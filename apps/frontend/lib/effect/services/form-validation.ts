@@ -1,19 +1,23 @@
-import { Context, Schema as ES, Effect, Layer } from "effect"
+import { Context, Data, Schema as ES, Effect, Layer } from "effect"
+
+export class FormValidationError extends Data.TaggedError(
+  "FormValidationError",
+)<{
+  readonly message: string
+}> {}
 
 /**
  * Form validation service for validating form data against Effect schemas.
  */
-export class FormValidationService extends Context.Tag(
-  "@pf/frontend/FormValidationService",
-)<
+export class FormValidationService extends Context.Service<
   FormValidationService,
   {
     readonly validateFormData: <A, I>(
-      schema: ES.Schema<A, I>,
+      schema: ES.Codec<A, I>,
       data: unknown,
-    ) => Effect.Effect<A, Error>
+    ) => Effect.Effect<A, FormValidationError>
   }
->() {}
+>()("@pf/frontend/FormValidationService") {}
 
 /**
  * Form validation service layer implementation.
@@ -21,16 +25,14 @@ export class FormValidationService extends Context.Tag(
 export const FormValidationServiceLive = Layer.succeed(
   FormValidationService,
   FormValidationService.of({
-    validateFormData: <A, I>(schema: ES.Schema<A, I>, data: unknown) =>
-      Effect.try({
-        try: () => {
-          const result = ES.decodeUnknownEither(schema)(data)
-          if (result._tag === "Right") {
-            return result.right
-          }
-          throw new Error(result.left.message)
-        },
-        catch: (error) => new Error(`Form validation failed: ${String(error)}`),
-      }),
+    validateFormData: <A, I>(schema: ES.Codec<A, I>, data: unknown) =>
+      ES.decodeUnknownEffect(schema)(data).pipe(
+        Effect.mapError(
+          (error) =>
+            new FormValidationError({
+              message: `Form validation failed: ${error.message}`,
+            }),
+        ),
+      ),
   }),
 )

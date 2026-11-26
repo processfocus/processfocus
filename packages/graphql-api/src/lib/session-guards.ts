@@ -5,7 +5,6 @@ import type {
   Session,
 } from "@pf/auth-session"
 import { NotAuthorized } from "@pf/graphql-schema"
-import type { ProcessStartTrigger } from "./business-metrics"
 import { delegatedRealtimeEnabled } from "./delegated-realtime"
 
 /** Presence is enough to prohibit fallback, including malformed delegation facts. */
@@ -17,6 +16,25 @@ export const rejectUnsupportedDelegationHandoff = (
   operation: string,
 ): Effect.Effect<void, NotAuthorized> =>
   Effect.gen(function* () {
+    if (props && "awsRole" in props)
+      return yield* new NotAuthorized({
+        action: operation,
+        resource: "AWS request identity",
+        message: "AWS request identity cannot acquire transferable credentials",
+      })
+    if (
+      props?.workload &&
+      operation !== "subscriptionTransport" &&
+      operation !== "requestDatabaseUploadUrl" &&
+      operation !== "requestUploadUrl" &&
+      operation !== "file upload" &&
+      operation !== "database transfer"
+    )
+      return yield* new NotAuthorized({
+        action: operation,
+        resource: "Workload handoff",
+        message: "Workload capability handoff is unavailable",
+      })
     if (!hasDelegation(props)) return
     if (
       operation === "subscriptionTransport" &&
@@ -41,7 +59,3 @@ export const isServiceAccountSession = (
 ): props is ServiceAccountSession => {
   return props !== undefined && "clientId" in props
 }
-
-export const processStartTriggerForSession = (
-  props: Session | undefined,
-): ProcessStartTrigger => (isProviderUserSession(props) ? "human" : "automated")

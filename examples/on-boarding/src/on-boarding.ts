@@ -1,5 +1,22 @@
-import { DateTime, Schema as ES } from "effect"
+import { DateTime } from "effect"
 import { Form, type OrgUnit, Process, Role } from "@pf/process"
+import {
+  assignDeskForm,
+  assignIDBadgeForm,
+  backgroundCheckForm,
+  complianceTrainingForm,
+  createAccountForm,
+  formalPerformanceReviewForm,
+  meetWithEmployeeForm,
+  onboardingChecklistForm,
+  orientationSessionForm,
+  passedForm,
+  probationFailedForm,
+  provideLaptopAndBadgeForm,
+  provisionLaptopForm,
+  review306090DayPlanForm,
+  sendWelcomePackForm,
+} from "./on-boarding-forms"
 
 export class OnBoarding extends Process {
   constructor(scope: OrgUnit, id: string) {
@@ -25,46 +42,70 @@ export class OnBoarding extends Process {
     // Pre-boarding
     const send_welcome_pack = new Form(this, "Send welcome pack", {
       name: "Send a welcome packet and necessary forms",
-      form: () => ({
-        first_name: ES.String,
-        last_name: ES.String,
-        start_date: ES.DateTimeUtc,
-      }),
+      form: sendWelcomePackForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "sendWelcomePackForm",
+      },
       role: hr,
     })
 
     // TODO: The background check has cleared before the start date.
     const background_check = new Form(this, "Background check", {
       name: "Initiate a background check",
-      form: () => ({}),
+      form: backgroundCheckForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "backgroundCheckForm",
+      },
       role: hr,
     })
 
     const create_account = new Form(this, "Create account", {
       name: "create accounts (email, system access)",
-      form: () => ({}),
+      form: createAccountForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "createAccountForm",
+      },
       role: it,
     })
 
     const provision_laptop = new Form(this, "Provision laptop", {
-      form: () => ({}),
+      form: provisionLaptopForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "provisionLaptopForm",
+      },
       role: it,
     })
 
     const assign_desk = new Form(this, "Assign desk", {
       name: "Assign a desk/office",
-      form: () => ({}),
+      form: assignDeskForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "assignDeskForm",
+      },
       role: facilities,
     })
 
     const provision_badge = new Form(this, "Assign ID badge", {
-      form: () => ({}),
+      form: assignIDBadgeForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "assignIDBadgeForm",
+      },
       role: facilities,
     })
 
     const prepare_onboarding = new Form(this, "Onboarding checklist", {
       name: "Receives a notification with an on-boarding checklist (e.g., prepare a 30-60-90 day plan, assign a buddy)",
-      form: () => ({}),
+      form: onboardingChecklistForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "onboardingChecklistForm",
+      },
       role: hiring_manager,
     })
 
@@ -73,20 +114,32 @@ export class OnBoarding extends Process {
     const orientation_session = new Form(this, "Orientation session", {
       purpose:
         "HR conducts an orientation session covering company culture, policies, and benefits",
-      form: () => ({}),
+      form: orientationSessionForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "orientationSessionForm",
+      },
       role: hiring_manager,
     })
 
     const provide_laptop = new Form(this, "Provide laptop and badge", {
       name: "Provide employee with hardware and login credentials",
-      form: () => ({}),
+      form: provideLaptopAndBadgeForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "provideLaptopAndBadgeForm",
+      },
       role: it,
     })
 
     const plan_review = new Form(this, "Review 30-60-90 day plan", {
       purpose:
         "Hiring Manager welcomes the employee, introduces them to the team, and reviews the 30-60-90 day plan",
-      form: () => ({}),
+      form: review306090DayPlanForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "review306090DayPlanForm",
+      },
       role: hiring_manager,
     })
 
@@ -95,7 +148,11 @@ export class OnBoarding extends Process {
     const compliance_training = new Form(this, "Compliance training", {
       purpose:
         "The employee completes mandatory compliance training (e.g., security awareness, code of conduct)",
-      form: () => ({}),
+      form: complianceTrainingForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "complianceTrainingForm",
+      },
       role: new_employee,
     })
 
@@ -108,7 +165,11 @@ export class OnBoarding extends Process {
     const day_30_check_in = new Form(this, "Meet with employee", {
       purpose:
         "Meet with the employee to discuss their experience, answer questions, and provide feedback",
-      form: () => ({}),
+      form: meetWithEmployeeForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "meetWithEmployeeForm",
+      },
       role: hiring_manager,
     })
 
@@ -121,26 +182,32 @@ export class OnBoarding extends Process {
         purpose:
           "A formal performance review is conducted by the Hiring Manager",
         role: hiring_manager,
-        form: () => ({
-          passed: ES.Boolean,
-        }),
+        form: formalPerformanceReviewForm,
+        browser: {
+          entrypoint: "src/on-boarding-forms.ts",
+          exportName: "formalPerformanceReviewForm",
+        },
       },
     )
 
     const permanent = new Form(this, "Passed", {
       purpose: "The employee's status is changed to permanent.",
-      form: () => ({}),
+      form: passedForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "passedForm",
+      },
       role: hiring_manager,
     })
 
     const improvement_or_off_boarding = new Form(this, "Probation failed", {
       purpose: "A formal performance review is conducted by the Hiring Manager",
       role: hiring_manager,
-      form: () => ({
-        // TODO: needs to become one selection, starts separate process
-        start_offboarding: ES.Boolean,
-        start_improvement_process: ES.Boolean,
-      }),
+      form: probationFailedForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "probationFailedForm",
+      },
     })
 
     // **Close Onboarding Process**: HR confirms all checklist items are complete and closes the onboarding record.
@@ -179,8 +246,8 @@ export class OnBoarding extends Process {
           const oneWeekBeforeStart = DateTime.subtract(state.start_date, {
             days: 7,
           })
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             oneWeekBeforeStart,
           )
         },
@@ -194,8 +261,8 @@ export class OnBoarding extends Process {
           const oneWeekBeforeStart = DateTime.subtract(state.start_date, {
             days: 7,
           })
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             oneWeekBeforeStart,
           )
         },
@@ -209,8 +276,8 @@ export class OnBoarding extends Process {
           const oneWeekBeforeStart = DateTime.subtract(state.start_date, {
             days: 7,
           })
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             oneWeekBeforeStart,
           )
         },
@@ -221,8 +288,8 @@ export class OnBoarding extends Process {
       condition: {
         fn: (state) => {
           // On start date
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             state.start_date,
           )
         },
@@ -233,8 +300,8 @@ export class OnBoarding extends Process {
       condition: {
         fn: (state) => {
           // On start date
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             state.start_date,
           )
         },
@@ -245,8 +312,8 @@ export class OnBoarding extends Process {
       condition: {
         fn: (state) => {
           // On start date
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             state.start_date,
           )
         },
@@ -266,8 +333,8 @@ export class OnBoarding extends Process {
           const thirtyDaysAfterStart = DateTime.add(state.start_date, {
             days: 30,
           })
-          return DateTime.greaterThanOrEqualTo(
-            DateTime.unsafeNow(),
+          return DateTime.isGreaterThanOrEqualTo(
+            DateTime.nowUnsafe(),
             thirtyDaysAfterStart,
           )
         },

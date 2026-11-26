@@ -1,6 +1,6 @@
 import type { DateTime } from "effect"
 import { Context, Data, Duration, Effect, Option, Schema } from "effect"
-import type { ParseError } from "effect/ParseResult"
+import type { SchemaError as ParseError } from "effect/Schema"
 
 export type QueuePayload = Record<string, unknown>
 
@@ -19,11 +19,19 @@ export interface Job<A> extends Omit<RawJob, "payload"> {
   readonly payload: A
 }
 
+export type JobClaim = Pick<RawJob, "jobId" | "receipt">
+
 export interface QueueStats {
   readonly pending: number
   readonly processing: number
   readonly deadLetter: number
 }
+
+export class QueueStatsError extends Data.TaggedError("QueueStatsError")<{
+  readonly queue: string
+  readonly message: string
+  readonly cause?: unknown
+}> {}
 
 export class EnqueueError extends Data.TaggedError("EnqueueError")<{
   readonly queue: string
@@ -103,6 +111,13 @@ export const validateQueueName = (
 
 export interface QueueServiceShape<R = never> {
   readonly queueInTransaction: boolean
+  /**
+   * Returns a physical ID, not a durable acknowledgement inside a database
+   * transaction: it is staged until the outermost commit (including savepoints).
+   * Autocommit/external success means accepted, even if already consumed.
+   * Failure/lost response may follow a commit; retry can duplicate delivery.
+   * Never delete committed work to compensate for a lost acknowledgement.
+   */
   readonly enqueue: <P extends QueuePayload>(
     queue: string,
     payload: P,
@@ -111,6 +126,7 @@ export interface QueueServiceShape<R = never> {
       readonly logicalJobId?: string
     },
   ) => Effect.Effect<string, EnqueueError | InvalidQueueNameError, R>
+  /** Same provisional-versus-durable return contract as enqueue. */
   readonly enqueueWithDelay: <P extends QueuePayload>(
     queue: string,
     payload: P,
@@ -128,6 +144,16 @@ export interface QueueServiceShape<R = never> {
     ClaimError | InvalidQueueNameError,
     R
   >
+  /** Positive integer limit; ordered by attempts, availability, then job ID. */
+  readonly rawClaimBatch: (
+    queue: string,
+    limit: number,
+    visibilityTimeout?: Duration.Duration,
+  ) => Effect.Effect<readonly RawJob[], ClaimError | InvalidQueueNameError, R>
+  /** Delete matching pairs only; return IDs actually acknowledged, ignoring stale/missing claims. */
+  readonly acknowledgeBatch: (
+    claims: readonly JobClaim[],
+  ) => Effect.Effect<readonly string[], AcknowledgeError, R>
   readonly acknowledge: (
     jobId: string,
     receipt: string,
@@ -142,6 +168,8 @@ export interface QueueServiceShape<R = never> {
     options?: {
       readonly releaseImmediately?: boolean
       readonly retryable?: boolean
+      /** Known failure diagnostic; omission is unknown unless explicitly non-retryable. */
+      readonly reason?: string
     },
   ) => Effect.Effect<
     void,
@@ -159,7 +187,7 @@ export interface QueueServiceShape<R = never> {
   >
   readonly getStats: (
     queue: string,
-  ) => Effect.Effect<QueueStats, InvalidQueueNameError, R>
+  ) => Effect.Effect<QueueStats, InvalidQueueNameError | QueueStatsError, R>
 }
 
 export type Queue = QueueServiceShape
@@ -167,33 +195,39 @@ export type Queue = QueueServiceShape
 export const closeQueue = <R>(
   queue: QueueServiceShape<R>,
   context: Context.Context<R>,
-): Queue => ({
-  queueInTransaction: queue.queueInTransaction,
-  enqueue: (name, payload, options) =>
-    queue.enqueue(name, payload, options).pipe(Effect.provide(context)),
-  enqueueWithDelay: (name, payload, delay, options) =>
-    queue
-      .enqueueWithDelay(name, payload, delay, options)
-      .pipe(Effect.provide(context)),
-  rawClaim: (name, visibilityTimeout) =>
-    queue.rawClaim(name, visibilityTimeout).pipe(Effect.provide(context)),
-  acknowledge: (jobId, receipt) =>
-    queue.acknowledge(jobId, receipt).pipe(Effect.provide(context)),
-  fail: (jobId, receipt, options) =>
-    queue.fail(jobId, receipt, options).pipe(Effect.provide(context)),
-  extendVisibility: (jobId, receipt, timeout) =>
-    queue
-      .extendVisibility(jobId, receipt, timeout)
-      .pipe(Effect.provide(context)),
-  getStats: (name) => queue.getStats(name).pipe(Effect.provide(context)),
-})
+): Queue => {
+  // Capture required services, while preserving request, clock and transaction
+  // overrides from the operation's caller.
+  const provide = Effect.updateContext<never, R>((caller) =>
+    Context.merge(context, caller),
+  )
+  return {
+    queueInTransaction: queue.queueInTransaction,
+    enqueue: (name, payload, options) =>
+      queue.enqueue(name, payload, options).pipe(provide),
+    enqueueWithDelay: (name, payload, delay, options) =>
+      queue.enqueueWithDelay(name, payload, delay, options).pipe(provide),
+    rawClaim: (name, visibilityTimeout) =>
+      queue.rawClaim(name, visibilityTimeout).pipe(provide),
+    rawClaimBatch: (name, limit, visibilityTimeout) =>
+      queue.rawClaimBatch(name, limit, visibilityTimeout).pipe(provide),
+    acknowledgeBatch: (claims) => queue.acknowledgeBatch(claims).pipe(provide),
+    acknowledge: (jobId, receipt) =>
+      queue.acknowledge(jobId, receipt).pipe(provide),
+    fail: (jobId, receipt, options) =>
+      queue.fail(jobId, receipt, options).pipe(provide),
+    extendVisibility: (jobId, receipt, timeout) =>
+      queue.extendVisibility(jobId, receipt, timeout).pipe(provide),
+    getStats: (name) => queue.getStats(name).pipe(provide),
+  }
+}
 
-export class QueueService extends Context.Tag(
+export class QueueService extends Context.Service<QueueService, Queue>()(
   "@processfocus/runtime/QueueService",
-)<QueueService, Queue>() {
+) {
   static claim = <A, I>(
     queue: string,
-    schema: Schema.Schema<A, I>,
+    schema: Schema.Codec<A, I>,
     visibilityTimeout?: Duration.Duration,
   ): Effect.Effect<
     Option.Option<Job<A>>,
@@ -206,7 +240,9 @@ export class QueueService extends Context.Tag(
       if (Option.isNone(rawJobOption)) return Option.none()
 
       const rawJob = rawJobOption.value
-      const payload = yield* Schema.decodeUnknown(schema)(rawJob.payload).pipe(
+      const payload = yield* Schema.decodeUnknownEffect(schema)(
+        rawJob.payload,
+      ).pipe(
         Effect.mapError(
           (error) =>
             new PayloadParseError({ queue, jobId: rawJob.jobId, error }),

@@ -32,7 +32,6 @@ export function SidebarLists() {
     staleTime: 60 * 1000, // Cache for 1 minute
   })
 
-  // Don't render anything if no lists are available or still loading
   if (isLoading || !lists || lists.length === 0) {
     return null
   }

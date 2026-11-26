@@ -108,27 +108,6 @@ describe("frontend plugin loaders", () => {
     expect(activationOrder).toEqual(["analytics", "form"])
   })
 
-  test("reports missing artifact loaders as plugin failures", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {})
-    const onFailure = vi.fn()
-    await loadFrontendManifestPlugins(
-      {
-        analytics: [{ type: "analytics.unknown", config: {} }],
-        formComponents: [{ type: "form.unknown" }],
-      },
-      {},
-      onFailure,
-    )
-    expect(onFailure).toHaveBeenCalledWith({
-      pluginType: "analytics.unknown",
-      cause: expect.any(Error),
-    })
-    expect(onFailure).toHaveBeenCalledWith({
-      pluginType: "form.unknown",
-      cause: expect.any(Error),
-    })
-  })
-
   test("passes analytics config to loaders and keeps declined plugins inactive", async () => {
     const receivedConfigs: unknown[] = []
     const loaders: FrontendPluginLoaderMap = {

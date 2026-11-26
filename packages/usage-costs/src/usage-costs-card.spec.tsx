@@ -2,20 +2,15 @@ import { JSDOM } from "jsdom"
 import { act } from "react"
 import { type Root, createRoot } from "react-dom/client"
 import {
-  FormComponentType,
-  type MetricBreakdown,
-} from "@pf/form-client-representation/types"
-import {
   type GraphqlRequester,
+  type MetricBreakdown,
   UsageCostsCard,
   type UsageCostsCardProps,
 } from "./usage-costs-card"
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 
 const baseComponent = {
-  _tag: FormComponentType.MetricBreakdown,
   field: "usageCosts",
-  label: "Usage costs",
   title: "Usage costs",
   currency: "USD",
   dataSource: "item",
@@ -54,7 +49,6 @@ const usageCostRow = {
   id: "row-1",
   usageDate: "2026-07-01",
   costCategory: "Deploy",
-  costSource: "codebuild",
   durationMs: 1200,
   amount: 0.42,
 }
@@ -152,7 +146,9 @@ describe("UsageCostsCard", () => {
       await deferred.promise
     })
 
-    expect(container.textContent).toContain("2026-07-01")
+    const day = container.querySelector('time[datetime="2026-07-01"]')
+    expect(day?.textContent).toBe("Jul 1, 2026")
+    expect(day?.closest("button, a")).toBeNull()
     expect(container.textContent).toContain("Deploy")
     expect(container.textContent).toContain("$0.42")
     expect(container.textContent).not.toContain("Loading usage cost rows...")
@@ -187,7 +183,9 @@ describe("UsageCostsCard", () => {
       await first.promise
     })
 
-    expect(container.textContent).toContain("2026-07-01")
+    expect(
+      container.querySelector('time[datetime="2026-07-01"]'),
+    ).not.toBeNull()
     expect(window.location.search).toBe("")
 
     const periodSelect = container.querySelector(
@@ -227,7 +225,9 @@ describe("UsageCostsCard", () => {
       await second.promise
     })
 
-    expect(container.textContent).toContain("2026-07-15")
+    expect(
+      container.querySelector('time[datetime="2026-07-15"]'),
+    ).not.toBeNull()
     expect(container.textContent).toContain("$1.25")
     expect(container.textContent).not.toContain("Loading usage cost rows...")
   })
@@ -351,7 +351,9 @@ describe("UsageCostsCard", () => {
       })
       await first.promise
     })
-    expect(container.textContent).toContain("2026-07-01")
+    expect(
+      container.querySelector('time[datetime="2026-07-01"]'),
+    ).not.toBeNull()
 
     const periodSelect = container.querySelector(
       'select[name="usageCostsPeriod"]',
@@ -422,7 +424,9 @@ describe("UsageCostsCard", () => {
       await second.promise
     })
 
-    expect(container.textContent).toContain("2026-07-22")
+    expect(
+      container.querySelector('time[datetime="2026-07-22"]'),
+    ).not.toBeNull()
     expect(container.textContent).toContain("$3.50")
   })
 
@@ -477,7 +481,9 @@ describe("UsageCostsCard", () => {
 
     await clickButton(container, "table")
     await flushMicrotasks()
-    expect(container.textContent).toContain("2026-07-01")
+    expect(
+      container.querySelector('time[datetime="2026-07-01"]'),
+    ).not.toBeNull()
 
     const secondClient = createGraphqlClient(
       asGraphqlRequest(() =>
@@ -523,7 +529,9 @@ describe("UsageCostsCard", () => {
         usageCostsPeriod: "last-30-days",
       },
     )
-    expect(container.textContent).toContain("2026-07-20")
+    expect(
+      container.querySelector('time[datetime="2026-07-20"]'),
+    ).not.toBeNull()
     expect(container.textContent).toContain("Execution")
   })
 
@@ -663,7 +671,9 @@ describe("UsageCostsCard", () => {
     })
 
     expect(container.textContent).toContain("Period B")
-    expect(container.textContent).toContain("2026-07-18")
+    expect(
+      container.querySelector('time[datetime="2026-07-18"]'),
+    ).not.toBeNull()
     expect(container.textContent).not.toContain("Period A")
   })
 })

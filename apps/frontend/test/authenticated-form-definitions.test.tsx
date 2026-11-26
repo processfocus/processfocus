@@ -1,20 +1,25 @@
+import { createCollection, localOnlyCollectionOptions } from "@tanstack/db"
+import { Schema } from "effect"
 import { JSDOM } from "jsdom"
 import { type ReactNode, act } from "react"
 import type { Root } from "react-dom/client"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import {
-  type JsonSchemaRoot,
-  LookupProvider,
-  type LookupService,
-} from "@pf/form"
-import type { ClientFormDefinition } from "@pf/form-client-representation/client-form-definition"
-import { FormComponentType } from "@pf/form-client-representation/types"
+import { LookupProvider, type LookupService } from "@pf/form"
+import { BooleanField, LookupField, TextField } from "@pf/form-schema"
+import { withFormRules } from "@pf/form-submission-schema"
 import { StartProcessForm } from "../app/(protected)/processes/components/start-process-form"
 import { WorkflowFormPreviewSheet } from "../app/(protected)/processes/workflow/[...processPath]/workflow-form-preview-sheet"
 import { CompleteTodoForm } from "../app/(protected)/to-dos/components/complete-todo-form"
+import type { DraftProcessExecutionDocType } from "../lib/collections/draft-process-execution"
 import { FORM_METADATA_QUERY } from "../lib/graphql/queries"
 
 const graphqlRequest = vi.fn()
+const draftCollection = createCollection(
+  localOnlyCollectionOptions<DraftProcessExecutionDocType>({
+    getKey: (row) => row.id,
+  }),
+)
+const draftCollectionPromise = Promise.resolve(draftCollection)
 let workflowFormMetadata: ReturnType<typeof formMetadata>
 
 vi.mock("@/lib/graphql/client-provider", () => ({
@@ -24,27 +29,14 @@ vi.mock("@/lib/graphql/client-provider", () => ({
 vi.mock(
   "@/lib/collections/draft-process-execution-collection-provider",
   () => ({
+    DraftProcessCollectionProvider: ({ children }: { children: ReactNode }) =>
+      children,
     useDraftProcessCollection: () => ({
-      collectionPromise: Promise.resolve({
-        delete: vi.fn(),
-        has: vi.fn(() => false),
-      }),
+      collectionPromise: draftCollectionPromise,
+      initialSync: { status: "complete" },
     }),
   }),
 )
-
-vi.mock("@/hooks/use-processes-query", () => ({
-  useProcessesQuery: () => ({ isLoading: false, processes: [] }),
-}))
-
-vi.mock("@/hooks/use-draft-process-save", () => ({
-  useDraftProcessSave: () => ({
-    draftSaveError: null,
-    handleDiscard: vi.fn(),
-    handleSaveDraft: vi.fn(),
-    showButtonError: false,
-  }),
-}))
 
 vi.mock("@/hooks/use-form-metadata", () => ({
   useFormMetadata: () => ({
@@ -70,40 +62,24 @@ vi.mock("@/components/ui/sheet", () => ({
   ),
 }))
 
-const jsonSchema = {
-  type: "object",
-  properties: {
-    status: { type: "boolean" },
-    details: { type: "string" },
-  },
-} satisfies JsonSchemaRoot
-
-const ruleBearingDefinition = (detailsLabel: string): ClientFormDefinition => ({
-  components: {
-    status: {
-      _tag: FormComponentType.Boolean,
-      field: "status",
-      label: "Status",
-    },
-    details: {
-      _tag: FormComponentType.Text,
-      field: "details",
-      label: detailsLabel,
-    },
-  },
-  rules: [
-    {
-      condition: {
-        _tag: "equals",
-        left: { _tag: "field", path: ["status"] },
-        right: { _tag: "literal", value: true },
-      },
-      effects: [{ target: ["details"], state: { hidden: true } }],
-    },
-  ],
-})
-
-const formMetadata = (formDefinition: ClientFormDefinition) => ({
+const ruleBearingDefinition = (detailsLabel: string) =>
+  withFormRules(
+    Schema.Struct({
+      status: BooleanField({ label: "Status" }),
+      details: TextField({ label: detailsLabel }),
+    }),
+    (values) => ({ details: { hidden: values.status === true } }),
+  )
+let browserSchema = ruleBearingDefinition("Preview-only details")
+let browserPromise = Promise.resolve(browserSchema)
+const selectSchema = (schema: typeof browserSchema) => {
+  browserSchema = schema
+  browserPromise = Promise.resolve(schema)
+}
+vi.mock("@/lib/frontend-form-loaders", () => ({
+  loadBrowserFormDefinition: () => browserPromise,
+}))
+const formMetadata = (_definition: unknown) => ({
   stepPath: "/operations/example/Review",
   processName: "Example process",
   stepName: "Review",
@@ -112,9 +88,7 @@ const formMetadata = (formDefinition: ClientFormDefinition) => ({
   inputTypeName: "ExampleInput",
   completeMutationName: "completeExample",
   totalFields: 2,
-  formDefinition,
   defaultValues: { status: true, details: "private" },
-  jsonSchema,
 })
 
 const fetchLookupSuggestions = vi.fn(async () => [])
@@ -211,8 +185,8 @@ describe("authenticated structured form definitions", () => {
   })
 
   const toggleBooleanField = async (name: string) => {
-    const checkbox = container.querySelector<HTMLButtonElement>(
-      `button#${name}[role="checkbox"]`,
+    const checkbox = container.querySelector<HTMLInputElement>(
+      `input#${name}[type="checkbox"]`,
     )
     if (!checkbox) throw new Error(`Missing ${name} checkbox`)
 
@@ -234,6 +208,7 @@ describe("authenticated structured form definitions", () => {
   }
 
   afterEach(async () => {
+    vi.useRealTimers()
     await act(async () => root.unmount())
     cleanupDom?.()
     vi.clearAllMocks()
@@ -242,27 +217,27 @@ describe("authenticated structured form definitions", () => {
   test("the authenticated metadata query selects only the structured definition", () => {
     const query = FORM_METADATA_QUERY
 
-    expect(query).toContain("formDefinition")
+    expect(query).not.toContain("formDefinition")
+    expect(query).not.toContain("jsonSchema")
     expect(query).not.toContain("clientRepresentation")
     expect(query).not.toMatch(/^\s*rules\s*$/m)
   })
 
   test("process start renders components and projects rules from the definition", async () => {
-    const formDefinition = ruleBearingDefinition("Start-only details")
+    selectSchema(ruleBearingDefinition("Start-only details"))
     const onClose = vi.fn()
 
     await act(async () => {
       root.render(
         <StartProcessForm
+          processId="process-example"
+          canSkipScheduleWaits={false}
           startStepPath="/operations/example/Start"
           mutationName="startExample"
           inputTypeName="ExampleInput"
           defaultValues={{ status: true, details: "private" }}
-          formDefinition={formDefinition}
-          jsonSchema={jsonSchema}
           processName="Example process"
           totalFields={2}
-          draftId={undefined}
           onClose={onClose}
         />,
       )
@@ -285,18 +260,16 @@ describe("authenticated structured form definitions", () => {
   })
 
   test("todo completion renders state-aware components and projects their rules", async () => {
-    const baseTodoDefinition = ruleBearingDefinition("State-aware todo details")
-    const todoDefinition: ClientFormDefinition = {
-      ...baseTodoDefinition,
-      components: {
-        ...baseTodoDefinition.components,
-        reviewer: {
-          _tag: FormComponentType.Lookup,
-          field: "reviewer",
-          label: "Reviewer",
-        },
-      },
-    }
+    vi.useFakeTimers()
+    selectSchema(
+      withFormRules(
+        Schema.Struct({
+          ...ruleBearingDefinition("State-aware todo details").fields,
+          reviewer: Schema.optional(LookupField({ label: "Reviewer" })),
+        }),
+        (values) => ({ details: { hidden: values.status === true } }),
+      ),
+    )
     const onClose = vi.fn()
 
     await act(async () => {
@@ -308,14 +281,6 @@ describe("authenticated structured form definitions", () => {
             inputTypeName="ExampleInput"
             completeMutationName="completeExample"
             defaultValues={{ status: true, details: "private" }}
-            formDefinition={todoDefinition}
-            jsonSchema={{
-              ...jsonSchema,
-              properties: {
-                ...jsonSchema.properties,
-                reviewer: { type: "string" },
-              },
-            }}
             onClose={onClose}
           />
         </LookupProvider>,
@@ -325,6 +290,20 @@ describe("authenticated structured form definitions", () => {
     expect(container.textContent).toContain("Status")
     expect(container.textContent).toContain("Reviewer")
     expect(container.textContent).not.toContain("State-aware todo details")
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    fetchLookupSuggestions.mockClear()
+    await act(async () => {
+      container
+        .querySelector<HTMLInputElement>('input[role="combobox"]')
+        ?.click()
+    })
+    // Commit the click before advancing the debounce scheduled by its effect.
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+    })
+    vi.useRealTimers()
     expect(fetchLookupSuggestions).toHaveBeenCalledWith(
       "/operations/example/Review",
       "reviewer",
@@ -349,7 +328,8 @@ describe("authenticated structured form definitions", () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  test("workflow preview renders representative state and projects its rules", async () => {
+  test("workflow preview renders shared fields and rules", async () => {
+    selectSchema(ruleBearingDefinition("Preview-only details"))
     await act(async () => {
       root.render(
         <WorkflowFormPreviewSheet

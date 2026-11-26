@@ -1,0 +1,25 @@
+---
+title: Organisation overview
+description: Create the root organisation that contains your units, roles, and processes.
+---
+
+An **organisation** is the root of the hierarchy: the business or institution
+you are modelling. Create it with `Organisation`:
+
+```typescript
+import { Organisation } from "@pf/process"
+
+export const org = new Organisation({ name: "Demo Company" })
+```
+
+Unlike other [constructs](/docs/reference/constructs/), `Organisation` takes
+only a properties object, with no parent or ID argument. Its unit type is
+automatically set to `"organisation"`.
+
+You can define roles and processes directly under the organisation. Add
+departments or teams only if you need them.
+
+- [Structure](/docs/reference/organisation-structure/structure/): Add and nest
+  organisational units and choose where roles belong.
+- [Settings](/docs/reference/organisation-structure/settings/): Set the name,
+  acronym, time zone, locale, and business calendar.

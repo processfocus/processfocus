@@ -8,21 +8,6 @@ export type GoogleDrivePickerConfiguration = Pick<
   "clientId" | "appId" | "developerKey"
 >
 
-/**
- * Read public Google Picker configuration from the server runtime.
- */
-export const readGoogleDrivePickerConfiguration =
-  (): GoogleDrivePickerConfiguration => {
-    const clientId = process.env["GOOGLE_DRIVE_PICKER_CLIENT_ID"]
-    const appId = process.env["GOOGLE_DRIVE_PICKER_APP_ID"]
-    const developerKey = process.env["GOOGLE_DRIVE_PICKER_DEVELOPER_KEY"]
-    return {
-      ...(clientId !== undefined && { clientId }),
-      ...(appId !== undefined && { appId }),
-      ...(developerKey !== undefined && { developerKey }),
-    }
-  }
-
 export const googleDrivePickerConfigurationDiagnostics = (input: {
   readonly clientId: string
   readonly appId: string

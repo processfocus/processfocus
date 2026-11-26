@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import {
   LocalCedarAuthorizationLive,
   LocalCedarConfig,
@@ -31,7 +31,7 @@ const session = {
 }
 const requestTime = Layer.effect(
   RequestTime,
-  FiberRef.make(DateTime.unsafeMake("2026-09-07T12:00:00Z")),
+  Effect.succeed(DateTime.makeUnsafe("2026-09-07T12:00:00Z")),
 )
 const run = (policy: string, delegated = true) =>
   Effect.runPromise(

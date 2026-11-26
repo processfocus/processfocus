@@ -1,0 +1,57 @@
+---
+title: Using process state in forms
+description: Prefill a form with values submitted in an earlier step.
+---
+
+A submitted [form](/docs/reference/process-steps/forms/) adds its output
+to the execution's [process state](/docs/reference/processes/process-state/).
+A later form can use those values to prefill fields without asking the
+person to enter the same information again.
+
+## Show a submitted SKU in a review form
+
+The first form captures the SKU. The review form displays that SKU as
+read-only and collects a separate approval decision.
+
+```typescript
+import { BooleanField, TextField } from "@pf/form-schema"
+import { Form, Organisation, Process, Role } from "@pf/process"
+import { Schema } from "effect"
+
+export const org = new Organisation({ name: "Demo Store" })
+const sales = new Role(org, "Sales")
+const reviewer = new Role(org, "Reviewer")
+
+const webOrder = new Process(org, "web-order", {
+  name: "Web order",
+  purpose: "Capture and review a web order",
+})
+
+const captureOrder = new Form(webOrder, "Capture order", {
+  role: sales,
+  form: Schema.Struct({
+    sku: TextField({ label: "SKU" }),
+  }),
+})
+
+const afterCapture = webOrder.start(captureOrder)
+const reviewOrder = new Form(afterCapture, "Review order", {
+  role: reviewer,
+  form: ({ value }) => ({
+    capturedSku: TextField({
+      label: "Submitted SKU",
+      default: value((state) => state.sku),
+      readOnly: true,
+    }),
+    approved: BooleanField({ label: "Approve this order" }),
+  }),
+})
+
+afterCapture.next(reviewOrder).end()
+```
+
+Pass `afterCapture` to the second `Form` so TypeScript knows that `sku`
+is available on that path. The `value` helper reads the SKU from the
+current execution when the review form is prepared. Submitting the
+review adds `approved` to process state; the read-only `capturedSku`
+field is not submitted, and the original `sku` stays unchanged.

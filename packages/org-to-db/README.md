@@ -1,4 +1,7 @@
-# About
+# @pf/org-to-db
 
-This package takes an `Organisation` and its structure, and serialises
-it to the database.
+Transfers an authored Organisation model into the runtime database, including
+its structure, process definitions, and configuration.
+
+It bridges [`@pf/process`](../process/README.md) and persistence; database-specific
+writes are supplied by the operations packages.

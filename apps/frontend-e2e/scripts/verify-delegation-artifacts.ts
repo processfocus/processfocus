@@ -14,6 +14,7 @@ const env = {
   FRONTEND_E2E_FEATURES: "./src/features-delegated-access-artifacts/*.feature",
   FRONTEND_E2E_BROWSERS: "chromium",
   FRONTEND_E2E_ARTIFACT_CANARY: canary,
+  PLAYWRIGHT_JUNIT_OUTPUT_FILE: join(directory, "results.xml"),
 }
 try {
   const generated = spawnSync(
@@ -31,7 +32,7 @@ try {
       "apps/frontend-e2e/playwright.config.ts",
       "--output",
       directory,
-      "--reporter=json",
+      "--reporter=json,junit",
       "--retries=0",
     ],
     { cwd: root, env },
@@ -42,6 +43,12 @@ try {
     output.includes("Intentional secret-safe artifact probe failure"),
     "Probe failed before verifying cleanup and leaving the secret visible",
   )
+  assert.ok(
+    output.includes("Delegated protected-work request failed"),
+    "Transport probe did not reach the sanitized request failure",
+  )
+  const junit = readFileSync(join(directory, "results.xml"), "utf8")
+  assert.ok(junit.includes("Delegated protected-work request failed"))
   assert.ok(!output.includes(canary), "Secret leaked into reporter output")
   const files = readdirSync(directory, { recursive: true, withFileTypes: true })
   for (const file of files) {

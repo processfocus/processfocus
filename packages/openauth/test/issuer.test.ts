@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { ConfigProvider, Effect } from "effect"
 import { object, string } from "valibot"
 import { createClient } from "../src/client.js"
 import { type IssuerClient, hashClientSecret } from "../src/issuer.js"
@@ -81,7 +81,9 @@ const createAuth = (
     typeof subjects,
     unknown
   >,
-) => createTestAppFromIssuer(createIssuer(config))
+) => createTestAppFromIssuer(createIssuer(config).pipe(
+  Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+))
 
 beforeAll(async () => {
   serviceSecretHash = await hashClientSecret("service-secret")

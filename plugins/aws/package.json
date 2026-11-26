@@ -28,9 +28,9 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@aws-sdk/client-lambda": "^3.1131.0",
+    "@aws-sdk/client-lambda": "^3.1169.0",
     "@pf/process": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "publishConfig": {
     "access": "public",

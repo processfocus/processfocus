@@ -198,7 +198,6 @@ export const enableDesktopNotifications = async (
     }
   }
 
-  // Request permission
   const newPermission = await requestNotificationPermission()
 
   if (newPermission === "granted") {

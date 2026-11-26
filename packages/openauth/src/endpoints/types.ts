@@ -2,12 +2,9 @@
  * Shared types and context for endpoint Effect functions.
  * @packageDocumentation
  */
-import type {
-  HttpBody,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
+
 import type { Effect } from "effect"
+import type { HttpBody, HttpServerRequest, HttpServerResponse } from "effect/http"
 import type {
   KeyManagementService,
   NoSigningKeysError,
@@ -48,6 +45,7 @@ export interface AuthorizationState {
   readonly state: string | undefined
   readonly client_id: string
   readonly audience: string | undefined
+  readonly googleRevalidationSubject?: string
   readonly pkce:
     | {
         readonly challenge: string
@@ -117,6 +115,7 @@ export interface OnSuccessResponder {
         readonly refresh?: number
       }
       readonly subject?: string
+      readonly expiresAt?: number
     },
   ): Effect.Effect<
     HttpServerResponse.HttpServerResponse,

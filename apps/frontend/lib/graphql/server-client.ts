@@ -1,4 +1,5 @@
 import "server-only"
+import { setTimeout } from "node:timers/promises"
 import { GraphQLClient } from "graphql-request"
 import { getGraphqlEndpoint } from "./endpoint"
 
@@ -12,4 +13,14 @@ export function createServerGraphqlClient(accessToken: string): GraphQLClient {
       Authorization: `Bearer ${accessToken}`,
     },
   })
+}
+
+/** Retry a startup read once without retrying mutations or waiting out an outage. */
+export async function retryGraphqlRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read()
+  } catch {
+    await setTimeout(300)
+    return read()
+  }
 }

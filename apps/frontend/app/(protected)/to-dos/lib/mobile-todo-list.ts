@@ -1,7 +1,6 @@
 import { isPast } from "date-fns"
 import type { TodoDocType } from "@/lib/collections/todo"
 import { type TaskStatus, todoStatusSortOrder } from "@/lib/todo-types"
-import { formatDueStatus } from "@/lib/todo-utils"
 import { toUrlPath } from "@/lib/utils"
 
 export interface MobileTodoListItem {
@@ -11,7 +10,7 @@ export interface MobileTodoListItem {
   summary: TodoDocType["summary"]
   cue: string
   assignedAt: string
-  dueCue: string | null
+  dueAt: string | null
   actionLabel: "Do" | "Correct email" | "Continue" | "Preview" | "Done"
   href: string | null
   status: TaskStatus
@@ -79,26 +78,6 @@ const getActionLabel = (
   return "Do"
 }
 
-const getCue = (
-  status: TaskStatus,
-  dueAt: string | null | undefined,
-): string => {
-  if (status === "Correction Required") {
-    return "Correction required"
-  }
-
-  if (status === "Completed") {
-    return "Completed"
-  }
-
-  const dueStatus = formatDueStatus(dueAt)
-  if (dueStatus) {
-    return dueStatus
-  }
-
-  return status
-}
-
 const getDueTime = (dueAt: string | null | undefined): number => {
   if (!dueAt) {
     return Number.POSITIVE_INFINITY
@@ -136,12 +115,12 @@ export const createMobileTodoList = (
       title: collapseWhitespace(todo.stepName),
       processName: collapseWhitespace(todo.processName),
       summary: todo.summary ?? [],
-      cue: getCue(status, todo.dueAt),
+      cue: status === "Correction Required" ? "Correction required" : status,
       assignedAt: todo.assignedAt,
-      dueCue:
+      dueAt:
         status === "Correction Required" || status === "Completed"
           ? null
-          : formatDueStatus(todo.dueAt),
+          : (todo.dueAt ?? null),
       actionLabel: getActionLabel(status),
       href:
         status === "Completed"

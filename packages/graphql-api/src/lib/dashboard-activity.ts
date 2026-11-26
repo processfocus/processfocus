@@ -19,12 +19,10 @@ import type { BusinessMetricDimensionsValue } from "./business-metrics"
 import type { JWTPayload } from "./types"
 
 /** Only the verified GraphQL boundary calls this service; identity never leaves as a label. */
-export class DashboardActivity extends Context.Tag(
-  "@pf/graphql-api/DashboardActivity",
-)<
+export class DashboardActivity extends Context.Service<
   DashboardActivity,
   { readonly record: (email: string) => Effect.Effect<void> }
->() {}
+>()("@pf/graphql-api/DashboardActivity") {}
 
 export const recordDashboardActivity = (
   request: unknown,
@@ -39,7 +37,7 @@ export const recordDashboardActivity = (
     )
       return
     // JWT signature/issuer/audience/expiry have already been verified by Yoga.
-    // Parse the signed properties too; subject type alone includes M2M impersonation.
+    // The subject alone is not evidence of a human login.
     const parsed = Schema.decodeUnknownOption(ProviderUserSessionSchema)(
       jwt.properties,
     )
@@ -47,6 +45,7 @@ export const recordDashboardActivity = (
     const session = parsed.value
     if (
       session.delegation ||
+      session.workload ||
       !(
         session.humanSession === true ||
         (session.humanAuthentication?.method === "passkey" &&
@@ -64,7 +63,7 @@ export const makeDashboardActivityLayer = (config: {
   readonly logsUrl: string
   readonly headers: Readonly<Record<string, string>>
 }): Layer.Layer<DashboardActivity> =>
-  Layer.scoped(
+  Layer.effect(
     DashboardActivity,
     Effect.gen(function* () {
       const d = config.dimensions
@@ -100,7 +99,7 @@ export const makeDashboardActivityLayer = (config: {
         ),
         (provider) =>
           Effect.promise(() => provider.shutdown()).pipe(
-            Effect.catchAllCause(() => Effect.void),
+            Effect.catchCause(() => Effect.void),
           ),
       )
       const logger = provider.getLogger("pf.dashboard.activity", "1")
@@ -119,7 +118,7 @@ export const makeDashboardActivityLayer = (config: {
               }),
             })
             yield* Effect.tryPromise(() => provider.forceFlush()).pipe(
-              Effect.catchAll(() =>
+              Effect.catch(() =>
                 Effect.logWarning("Dashboard activity export failed"),
               ),
             )

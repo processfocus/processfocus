@@ -51,7 +51,7 @@ const getFailure = (exit: Exit.Exit<unknown, unknown>) => {
     throw new Error("Expected system step execution to fail")
   }
 
-  return Option.getOrUndefined(Cause.failureOption(exit.cause))
+  return Option.getOrUndefined(Cause.findErrorOption(exit.cause))
 }
 
 describe("SystemStepExecutor", () => {
@@ -86,7 +86,7 @@ describe("SystemStepExecutor", () => {
       makeSystemStepExecutor(organisation).execute(
         system.node.path,
         {},
-        buildFlowContext(processExecutionId, DateTime.unsafeNow(), []),
+        buildFlowContext(processExecutionId, DateTime.nowUnsafe(), []),
         "todo-1",
       ) as Effect.Effect<unknown, unknown, never>,
     )
@@ -124,7 +124,7 @@ describe("SystemStepExecutor", () => {
       makeSystemStepExecutor(organisation).execute(
         system.node.path,
         {},
-        buildFlowContext("pex-job-context", DateTime.unsafeNow(), []),
+        buildFlowContext("pex-job-context", DateTime.nowUnsafe(), []),
         "todo-persist-1",
       ) as Effect.Effect<unknown, unknown, never>,
     )
@@ -147,7 +147,7 @@ describe("SystemStepExecutor", () => {
       executor.execute(
         stepPath,
         {},
-        buildFlowContext("pex-test", DateTime.unsafeNow(), []),
+        buildFlowContext("pex-test", DateTime.nowUnsafe(), []),
         "todo-1",
       ),
     )

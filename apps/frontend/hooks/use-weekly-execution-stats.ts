@@ -6,7 +6,7 @@ import type { ExecutionDocType } from "@/lib/collections/execution-collection-pr
 
 interface WeeklyStats {
   completed: number
-  failed: number // Always 0 for now - schema doesn't track failures
+  failed: number
 }
 
 interface WeeklyExecutionStats {
@@ -57,7 +57,6 @@ export function useWeeklyExecutionStats(
     }
   }, [startDayOfWeek])
 
-  // Query this week's completed executions
   const thisWeekQuery = useLiveQuery((q) =>
     q
       .from({ execution: executionsCollection })
@@ -70,7 +69,6 @@ export function useWeeklyExecutionStats(
       .select(({ execution }) => ({ id: execution.id })),
   )
 
-  // Query last week's completed executions
   const lastWeekQuery = useLiveQuery((q) =>
     q
       .from({ execution: executionsCollection })

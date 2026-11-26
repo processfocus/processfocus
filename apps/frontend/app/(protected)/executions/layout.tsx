@@ -1,7 +1,8 @@
-"use client"
-
 import type { ReactNode } from "react"
-import { ExecutionCollectionProvider } from "@/lib/collections/execution-collection-provider"
+import ExecutionsClientLayout from "./client-layout"
+
+// The authenticated shell can omit this subtree before a session is ready.
+export const instant = false
 
 export default function ExecutionsLayout({
   children,
@@ -11,9 +12,6 @@ export default function ExecutionsLayout({
   modal: ReactNode
 }) {
   return (
-    <ExecutionCollectionProvider>
-      {children}
-      {modal}
-    </ExecutionCollectionProvider>
+    <ExecutionsClientLayout modal={modal}>{children}</ExecutionsClientLayout>
   )
 }

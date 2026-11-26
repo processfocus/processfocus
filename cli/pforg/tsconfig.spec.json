@@ -6,7 +6,7 @@
     "types": ["bun", "node"],
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "package.json"],
   "references": [
     {
       "path": "./tsconfig.app.json"

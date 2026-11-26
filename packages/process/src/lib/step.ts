@@ -1,5 +1,5 @@
 import { Construct } from "constructs"
-import { Schema } from "effect"
+import { type DateTime, type Duration, Schema } from "effect"
 import { isProcess } from "./brands"
 import type {
   ForEachOutput,
@@ -62,7 +62,6 @@ export interface StepProps<
   readonly alwaysNotify?: boolean
 }
 
-// Type utility to merge two state types
 type EmptyObject = Record<string, never>
 
 type MergeState<TState, TOutput> = [TOutput] extends [EmptyObject]
@@ -101,9 +100,8 @@ export abstract class Step<
   readonly props: StepProps<TOutput>
 
   private _output: TOutput | undefined
-  private _outputSchema: Schema.Schema.Any | undefined
+  private _outputSchema: Schema.Top | undefined
 
-  // Our parent
   readonly process: Process
   readonly __scopeState?: TState // Phantom type field
 
@@ -149,12 +147,21 @@ export abstract class Step<
    */
   readonly isSystemStep: boolean = false
 
+  /** One-shot timing, evaluated against state before this activation completes. */
+  readonly deadlines: {
+    readonly name: string
+    readonly interrupting: boolean
+    readonly timing:
+      | { readonly after: Duration.Duration }
+      | { at(state: TState): DateTime.DateTime }
+  }[] = []
+
   /**
    * The output validation schema for this step.
    * Lazily builds Schema.Struct from output fields on first access.
    * Form overrides this to include struct-level validation refinements.
    */
-  get outputSchema(): Schema.Schema.Any | undefined {
+  get outputSchema(): Schema.Top | undefined {
     if (!this._outputSchema && this._output) {
       this._outputSchema = Schema.Struct(this._output)
     }
@@ -169,7 +176,7 @@ export abstract class Step<
    *
    * Used by start/complete resolvers for server-side validation.
    */
-  get submissionEffectSchema(): Schema.Schema.Any | undefined {
+  get submissionEffectSchema(): Schema.Top | undefined {
     return undefined
   }
 

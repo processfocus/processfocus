@@ -39,7 +39,10 @@ import type { OidcWrappedConfig } from "./oidc"
 import { OidcProvider } from "./oidc"
 import { verifiedOidcIdentity } from "./provider"
 
-export interface GoogleConfig extends Oauth2WrappedConfig {}
+export interface GoogleConfig extends Oauth2WrappedConfig {
+  /** Require a signed hd claim from one of these Google Workspace domains. */
+  allowedWorkspaceDomains?: string[]
+}
 export interface GoogleOidcConfig extends OidcWrappedConfig {}
 
 /**
@@ -56,6 +59,9 @@ export interface GoogleOidcConfig extends OidcWrappedConfig {}
  * ```
  */
 export function GoogleProvider(config: GoogleConfig) {
+  // Existing single-domain hd configuration is enforced, not merely hinted.
+  const domains = config.allowedWorkspaceDomains ??
+    (config.query?.["hd"] && config.query["hd"] !== "*" ? [config.query["hd"]] : undefined)
   return Oauth2Provider({
     ...config,
     type: "google",
@@ -65,6 +71,15 @@ export function GoogleProvider(config: GoogleConfig) {
       jwks: "https://www.googleapis.com/oauth2/v3/certs",
     },
     issuer: ["https://accounts.google.com", "accounts.google.com"],
+    configureRevalidation: (url, subject) => {
+      url.searchParams.set("prompt", "none")
+      url.searchParams.set("login_hint", subject)
+      url.searchParams.delete("access_type")
+    },
+    validateIdTokenClaims: (payload) => domains === undefined ||
+      (typeof payload["hd"] === "string" && domains.some(
+        (domain) => domain.toLowerCase() === String(payload["hd"]).toLowerCase(),
+      )),
     mapVerifiedHumanIdentity: (payload) =>
       verifiedOidcIdentity("google", payload),
   })

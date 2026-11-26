@@ -1,4 +1,5 @@
-import { Effect, Stream, TestClock, TestContext } from "effect"
+import { Effect, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { MemoryStorageServiceLive } from "../src/storage/memory.js"
 import { Storage, type StorageError, type StorageService } from "../src/storage/storage.js"
 import { describe, expect, test } from "bun:test"
@@ -16,7 +17,7 @@ const runStorageWithTestClock = <T>(
   Effect.runPromise(
     effect.pipe(
       Effect.provide(MemoryStorageServiceLive),
-      Effect.provide(TestContext.TestContext),
+      Effect.provide(TestClock.layer()),
     ),
   )
 

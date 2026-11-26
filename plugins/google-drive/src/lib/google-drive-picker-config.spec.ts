@@ -1,7 +1,8 @@
+import { ConfigurationError } from "@processfocus/runtime"
+import { readGoogleDrivePickerConfiguration } from "./google-drive-configuration"
 import {
   GOOGLE_DRIVE_NOT_CONFIGURED_USER_MESSAGE,
   googleDrivePickerConfigurationDiagnostics,
-  readGoogleDrivePickerConfiguration,
 } from "./google-drive-picker-config"
 import { afterEach, describe, expect, it } from "bun:test"
 
@@ -50,28 +51,22 @@ describe("Google Drive Picker configuration", () => {
     })
   })
 
-  it("retains partial canonical Picker configuration", () => {
+  it("treats absent Picker settings as unconfigured", () => {
     clearPickerEnv()
-    process.env["GOOGLE_DRIVE_PICKER_APP_ID"] = "canonical-app"
-
-    expect(readGoogleDrivePickerConfiguration()).toEqual({
-      appId: "canonical-app",
-    })
-  })
-
-  it("retains a present canonical value when it is empty", () => {
-    clearPickerEnv()
-    process.env["GOOGLE_DRIVE_PICKER_CLIENT_ID"] = ""
 
     expect(readGoogleDrivePickerConfiguration()).toEqual({
       clientId: "",
+      appId: "",
+      developerKey: "",
     })
   })
 
-  it("omits unset Picker configuration keys", () => {
+  it.each(["   "])("rejects blank Picker settings (%s)", (value) => {
     clearPickerEnv()
-
-    expect(readGoogleDrivePickerConfiguration()).toEqual({})
+    process.env["GOOGLE_DRIVE_PICKER_CLIENT_ID"] = value
+    expect(() => readGoogleDrivePickerConfiguration()).toThrow(
+      ConfigurationError,
+    )
   })
 
   it("describes missing values as Picker configuration without logging them", () => {

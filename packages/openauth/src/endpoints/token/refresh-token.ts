@@ -2,8 +2,9 @@
  * Refresh token grant handler for token endpoint.
  * @packageDocumentation
  */
-import type { HttpServerRequest, HttpServerResponse } from "@effect/platform"
+
 import { Clock, Effect, Option } from "effect"
+import type { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { errorJson, noStoreJson } from "../../response"
 import { IssuerCallbacks } from "../../services/callbacks"
 import type { ClientRegistryService } from "../../services/client-registry"
@@ -57,7 +58,6 @@ export const handleRefreshTokenGrant = (
       return yield* errorJson("invalid_request", "Missing refresh_token", 400)
     }
 
-    // Authenticate client
     const authResult = yield* authenticateClient(form).pipe(
       Effect.catchTag("@pf/openauth/ClientAuthError", (error) =>
         Effect.succeed({ error } as const),
@@ -169,10 +169,9 @@ export const handleRefreshTokenGrant = (
         })
         .pipe(
           Effect.map((result) => ({ success: true as const, ...result })),
-          Effect.catchAll(() => Effect.succeed({ success: false as const })),
+          Effect.catch(() => Effect.succeed({ success: false as const })),
         )
 
-      // Check if the callback failed
       if (!scopeResult.success) {
         return yield* errorJson(
           "invalid_scope",

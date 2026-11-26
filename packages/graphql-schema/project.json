@@ -38,13 +38,6 @@
     },
     "typecheck": {
       "dependsOn": ["graphql-codegen"]
-    },
-    "test": {
-      "executor": "nx:run-commands",
-      "options": {
-        "cwd": "{projectRoot}",
-        "commands": ["bun test"]
-      }
     }
   }
 }

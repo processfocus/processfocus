@@ -24,7 +24,6 @@ export const HOSTING_CONTRACT_MAJOR = 1
  * The ten hosted CLI areas covered by the contract.
  */
 export const HOSTED_CAPABILITIES = [
-  "auth",
   "projects",
   "deploy",
   "logs",
@@ -58,14 +57,6 @@ export interface HostedOperationDocument {
  * transport operation scoped to the deploy capability.
  */
 export const HOSTED_OPERATIONS = {
-  "auth/request-provider-user-permissions": {
-    id: "auth/request-provider-user-permissions",
-    capability: "auth",
-    kind: "mutation",
-    graphqlField: "requestProviderUserPermissions",
-    description:
-      "Request a short-lived provider-user permissions code for login.",
-  },
   "projects/list": {
     id: "projects/list",
     capability: "projects",

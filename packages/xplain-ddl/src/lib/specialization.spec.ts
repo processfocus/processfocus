@@ -78,11 +78,11 @@ describe("Specialization declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("cannot reference base")
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("cannot reference base")
+      expect(result.failure[0]?.message).toContain(
         "Specializations must reference types",
       )
     }
@@ -96,11 +96,11 @@ describe("Specialization declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("cannot be optional")
-      expect(result.left[0]?.message).toContain("0..1 relationships")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("cannot be optional")
+      expect(result.failure[0]?.message).toContain("0..1 relationships")
     }
   })
 
@@ -111,10 +111,10 @@ describe("Specialization declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("not found")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("not found")
     }
   })
 

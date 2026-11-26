@@ -1,8 +1,4 @@
 import {
-  type ClientFormDefinition,
-  parseNullableClientFormDefinition,
-} from "@pf/form-client-representation/client-form-definition"
-import {
   ORGANISATION_FRONTEND_MANIFEST_VERSION,
   type OrganisationFrontendManifest,
   type OrganisationFrontendManifestAnalyticsPlugin,
@@ -43,32 +39,4 @@ export const disabledFrontendManifest: FrontendManifest = {
   },
 }
 
-export const parseFrontendManifest = (value: unknown): FrontendManifest => {
-  const manifest = parseOrganisationFrontendManifest(value)
-  return {
-    ...manifest,
-    embed: {
-      entries: manifest.embed.entries.map((entry, index) => {
-        const formDefinition: ClientFormDefinition | null =
-          parseNullableClientFormDefinition(
-            entry.formDefinition,
-            `embed.entries[${index}].formDefinition`,
-          )
-
-        return {
-          stepPath: entry.stepPath,
-          processName: entry.processName,
-          processPath: entry.processPath,
-          mutationName: entry.mutationName,
-          inputTypeName: entry.inputTypeName,
-          totalFields: entry.totalFields,
-          formDefinition,
-          defaultValues: entry.defaultValues,
-          jsonSchema: entry.jsonSchema,
-          sites: entry.sites,
-          thankYou: entry.thankYou,
-        }
-      }),
-    },
-  }
-}
+export const parseFrontendManifest = parseOrganisationFrontendManifest

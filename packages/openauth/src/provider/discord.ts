@@ -43,6 +43,7 @@ export function DiscordProvider(config: DiscordConfig) {
       authorization: "https://discord.com/oauth2/authorize",
       token: "https://discord.com/api/oauth2/token",
     },
+    supportsVerifiedHumanIdentity: true,
     resolveHumanIdentity: async (tokenset) => {
       const profile = await fetchProviderJson(
         "https://discord.com/api/users/@me",

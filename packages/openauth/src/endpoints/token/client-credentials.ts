@@ -2,8 +2,9 @@
  * Client credentials grant handler for token endpoint.
  * @packageDocumentation
  */
-import type { HttpServerRequest, HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import type { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { errorJson } from "../../response"
 import type { ClientRegistryService } from "../../services/client-registry"
 import type { KeyManagementService } from "../../services/key-management"
@@ -53,7 +54,6 @@ export const handleClientCredentialsGrant = (
   Effect.gen(function* () {
     const providerRegistry = yield* ProviderRegistryService
 
-    // Authenticate client
     const authResult = yield* authenticateClient(form).pipe(
       Effect.catchTag("@pf/openauth/ClientAuthError", (error) =>
         Effect.succeed({ error } as const),

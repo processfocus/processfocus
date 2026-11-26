@@ -1,0 +1,91 @@
+---
+title: Delegated permissions
+description: Default Cedar permissions for delegated identities and token administration.
+---
+
+A [delegation](/docs/reference/authentication/delegated-identities/)
+acts for an existing provider user while preserving the delegation's
+separate Cedar identity. It uses the user's current assigned roles for
+ordinary work, but it doesn't automatically get every permission the user has.
+
+## What a delegation can do by default
+
+- Sign in with a valid delegation secret if the represented user has at least
+  one role, and select only from that user's assigned roles.
+- Start processes, draft and complete steps, and modify submitted form fields
+  when the required role matches. Directly assigned Todos still require the
+  delegation to represent the assignee. The same role and assignment rules
+  apply when correcting public completion delivery failures.
+- View executions started by the represented user and download or delete
+  files owned by that user.
+- View and update Lists allowed by the user's roles.
+- Call untagged GraphQL fields and fields tagged `providerUser` if it has a
+  role. Any separate resource checks still apply.
+
+## What isn't enabled by default
+
+- A delegation can't list, rename, replace, or revoke delegation tokens, or
+  issue delegation secrets, without explicit Cedar grants. Listing and
+  issuance are separate permissions. Replacing a secret requires both
+  replacement and issuance permission.
+- A delegation with the Administrator role doesn't get the default
+  human-only permission to list other users' delegation tokens or revoke
+  them. A policy that matches only the human user's identity doesn't match
+  the delegation; review custom role-based policies separately.
+- Some actions aren't granted by default to humans or delegations, including
+  creating List items, restarting executions, and skipping scheduled waits.
+
+Even with an explicit grant, a human can issue or replace secrets only for
+themselves, and a delegation can do so only for the user it represents.
+The shared policies don't grant users permission to list their own tokens
+or issue their own secrets either; your organisation must grant those
+permissions separately.
+
+## Default Cedar permissions
+
+### Sign in
+
+The default Cedar policy permits `login` on `PF::Application` for a
+`PF::Delegation` with at least one role. The delegation gets its roles from
+the user it represents. A valid delegation secret proves the identity; the
+Cedar check determines whether that identity can sign in.
+
+```cedar
+permit (
+    principal,
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+when {
+    (principal is PF::ProviderUser || principal is PF::Delegation) &&
+    principal.roles.isEmpty() == false
+};
+```
+
+### Complete a Todo
+
+Cedar checks `complete` on the Todo's `PF::Step`. By default, the delegation
+must have the role required by the step. If the Todo is assigned to a specific
+user, the delegation must also represent that user. Having the right role
+alone doesn't let a delegate complete someone else's assigned Todo.
+
+```cedar
+permit (
+    principal,
+    action == PF::Action::"complete",
+    resource is PF::Step
+)
+when {
+    (principal is PF::ProviderUser || principal is PF::Delegation) &&
+    resource has role &&
+    principal has roles &&
+    principal.roles.contains(resource.role)
+}
+unless {
+    context has assignedTo && !(principal in context.assignedTo)
+};
+```
+
+The `in` check matches both the assignee and delegations that represent the
+assignee. Both policies are built in; you don't need to add them to your
+organisation's Cedar policies.

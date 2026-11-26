@@ -1,36 +1,42 @@
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { FileSystem } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
-import { QueueService } from "@processfocus/runtime"
 import {
+  type DocumentStoreError,
+  DocumentStoreService,
+  EmailSender,
+  FileNotFoundError,
+  NotificationDeliveryConfig,
+} from "@processfocus/runtime"
+import {
+  Context,
   Data,
   DateTime,
   Duration,
   Effect,
-  Either,
+  FileSystem,
+  Layer,
   Option,
+  Result,
   Schedule,
   Schema,
 } from "effect"
+import { SqlClient } from "effect/sql"
+import type { GraphQLResolveInfo } from "graphql"
+import { prepareRoleSwitch, providerUserAuthorityVersion } from "@pf/auth-api"
 import { LocalCedarConfig, PolicyWatcherService } from "@pf/auth-local-cedar"
 import {
-  Execution as AuthExecution,
+  Application,
   AuthorizationService,
   DelegationPrincipal,
   FileRef,
+  GraphQLField,
   ListRef,
   ProviderUserPrincipal,
   RoleRef,
   ServiceAccountPrincipal,
 } from "@pf/auth-policy"
-import {
-  type DocumentStoreError,
-  DocumentStoreService,
-  FileNotFoundError,
-} from "@pf/document-store-service"
-import { omitClientFormDefinitionFields } from "@pf/form-client-representation"
+import { immediateTransactionRequested, isSqlLockError } from "@pf/db-info"
 import {
   type CalendarSlotFieldMetadata,
   Email,
@@ -38,47 +44,32 @@ import {
   FormLookupInput,
   FormPermission,
   FormProviderUserInput,
+  FormRequestData,
   type LookupFieldMetadata,
   isFieldPermissionMetadata,
 } from "@pf/form-schema"
 import {
   CleanupOperations,
-  EXECUTION_EVENT_QUEUE,
   ExecutionQueries,
   FileOperations,
-  FlowExecutionOperations,
-  IMMUTABLE_INVITATION_MESSAGE,
-  INVITATION_NOT_FOUND_MESSAGE,
   InvitationLifecycleStatus,
   InvitationSource,
-  NOTIFICATION_DELIVERY_QUEUE,
-  NO_ACTIVE_REGISTRATION_LINK_MESSAGE,
   OAuthClientQueries,
   OrgQueries,
   type OrgUnitRow,
-  PROCESS_EVENT_QUEUE,
   ProcessQueries,
   ProviderUserQueries,
   type ProviderUserRow,
-  type PublicTodoInfo,
-  REGISTRATION_LINK_CONFLICT_MESSAGE,
   RegistrationLinkStatus,
   type RoleRow,
-  SYSTEM_STEP_EXECUTION_QUEUE,
   ScheduledFlowOperations,
   type SettingsInvitationRow,
   SettingsQueries,
   type SettingsRoleRow,
   StepCompletionOperations,
   StepRoleQueries,
-  TODO_EVENT_QUEUE,
-  TRUSTED_FRONTEND_ORIGIN_NOT_CONFIGURED_MESSAGE,
   TodoQueries,
   WorkflowQueries,
-  deepMerge,
-  issueRegistrationLink,
-  mapRegistrationLinkCryptoError,
-  normalizeExternalParticipantEmail,
 } from "@pf/graphql-db-operations"
 import type { ResolversParentTypes, ResolversTypes } from "@pf/graphql-schema"
 import {
@@ -89,14 +80,23 @@ import {
   ProcessStateNotFound,
   ProviderUserNotFound,
   PublicCompletionInvitationNotFound,
-  buildPublicTodoUrl,
+} from "@pf/graphql-schema"
+import {
+  IMMUTABLE_INVITATION_MESSAGE,
+  INVITATION_NOT_FOUND_MESSAGE,
+  NO_ACTIVE_REGISTRATION_LINK_MESSAGE,
+  REGISTRATION_LINK_CONFLICT_MESSAGE,
+  TRUSTED_FRONTEND_ORIGIN_NOT_CONFIGURED_MESSAGE,
+  issueRegistrationLink,
+  mapRegistrationLinkCryptoError,
+} from "@pf/identity-management"
+import {
   buildRegistrationLinkUrl,
   decryptRegistrationLinkToken,
-} from "@pf/graphql-schema"
+} from "@pf/identity-management/credentials"
 import {
   type FlowContext,
   type Form,
-  FormComponentType,
   type List,
   LookupFieldNotFoundError,
   OrganisationProvider,
@@ -106,16 +106,42 @@ import {
   countLeafFields,
   normalizePath,
   pathToPascalCase,
+  resolveFormFieldDefaults,
 } from "@pf/process"
+import {
+  abandonExecution,
+  completeTodoFromChat,
+  correctPublicCompletion,
+  inspectPublicCompletion,
+  inspectTodoForm,
+  renewPublicCompletionInvitation,
+  restartExecution,
+  submitPublicCompletion,
+} from "@pf/process-execution"
+import {
+  PUBLIC_TODO_TOKEN_AUDIENCE,
+  buildPublicTodoUrl,
+  decryptPublicTodoToken,
+  encryptPublicTodoToken,
+} from "@pf/public-completion/credentials"
 import { TodoSummaryComputation } from "@pf/todo-summary"
+import { actorDisplayLabel } from "./actor-presentation"
+import {
+  anonymousPage,
+  anonymousPageLookup,
+  submitAnonymousPage,
+} from "./anonymous-page"
 import {
   buildPrincipal,
   buildStepPrincipal,
   canModifyField,
+  canSkipScheduleWaits,
+  checkListAuthorization,
+  checkListCreateAuthorization,
   checkListUpdateAuthorization,
   checkPublicCompletionCorrectionAuthorization,
-  checkPublicTodoAuthorization,
   checkStepAuthorization,
+  checkTodoAuthorization,
   filterAuthorizedExecutionRows,
   filterAuthorizedProcessRows,
   filterAuthorizedTodoRows,
@@ -126,32 +152,17 @@ import {
   queryAuthorizedPage,
 } from "./collection-resolvers"
 import { requestDatabaseUploadUrl } from "./database-transfer"
-import {
-  checkExecutionAbandonAuthorization,
-  isAbandonableExecutionStatus,
-} from "./execution-abandon-authorization"
+import { resolveDeploymentProbe } from "./deployment-probe"
+import { executionIdentity } from "./execution-adapter"
 import { parseExecutionListStatus } from "./execution-list-filters"
-import {
-  hasPendingSystemStartRestartDispatch,
-  restartFailedSystemStartExecution,
-} from "./execution-restart"
-import { omitFormMetadataFields } from "./form-metadata-projection"
 import { ListExportService } from "./list-export"
 import {
   canModifyListFieldForAnyRole,
   rolePathsForList,
 } from "./list-field-authorization"
+import { listMetadata } from "./list-metadata"
 import { validateProcessListStatus } from "./process-list-filters"
-import {
-  completeStep,
-  recoverExternalCompletionEnqueue,
-} from "./process-operations"
-import {
-  PUBLIC_TODO_TOKEN_AUDIENCE,
-  type PublicTodoTokenPayload,
-  decryptPublicTodoToken,
-  encryptPublicTodoToken,
-} from "./public-todo-token"
+import { projectProcessStartForm } from "./process-start-form"
 import { getSchemaAnnotationDeep, getSubmissionFields } from "./resolver-utils"
 import { ExecutionCollectionOps } from "./rxdb/execution"
 import { filterAuthorizedExecutions } from "./rxdb/subscription-filters"
@@ -167,12 +178,12 @@ import type { ResolverMap, UserContext } from "./types"
 import { calculateStepColumns } from "./workflow-columns"
 
 const SQLITE_BUSY_RETRY_SCHEDULE = Schedule.addDelay(Schedule.recurs(4), () =>
-  Duration.millis(100),
+  Effect.succeed(Duration.millis(100)),
 )
-const SQLITE_PERMISSION_WRITE_RETRY_SCHEDULE = Schedule.exponential(
-  "100 millis",
-  2,
-).pipe(Schedule.intersect(Schedule.recurs(3)))
+const SQLITE_PERMISSION_WRITE_RETRY_SCHEDULE = Schedule.max([
+  Schedule.exponential("100 millis", 2),
+  Schedule.recurs(3),
+])
 const isSqliteBusy = (error: unknown): boolean => {
   let current: unknown = error
 
@@ -254,9 +265,15 @@ type PublicTodoResult = {
   readonly formMetadata: Record<string, unknown> | null
 }
 
-const isTokenExpired = (exp: number, now: DateTime.DateTime) =>
-  // Match capability-token UX: a link expires at the start of its expiry second.
-  exp <= Math.floor(DateTime.toEpochMillis(now) / 1000)
+const decodeTodoChatAnswers = (input: unknown) =>
+  Schema.decodeUnknownEffect(Schema.JsonObject)(input).pipe(
+    Effect.mapError(
+      () =>
+        new InputValidationError({
+          errors: [{ field: "", message: "Answers must be a JSON object." }],
+        }),
+    ),
+  )
 
 const currentProviderUserDefault = (
   context: UserContext,
@@ -426,116 +443,12 @@ const providerUserLookupSuggestions = (
     return suggestions
   })
 
-const hasProviderUserInput = (fieldSchema: Schema.Schema.Any): boolean =>
+const hasProviderUserInput = (fieldSchema: Schema.Top): boolean =>
   Option.isSome(getSchemaAnnotationDeep(fieldSchema, FormProviderUserInput))
-
-type PublicTodoCapabilityResult =
-  | {
-      readonly type: "done"
-      readonly result: PublicTodoResult
-    }
-  | {
-      readonly type: "continue"
-      readonly payload: PublicTodoTokenPayload
-      readonly todo: PublicTodoInfo
-      readonly stepPath: string
-      readonly form: Form
-    }
-
-type PublicTodoCapability = Extract<
-  PublicTodoCapabilityResult,
-  { readonly type: "continue" }
->
 
 const resolveMaybeEffect = <T>(
   value: T | Effect.Effect<T, unknown, unknown>,
 ) => (Effect.isEffect(value) ? value : Effect.succeed(value))
-
-const normalizePublicRecipient = (
-  recipient: string | { readonly email: string; readonly displayName?: string },
-) =>
-  typeof recipient === "string"
-    ? { email: recipient }
-    : {
-        email: recipient.email,
-        ...(recipient.displayName
-          ? { displayName: recipient.displayName }
-          : {}),
-      }
-
-const normalizePublicRecipientEmail = (email: string) =>
-  email.trim().toLowerCase()
-
-const resolveFunctionPublicCompletionThankYou = <
-  TState,
-  TSteps extends Record<string, StepMeta>,
-  TItem,
->(
-  thankYou: (
-    state: TState,
-    ctx: FlowContext<TSteps>,
-    item: TItem,
-  ) => string | Effect.Effect<string, unknown, unknown>,
-  state: TState,
-  ctx: FlowContext<TSteps>,
-  item: TItem,
-): Effect.Effect<string, unknown, unknown> =>
-  resolveMaybeEffect(thankYou(state, ctx, item))
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const findClientComponentByField = (
-  components: unknown,
-  fieldName: string,
-): Record<string, unknown> | null => {
-  if (!isRecord(components)) {
-    return null
-  }
-
-  for (const [componentName, component] of Object.entries(components)) {
-    if (!isRecord(component)) {
-      continue
-    }
-
-    // Public lookup requests use schema field names. Component keys cover the
-    // normal top-level representation; explicit `field` metadata covers
-    // components that were wrapped or transformed by the client representation.
-    const field = component["field"]
-    if (componentName === fieldName || field === fieldName) {
-      return component
-    }
-
-    const children = component["children"] ?? component["itemChildren"]
-    const nested = findClientComponentByField(children, fieldName)
-    if (nested) {
-      return nested
-    }
-  }
-
-  return null
-}
-
-const publicLookupComponentRestriction = (
-  component: Record<string, unknown> | null,
-): "dependent" | "query-name" | null => {
-  if (!component || component["_tag"] !== FormComponentType.Lookup) {
-    return null
-  }
-
-  if (
-    Array.isArray(component["dependencies"]) &&
-    component["dependencies"].length > 0
-  ) {
-    return "dependent"
-  }
-
-  return typeof component["queryName"] === "string" ? "query-name" : null
-}
-
-const isPublicCalendarSlotComponent = (
-  component: Record<string, unknown> | null,
-): boolean => component?.["_tag"] === FormComponentType.CalendarSlot
 
 type InvitationValidationResult =
   | {
@@ -603,11 +516,20 @@ const toGraphQLInvitation = (invitation: SettingsInvitationRow) => ({
   ),
   registrationLinkExpiresAt: invitation.registrationLinkExpiresAt,
   registrationLinkGeneratedAt: invitation.registrationLinkGeneratedAt,
-  registrationLinkGeneratedBy: invitation.registrationLinkGeneratedBy,
+  registrationLinkGeneratedBy:
+    invitation.registrationLinkGeneratedBy === null
+      ? null
+      : actorDisplayLabel(invitation.registrationLinkGeneratedBy),
   registrationLinkRevealedAt: invitation.registrationLinkRevealedAt,
-  registrationLinkRevealedBy: invitation.registrationLinkRevealedBy,
+  registrationLinkRevealedBy:
+    invitation.registrationLinkRevealedBy === null
+      ? null
+      : actorDisplayLabel(invitation.registrationLinkRevealedBy),
   registrationLinkRevokedAt: invitation.registrationLinkRevokedAt,
-  registrationLinkRevokedBy: invitation.registrationLinkRevokedBy,
+  registrationLinkRevokedBy:
+    invitation.registrationLinkRevokedBy === null
+      ? null
+      : actorDisplayLabel(invitation.registrationLinkRevokedBy),
 })
 
 const existingProviderUserInvitationMessage =
@@ -638,27 +560,9 @@ const resolveRegistrationLinkFrontendOrigin = (): string | null => {
   return null
 }
 
-/**
- * Raised inside the M2M invitation-bootstrap transaction when the pending
- * Invitation could not be accepted after create/assign, so the transaction
- * rolls back and no partial identity remains.
- */
-class InvitationBootstrapFailed extends Data.TaggedError(
-  "InvitationBootstrapFailed",
-)<{
-  readonly email: string
-}> {}
-
-/**
- * Raised when Cedar denies requestProviderUserPermissions after durable writes
- * already ran in the transaction (create/assign/accept). Failing the Effect
- * forces rollback so an unauthorized M2M client cannot burn an Invitation.
- */
-class InvitationPermissionDenied extends Data.TaggedError(
-  "InvitationPermissionDenied",
-)<{
-  readonly email: string
-}> {}
+class InvitationCreationFailed extends Data.TaggedError(
+  "InvitationCreationFailed",
+)<{ readonly message: string }> {}
 
 const validateInvitationMutationInput = (
   settingsQueries: typeof SettingsQueries.Service,
@@ -666,8 +570,8 @@ const validateInvitationMutationInput = (
   currentInvitationId?: string,
 ) =>
   Effect.gen(function* () {
-    const emailResult = Schema.decodeUnknownEither(Email)(input.email)
-    if (Either.isLeft(emailResult)) {
+    const emailResult = Schema.decodeUnknownResult(Email)(input.email.trim())
+    if (Result.isFailure(emailResult)) {
       return {
         success: false,
         error: "Enter a valid email address",
@@ -681,7 +585,7 @@ const validateInvitationMutationInput = (
       } satisfies InvitationValidationResult
     }
 
-    const normalizedEmail = emailResult.right.toLowerCase()
+    const normalizedEmail = emailResult.success.toLowerCase()
     const roles = yield* settingsQueries.queryRolesByIds(input.roleIds)
     const rolesById = new Map(roles.map((role) => [role.id, role]))
     const invalidRoleIds = input.roleIds.filter((id) => !rolesById.has(id))
@@ -737,6 +641,42 @@ export const systemSchema = Effect.gen(function* () {
   const providerUserQueries = yield* ProviderUserQueries
   const workflowQueries = yield* WorkflowQueries
 
+  // The catalog's Step permission is necessary but does not guarantee that
+  // the current model has a callable start mutation.
+  const startMutationRows = <Row extends { startStepPath: string }>(
+    context: UserContext,
+    rows: readonly Row[],
+  ) =>
+    Effect.gen(function* () {
+      const { organisation } = yield* OrganisationProvider
+      const auth = yield* AuthorizationService
+      const principal = yield* buildPrincipal(context)
+      const result: Row[] = []
+      for (const row of rows) {
+        const step = organisation.stepByPath(row.startStepPath)
+        if (!step) continue
+        const starts = step.process.startNodes()
+        if (
+          starts.length !== 1 ||
+          normalizePath(starts[0]?.node.path ?? "") !== row.startStepPath
+        )
+          continue
+        if (step.process.props.cron && step.isSystemStep) {
+          const allowed = yield* auth.canAccessField(
+            principal,
+            new GraphQLField(
+              `Mutation.${step.process.startMutationName()}`,
+              "cron",
+            ),
+            "mutation",
+          )
+          if (!allowed) continue
+        }
+        result.push(row)
+      }
+      return result
+    })
+
   const resolveHiddenFormFieldNames = ({
     form,
     stepPath,
@@ -759,7 +699,7 @@ export const systemSchema = Effect.gen(function* () {
         getSubmissionFields(form.output),
       )) {
         const permission = getSchemaAnnotationDeep(
-          field as Schema.Schema.Any,
+          field as Schema.Top,
           FormPermission,
         )
         if (!Option.isSome(permission)) continue
@@ -796,7 +736,7 @@ export const systemSchema = Effect.gen(function* () {
                 stepPath,
               }),
             ),
-            Effect.catchAll(() => Effect.succeed(false)),
+            Effect.catch(() => Effect.succeed(false)),
             Effect.map((allowed) => ({
               fieldName: field.fieldName,
               allowed,
@@ -816,13 +756,14 @@ export const systemSchema = Effect.gen(function* () {
   const resolveFormMetadata = (
     args: { stepPath: string; todoId?: string | null },
     context: UserContext,
-    enforceUserAuth: boolean,
+    authorization: "complete" | "viewEmbeddedForm" | "publicLink",
   ) =>
     Effect.gen(function* () {
       const { organisation: org } = yield* OrganisationProvider
-      const authorizationMessage = enforceUserAuth
-        ? `User ${context._userDetails.by} is not authorized to complete step ${args.stepPath}`
-        : `This public link is not authorized to complete step ${args.stepPath}`
+      const authorizationMessage =
+        authorization !== "publicLink"
+          ? `User ${context._userDetails.by} is not authorized to complete step ${args.stepPath}`
+          : `This public link is not authorized to complete step ${args.stepPath}`
 
       const step = org.stepByPath(args.stepPath)
 
@@ -837,8 +778,8 @@ export const systemSchema = Effect.gen(function* () {
         })
       }
 
-      if (enforceUserAuth) {
-        yield* checkStepAuthorization(context, args.stepPath)
+      if (authorization !== "publicLink") {
+        yield* checkStepAuthorization(context, args.stepPath, authorization)
       }
 
       const process = step.process
@@ -883,9 +824,7 @@ export const systemSchema = Effect.gen(function* () {
           inputTypeName: "",
           completeMutationName: "",
           totalFields: 0,
-          formDefinition: null,
           defaultValues: null,
-          jsonSchema: null,
         }
       }
 
@@ -904,9 +843,7 @@ export const systemSchema = Effect.gen(function* () {
           inputTypeName,
           completeMutationName,
           totalFields: 0,
-          formDefinition: null,
           defaultValues: null,
-          jsonSchema: null,
         }
       }
 
@@ -914,79 +851,130 @@ export const systemSchema = Effect.gen(function* () {
       let defaultValues: Record<string, unknown> =
         yield* form.resolveInitialDefaults(currentProviderUser)
 
-      const todoId = args.todoId
-      const formDefinition = yield* todoId
-        ? Effect.gen(function* () {
-            const stepCompletionOps = yield* StepCompletionOperations
-            const processStateData =
-              yield* stepCompletionOps.getProcessStateByTodoId(todoId)
-
-            if (!processStateData) {
-              return yield* new ProcessStateNotFound({
-                todoId,
-                stepPath: args.stepPath,
-                message: `Process state not found for todo "${todoId}"`,
-              })
-            }
-
-            const completedSteps =
-              yield* stepCompletionOps.getCompletedStepsForExecution(
-                processStateData.processExecutionId,
-              )
-            const ctx = buildFlowContext(
-              processStateData.processExecutionId,
-              processStateData.processStartedAt,
-              completedSteps,
-            )
-
-            let item: unknown
-            const todoInfo = yield* stepCompletionOps.queryTodoById(todoId)
-            if (todoInfo?.itemData) {
-              item = todoInfo.itemData
-            }
-
-            const resolvedDefaults = yield* form.resolveDefaults(
-              processStateData.state,
-              ctx as FlowContext<Record<string, never>>,
-              item,
-              currentProviderUser,
-            )
-            defaultValues = { ...defaultValues, ...resolvedDefaults }
-            return yield* form.renderableClientFormDefinitionWithState(
-              processStateData.state,
-              ctx as FlowContext<Record<string, never>>,
-              item,
-            )
-          })
-        : !isStartStep
-          ? form.renderableClientFormDefinition()
-          : Effect.gen(function* () {
-              const ctx = startFormContext(context)
-              defaultValues = yield* form.resolveDefaults(
-                {},
-                ctx,
-                undefined,
-                currentProviderUser,
-              )
-              return yield* form.renderableClientFormDefinitionWithState(
-                {},
-                ctx,
-              )
+      // The organisation artifact supplies the executable definition. Only request data crosses here.
+      if (isStartStep || args.todoId) {
+        let state: Record<string, unknown> = {}
+        let ctx = startFormContext(context)
+        let item: unknown
+        if (args.todoId) {
+          const operations = yield* StepCompletionOperations
+          const execution = yield* operations.getProcessStateByTodoId(
+            args.todoId,
+          )
+          if (!execution)
+            return yield* new ProcessStateNotFound({
+              todoId: args.todoId,
+              stepPath: args.stepPath,
+              message: "Process state not found",
             })
+          state = execution.state
+          ctx = buildFlowContext(
+            execution.processExecutionId,
+            execution.processStartedAt,
+            yield* operations.getCompletedStepsForExecution(
+              execution.processExecutionId,
+            ),
+          ) as FlowContext<Record<string, never>>
+          item =
+            (yield* operations.queryTodoById(args.todoId))?.itemData ??
+            undefined
+        }
+        const pluginConfiguration = form.browser?.resolvePluginConfiguration
+          ? yield* form.browser?.resolvePluginConfiguration()
+          : {}
+        defaultValues = yield* form.resolveDefaults(
+          state,
+          ctx,
+          item,
+          currentProviderUser,
+        )
+        const inaccessible = yield* resolveHiddenFormFieldNames({
+          form,
+          stepPath: args.stepPath,
+          context,
+        })
+        const originalValues = yield* form.resolveOriginalValues(
+          state,
+          ctx,
+          item,
+          currentProviderUser,
+        )
+        const presentation = Object.fromEntries(
+          Object.entries(form.resolvePresentation(state, ctx, item)).filter(
+            ([path]) =>
+              !inaccessible.has(form.submissionPath(path.split(".")).join(".")),
+          ),
+        )
+        const prefill = form.prefillQuery()
+        return {
+          stepPath: args.stepPath,
+          processName,
+          stepName,
+          publicFormTitle: form.publicCompletion?.formTitle ?? null,
+          publicFormDescription: form.publicCompletion?.formDescription ?? null,
+          processPath,
+          mutationName,
+          inputTypeName,
+          completeMutationName,
+          pluginConfiguration: Object.fromEntries(
+            Object.entries(pluginConfiguration).filter(
+              ([path]) => !inaccessible.has(path),
+            ),
+          ),
+          totalFields: countLeafFields(
+            Object.fromEntries(
+              Object.entries(defaultValues).filter(
+                ([key]) => !inaccessible.has(key),
+              ),
+            ),
+          ),
+          defaultValues: Object.fromEntries(
+            Object.entries(defaultValues).filter(
+              ([key]) => !inaccessible.has(key),
+            ),
+          ),
+          requestData: {
+            presentation,
+            originalValues: Object.fromEntries(
+              Object.entries(originalValues).filter(
+                ([key]) => !inaccessible.has(key),
+              ),
+            ),
+            inaccessible: [...inaccessible],
+            lookups: Object.fromEntries(
+              [...form.lookupOverrides()]
+                .filter(([name]) => !inaccessible.has(name))
+                .map(([name, override]) => [
+                  name,
+                  {
+                    dependencies: override.dependencies ?? [],
+                    queryName: form.lookupQueryName(name),
+                  },
+                ]),
+            ),
+            ...(prefill
+              ? {
+                  prefill: {
+                    dependency: prefill.dependency,
+                    fields: prefill.fields,
+                    concealed: prefill.concealed,
+                    queryName: form.prefillQueryName(),
+                  },
+                }
+              : {}),
+          },
+        }
+      }
 
-      const hiddenFieldNames = yield* resolveHiddenFormFieldNames({
+      // Workflow previews have no execution context. Resolve only static defaults.
+      const inaccessible = yield* resolveHiddenFormFieldNames({
         form,
         stepPath: args.stepPath,
         context,
       })
-      const visibleMetadata = omitFormMetadataFields({
-        definition: formDefinition,
-        defaultValues,
-        jsonSchema: form.submissionSchema(),
-        omittedFieldNames: hiddenFieldNames,
-      })
-      const visibleFormDefinition = visibleMetadata.formDefinition
-
+      const visibleDefaults = Object.fromEntries(
+        Object.entries(defaultValues).filter(([key]) => !inaccessible.has(key)),
+      )
       return {
         stepPath: args.stepPath,
         processName,
@@ -997,10 +985,13 @@ export const systemSchema = Effect.gen(function* () {
         mutationName,
         inputTypeName,
         completeMutationName,
-        totalFields: countLeafFields(visibleMetadata.defaultValues),
-        formDefinition: visibleFormDefinition,
-        defaultValues: visibleMetadata.defaultValues,
-        jsonSchema: visibleMetadata.jsonSchema,
+        totalFields: countLeafFields(visibleDefaults),
+        defaultValues: visibleDefaults,
+        requestData: {
+          inaccessible: [...inaccessible],
+          presentation: {},
+          originalValues: {},
+        },
       }
     })
 
@@ -1057,103 +1048,21 @@ export const systemSchema = Effect.gen(function* () {
 
   const validatePublicTodoCapability = (
     token: string,
-    context: UserContext,
+    _context: UserContext,
     options: { readonly allowExpired?: boolean } = {},
   ) =>
     Effect.gen(function* () {
-      const payload = yield* decryptPublicTodoToken(token)
-      const stepCompletionOps = yield* StepCompletionOperations
-      const todo = yield* stepCompletionOps.queryPublicTodoInfo(payload.tid)
-
-      if (todo.status === "unavailable" || !todo.stepPath) {
-        return {
-          type: "done",
-          result: {
-            todoId: payload.tid,
-            status: "UNAVAILABLE",
-            formMetadata: null,
-          } satisfies PublicTodoResult,
-        } satisfies PublicTodoCapabilityResult
-      }
-
-      if (
-        todo.latestPublicCompletionInvitationRecipientEmail !== null &&
-        (!payload.externalParticipantEmail ||
-          normalizePublicRecipientEmail(payload.externalParticipantEmail) !==
-            normalizePublicRecipientEmail(
-              todo.latestPublicCompletionInvitationRecipientEmail,
-            ))
-      ) {
-        return {
-          type: "done",
-          result: {
-            todoId: payload.tid,
-            status: "UNAVAILABLE",
-            formMetadata: null,
-          } satisfies PublicTodoResult,
-        } satisfies PublicTodoCapabilityResult
-      }
-
-      // Completion is terminal for the UX, even after the capability expires,
-      // but only the latest invitation recipient retains the capability.
-      if (todo.status === "completed") {
-        return {
-          type: "done",
-          result: {
-            todoId: payload.tid,
-            status: "COMPLETED",
-            formMetadata: null,
-          } satisfies PublicTodoResult,
-        } satisfies PublicTodoCapabilityResult
-      }
-
-      if (
-        !options.allowExpired &&
-        isTokenExpired(payload.exp, context._requestTime)
-      ) {
-        return {
-          type: "done",
-          result: {
-            todoId: payload.tid,
-            status: "EXPIRED",
-            formMetadata: null,
-          } satisfies PublicTodoResult,
-        } satisfies PublicTodoCapabilityResult
-      }
-
-      yield* checkPublicTodoAuthorization(payload.tid)
-
-      const { organisation: org } = yield* OrganisationProvider
-      const form = org.formByPath(todo.stepPath)
-      if (!form) {
-        yield* Effect.logError("Public todo form not found", {
-          todoId: payload.tid,
-          stepPath: todo.stepPath,
-        })
-        return {
-          type: "done",
-          result: {
-            todoId: payload.tid,
-            status: "UNAVAILABLE",
-            formMetadata: null,
-          } satisfies PublicTodoResult,
-        } satisfies PublicTodoCapabilityResult
-      }
-
-      return {
-        type: "continue",
-        payload,
-        todo,
-        stepPath: todo.stepPath,
-        form,
-      } satisfies PublicTodoCapabilityResult
+      return yield* inspectPublicCompletion({
+        capability: yield* decryptPublicTodoToken(token),
+        ...options,
+      })
     })
 
   const resolvePublicTodo = (token: string, context: UserContext) =>
     Effect.gen(function* () {
       const capability = yield* validatePublicTodoCapability(token, context)
       if (capability.type === "done") {
-        return capability.result
+        return { ...capability.result, formMetadata: null }
       }
 
       const { payload, stepPath } = capability
@@ -1161,7 +1070,7 @@ export const systemSchema = Effect.gen(function* () {
       const formMetadata = yield* resolveFormMetadata(
         { stepPath, todoId: payload.tid },
         context,
-        false,
+        "publicLink",
       )
 
       return {
@@ -1178,225 +1087,12 @@ export const systemSchema = Effect.gen(function* () {
     context: UserContext,
   ) =>
     Effect.gen(function* () {
-      const capability = yield* validatePublicTodoCapability(token, context)
-      if (capability.type === "done") {
-        if (capability.result.status === "COMPLETED") {
-          yield* checkPublicTodoAuthorization(capability.result.todoId)
-          yield* recoverExternalCompletionEnqueue(capability.result.todoId)
-        }
-        return capability.result
-      }
-
-      const { payload, form } = capability
-      const publicCompletion = form.publicCompletion
-      let completionMessage = "Successfully submitted."
-      if (typeof publicCompletion?.thankYou === "string") {
-        completionMessage = publicCompletion.thankYou
-      } else if (typeof publicCompletion?.thankYou === "function") {
-        // Function-based messages can depend on process state/context, so only
-        // this path pays for the extra reads needed to evaluate them.
-        const stepCompletionOps = yield* StepCompletionOperations
-        const processStateData =
-          yield* stepCompletionOps.getProcessStateByTodoId(payload.tid)
-        if (!processStateData) {
-          return yield* new ProcessStateNotFound({
-            todoId: payload.tid,
-            stepPath: capability.stepPath,
-            message: `Process state not found for todo "${payload.tid}"`,
-          })
-        }
-
-        const completedSteps =
-          yield* stepCompletionOps.getCompletedStepsForExecution(
-            processStateData.processExecutionId,
-          )
-        const ctx = buildFlowContext(
-          processStateData.processExecutionId,
-          processStateData.processStartedAt,
-          completedSteps,
-        )
-        const todoInfo = yield* stepCompletionOps.queryTodoById(payload.tid)
-        const item = todoInfo?.itemData ?? undefined
-        // The runtime Form type erases org-specific state/item generics; this
-        // branch is guarded by `typeof thankYou === "function"` above.
-        completionMessage = yield* resolveFunctionPublicCompletionThankYou(
-          publicCompletion.thankYou as (
-            state: Record<string, unknown>,
-            ctx: FlowContext<Record<string, StepMeta>>,
-            item: unknown,
-          ) => string | Effect.Effect<string, unknown, unknown>,
-          processStateData.state as Record<string, unknown>,
-          ctx as FlowContext<Record<string, StepMeta>>,
-          item,
-        )
-      }
-
-      yield* completeStep(
-        payload.tid,
+      const result = yield* submitPublicCompletion({
+        capability: yield* decryptPublicTodoToken(token),
         input,
-        form,
-        form.submissionEffectSchema,
-        context,
-        {
-          source: "public",
-          ...(payload.externalParticipantEmail
-            ? { externalParticipantEmail: payload.externalParticipantEmail }
-            : {}),
-        },
-      )
-
-      return {
-        todoId: payload.tid,
-        status: "COMPLETED",
-        completionMessage,
-        formMetadata: null,
-      } satisfies PublicTodoResult
-    })
-
-  const loadPublicCompletionRuntimeContext = (
-    capability: PublicTodoCapability,
-  ) =>
-    Effect.gen(function* () {
-      const { payload, form } = capability
-      const typedForm = form as Form<
-        Record<string, unknown>,
-        Record<string, StepMeta>,
-        Schema.Struct.Fields,
-        string,
-        unknown
-      >
-      const publicCompletion = typedForm.publicCompletion
-      if (!publicCompletion) return null
-
-      const stepCompletionOps = yield* StepCompletionOperations
-      const processStateData = yield* stepCompletionOps.getProcessStateByTodoId(
-        payload.tid,
-      )
-      if (!processStateData) return null
-
-      const completedSteps =
-        yield* stepCompletionOps.getCompletedStepsForExecution(
-          processStateData.processExecutionId,
-        )
-      const ctx = buildFlowContext(
-        processStateData.processExecutionId,
-        processStateData.processStartedAt,
-        completedSteps,
-      ) as FlowContext<Record<string, StepMeta>>
-      const item = capability.todo.itemData ?? undefined
-
-      return { publicCompletion, processStateData, ctx, item }
-    })
-
-  const enqueueFreshPublicCompletionInvitation = (
-    capability: PublicTodoCapability,
-    context: UserContext,
-    state: Record<string, unknown>,
-    ctx: FlowContext<Record<string, StepMeta>>,
-    item: unknown,
-  ) =>
-    Effect.gen(function* () {
-      const { payload, form, stepPath } = capability
-      const typedForm = form as Form<
-        Record<string, unknown>,
-        Record<string, StepMeta>,
-        Schema.Struct.Fields,
-        string,
-        unknown
-      >
-      const publicCompletion = typedForm.publicCompletion
-      if (!publicCompletion) return null
-
-      const recipient = normalizePublicRecipient(
-        yield* resolveMaybeEffect(publicCompletion.recipient(state, ctx, item)),
-      )
-      const expiresAt = yield* resolveMaybeEffect(
-        publicCompletion.expiresAt(state, ctx, item),
-      )
-      const expiresAtIso = DateTime.formatIso(expiresAt)
-      const stepName = form.props.name ?? stepPath.split("/").at(-1) ?? stepPath
-      const frontendOrigin = resolveRegistrationLinkFrontendOrigin()
-      if (!frontendOrigin) {
-        return yield* new InputValidationError({
-          errors: [
-            {
-              field: "",
-              message: "FRONTEND_BASE_URL is not configured",
-            },
-          ],
-        })
-      }
-      const stepCompletionOps = yield* StepCompletionOperations
-      const publicCompletionInvitationAttemptId =
-        yield* stepCompletionOps.createPublicCompletionInvitationAttempt({
-          todoId: payload.tid,
-          recipientEmail: recipient.email,
-        })
-      const freshToken = yield* encryptPublicTodoToken({
-        v: 1,
-        tid: payload.tid,
-        externalParticipantEmail: recipient.email,
-        publicCompletionInvitationAttemptId,
-        iat: Math.floor(DateTime.toEpochMillis(context._requestTime) / 1000),
-        exp: Math.floor(DateTime.toEpochMillis(expiresAt) / 1000),
-        aud: payload.aud,
+        identity: executionIdentity(context),
       })
-      const publicUrl = buildPublicTodoUrl(frontendOrigin, freshToken)
-      const subject = publicCompletion.subject
-        ? yield* resolveMaybeEffect(
-            publicCompletion.subject(state, ctx, item, publicUrl, expiresAt),
-          )
-        : undefined
-      const body = publicCompletion.body
-        ? yield* resolveMaybeEffect(
-            publicCompletion.body(state, ctx, item, publicUrl, expiresAt),
-          )
-        : undefined
-      const template = publicCompletion.template
-        ? yield* resolveMaybeEffect(
-            publicCompletion.template(state, ctx, item, publicUrl, expiresAt),
-          )
-        : undefined
-      const attachments = publicCompletion.attachments
-        ? yield* resolveMaybeEffect(
-            publicCompletion.attachments(state, ctx, item),
-          )
-        : undefined
-
-      const queueService = yield* QueueService
-      const freshLinkPayload = {
-        channel: "email" as const,
-        recipient,
-        publicTodo: {
-          todoId: payload.tid,
-          processName: form.process.props.name,
-          stepName,
-          token: freshToken,
-          expiresAt: expiresAtIso,
-          publicCompletionInvitationAttemptId,
-          ...(subject !== undefined && { subject }),
-          ...(body !== undefined && { body }),
-          ...(template !== undefined && { template }),
-          ...(attachments !== undefined && { attachments }),
-        },
-      }
-
-      yield* queueService
-        .enqueue(NOTIFICATION_DELIVERY_QUEUE, freshLinkPayload)
-        .pipe(
-          Effect.tapError((error) =>
-            Effect.logWarning(
-              "Failed to enqueue public completion invitation after recording invitation attempt",
-              {
-                todoId: payload.tid,
-                publicCompletionInvitationAttemptId,
-                error: String(error),
-              },
-            ),
-          ),
-        )
-
-      return { recipient, publicCompletionInvitationAttemptId }
+      return { ...result, formMetadata: null }
     })
 
   const queryPublicCompletionCorrection = (
@@ -1443,225 +1139,10 @@ export const systemSchema = Effect.gen(function* () {
     correctedEmail: string,
     context: UserContext,
   ) =>
-    Effect.gen(function* () {
-      const normalizedCorrectedEmail =
-        normalizeExternalParticipantEmail(correctedEmail)
-      if (!normalizedCorrectedEmail) {
-        return yield* new InputValidationError({
-          errors: [
-            {
-              field: "correctedEmail",
-              message: "Enter a valid email address.",
-            },
-          ],
-        })
-      }
-
-      const stepCompletionOps = yield* StepCompletionOperations
-      const todo = yield* stepCompletionOps.queryTodoById(todoId)
-      if (!todo?.correctionRequiredAt) {
-        return yield* new NotAuthorized({
-          action: "publicCompletionCorrection",
-          resource: todoId,
-          message: `Public completion todo ${todoId} is not available for correction`,
-        })
-      }
-
-      yield* checkPublicCompletionCorrectionAuthorization(context, {
-        id: todo.id,
-        stepPath: todo.targetStepPath,
-        processPath: todo.processPath,
-        processOrgUnitPath: todo.orgUnitPath,
-        assignedToProviderUserEmail: todo.assignedToProviderUserEmail,
-      })
-
-      const { organisation: org } = yield* OrganisationProvider
-      const form = org.formByPath(todo.targetStepPath)
-      const typedForm = form as
-        | Form<
-            Record<string, unknown>,
-            Record<string, StepMeta>,
-            Schema.Struct.Fields,
-            string,
-            unknown
-          >
-        | undefined
-      const publicCompletion = typedForm?.publicCompletion
-      const correction = publicCompletion?.correction
-      if (!typedForm || !publicCompletion || !correction) {
-        return yield* new NotAuthorized({
-          action: "publicCompletionCorrection",
-          resource: todoId,
-          message: `Public completion todo ${todoId} is not configured for correction`,
-        })
-      }
-
-      const processStateData =
-        yield* stepCompletionOps.getProcessStateByTodoId(todoId)
-      if (!processStateData) {
-        return yield* new ProcessStateNotFound({
-          todoId,
-          stepPath: todo.targetStepPath,
-          message: `Process state not found for todo "${todoId}"`,
-        })
-      }
-
-      const completedSteps =
-        yield* stepCompletionOps.getCompletedStepsForExecution(
-          processStateData.processExecutionId,
-        )
-      const ctx = buildFlowContext(
-        processStateData.processExecutionId,
-        processStateData.processStartedAt,
-        completedSteps,
-      ) as FlowContext<Record<string, StepMeta>>
-      const item = todo.itemData ?? undefined
-      const patch = yield* resolveMaybeEffect(
-        correction.applyEmail(
-          processStateData.state,
-          normalizedCorrectedEmail,
-          ctx,
-          item,
-        ),
-      )
-      if (!isRecord(patch)) {
-        return yield* new InputValidationError({
-          errors: [
-            {
-              field: "correctedEmail",
-              message: "Correction did not produce a process-state patch.",
-            },
-          ],
-        })
-      }
-
-      const nextState = deepMerge(processStateData.state, patch)
-      const resolvedRecipient = normalizePublicRecipient(
-        yield* resolveMaybeEffect(
-          publicCompletion.recipient(nextState, ctx, item),
-        ),
-      )
-      const normalizedResolvedEmail = normalizeExternalParticipantEmail(
-        resolvedRecipient.email,
-      )
-      if (normalizedResolvedEmail !== normalizedCorrectedEmail) {
-        return yield* new InputValidationError({
-          errors: [
-            {
-              field: "correctedEmail",
-              message:
-                "The corrected process state does not resolve to this email address.",
-            },
-          ],
-        })
-      }
-
-      const capability: PublicTodoCapability = {
-        type: "continue",
-        // Only tid and aud are read when issuing the replacement token; iat/exp
-        // are recomputed from the current request time and public-completion TTL.
-        payload: {
-          v: 1,
-          tid: todoId,
-          iat: 0,
-          exp: 0,
-          aud: PUBLIC_TODO_TOKEN_AUDIENCE,
-        },
-        todo: {
-          todoId,
-          status: "active",
-          stepPath: todo.targetStepPath,
-          // Correction submissions already resolved the recipient from the
-          // provider-supplied correction, so stale public invitation checks do
-          // not apply when issuing the replacement token.
-          latestPublicCompletionInvitationRecipientEmail: null,
-          itemData: todo.itemData,
-        },
-        stepPath: todo.targetStepPath,
-        form: typedForm as Form,
-      }
-
-      const queueService = yield* QueueService
-      const enqueueTodoProcessExecutionEvents = Effect.gen(function* () {
-        yield* queueService.enqueue(TODO_EVENT_QUEUE, { todoIds: [todoId] })
-
-        const flowExecutionOps = yield* FlowExecutionOperations
-        const processId = yield* flowExecutionOps.getProcessIdForExecution(
-          processStateData.processExecutionId,
-        )
-        if (processId) {
-          yield* queueService.enqueue(PROCESS_EVENT_QUEUE, { processId })
-        } else {
-          yield* Effect.logWarning(
-            "Unable to enqueue process event after public completion correction",
-            {
-              executionId: processStateData.processExecutionId,
-              todoId,
-            },
-          )
-        }
-
-        yield* queueService.enqueue(EXECUTION_EVENT_QUEUE, {
-          executionId: processStateData.processExecutionId,
-        })
-      })
-      const clearCorrectionRequired = Effect.gen(function* () {
-        const cleared =
-          yield* stepCompletionOps.clearPublicCompletionCorrectionRequired(
-            todoId,
-          )
-        if (!cleared) {
-          return yield* new NotAuthorized({
-            action: "publicCompletionCorrection",
-            resource: todoId,
-            message: `Public completion todo ${todoId} is no longer available for correction`,
-          })
-        }
-      })
-      const reissueInvitation = enqueueFreshPublicCompletionInvitation(
-        capability,
-        context,
-        nextState,
-        ctx,
-        item,
-      )
-
-      const transactionalApplyAndReissue = Effect.gen(function* () {
-        yield* stepCompletionOps.updateProcessState(
-          processStateData.processStateId,
-          patch,
-        )
-        yield* clearCorrectionRequired
-        yield* reissueInvitation
-        yield* enqueueTodoProcessExecutionEvents
-      })
-
-      if (queueService.queueInTransaction) {
-        const sql = yield* SqlClient.SqlClient
-        yield* sql.withTransaction(transactionalApplyAndReissue)
-      } else {
-        yield* stepCompletionOps.updateProcessState(
-          processStateData.processStateId,
-          patch,
-        )
-        // Without transactional queueing, enqueue before clearing the correction
-        // so a failed enqueue leaves the provider-facing correction flow intact.
-        // If clearing fails after enqueue, a retry can send another invitation.
-        yield* reissueInvitation
-        yield* clearCorrectionRequired
-        yield* enqueueTodoProcessExecutionEvents
-      }
-
-      return {
-        todoId,
-        processName: typedForm.process.props.name,
-        stepName:
-          typedForm.props.name ??
-          todo.targetStepPath.split("/").at(-1) ??
-          todo.targetStepPath,
-        correctedEmail: normalizedCorrectedEmail,
-        failureReason: null,
-      }
+    correctPublicCompletion({
+      todoId,
+      correctedEmail,
+      identity: executionIdentity(context),
     })
 
   const publicTodoLookupSuggestions = (
@@ -1670,6 +1151,7 @@ export const systemSchema = Effect.gen(function* () {
       field: string
       filter?: string | null
       limit?: number | null
+      selectedValue?: string | null
     },
     context: UserContext,
   ) =>
@@ -1693,38 +1175,26 @@ export const systemSchema = Effect.gen(function* () {
         })
       }
 
-      // Public lookup authorization only inspects static component metadata.
-      // Render-time dynamic text belongs to the form metadata response path.
+      // Admission uses the submission schema and server permissions, without
+      // resolving request-local presentation or constructing component trees.
       const hiddenFieldNames = yield* resolveHiddenFormFieldNames({
         form,
         stepPath,
         context,
       })
-      const formDefinition = omitClientFormDefinitionFields(
-        yield* form.clientFormDefinition(),
-        hiddenFieldNames,
-      )
-      const lookupComponent = findClientComponentByField(
-        formDefinition.components,
-        args.field,
-      )
-      if (!lookupComponent) {
+      if (hiddenFieldNames.has(args.field)) {
         return yield* new NotAuthorized({
           action: "lookup",
           resource: args.field,
           message: `Public lookup field ${args.field} is not authorized`,
         })
       }
-      const lookupRestriction =
-        publicLookupComponentRestriction(lookupComponent)
-      if (lookupRestriction) {
+      const lookupOverride = form.lookupOverrides().get(args.field)
+      if (lookupOverride?.dependencies?.length) {
         return yield* new NotAuthorized({
           action: "lookup",
           resource: args.field,
-          message:
-            lookupRestriction === "dependent"
-              ? `Public dependent lookup field ${args.field} is not authorized`
-              : `Public query-name lookup field ${args.field} is not authorized`,
+          message: `Public dependent lookup field ${args.field} is not authorized`,
         })
       }
 
@@ -1738,10 +1208,7 @@ export const systemSchema = Effect.gen(function* () {
 
       if (
         Option.isSome(
-          getSchemaAnnotationDeep(
-            fieldSchema as Schema.Schema.Any,
-            FormPermission,
-          ),
+          getSchemaAnnotationDeep(fieldSchema as Schema.Top, FormPermission),
         )
       ) {
         return yield* new NotAuthorized({
@@ -1751,7 +1218,7 @@ export const systemSchema = Effect.gen(function* () {
         })
       }
 
-      if (hasProviderUserInput(fieldSchema as Schema.Schema.Any)) {
+      if (hasProviderUserInput(fieldSchema as Schema.Top)) {
         return yield* new NotAuthorized({
           action: "lookup",
           resource: args.field,
@@ -1759,9 +1226,10 @@ export const systemSchema = Effect.gen(function* () {
         })
       }
 
-      const metadata = (fieldSchema as Schema.Schema.Any).ast.annotations?.[
-        FormLookupInput
-      ] as LookupFieldMetadata | undefined
+      const metadata = getSchemaAnnotationDeep(
+        fieldSchema as Schema.Top,
+        FormLookupInput,
+      ).pipe(Option.getOrUndefined) as LookupFieldMetadata | undefined
       if (!metadata?.query) {
         return yield* new LookupFieldNotFoundError({
           fieldName: args.field,
@@ -1813,8 +1281,24 @@ export const systemSchema = Effect.gen(function* () {
         string,
         unknown
       >
-      const filter = args.filter ?? ""
-      const limit = Math.max(0, Math.min(args.limit ?? 20, 100))
+      const localMax = metadata.mode === "local" ? metadata.maxItems : undefined
+      if (args.selectedValue != null) {
+        const item = yield* statefulForm.resolveLookupSelection(
+          args.field,
+          args.selectedValue,
+          statefulForm.getFieldsWithState(
+            processStateData.state,
+            ctx as FlowContext<Record<string, StepMeta>>,
+            todoInfo.itemData ?? undefined,
+          ),
+        )
+        return item ? [item] : []
+      }
+      const filter = localMax === undefined ? (args.filter ?? "") : ""
+      const limit =
+        localMax === undefined
+          ? Math.max(0, Math.min(args.limit ?? 20, 100))
+          : localMax + 1
 
       return yield* statefulForm.executeLookupWithState(
         args.field,
@@ -1852,20 +1336,19 @@ export const systemSchema = Effect.gen(function* () {
         })
       }
 
-      // Public calendar-slot authorization only inspects static component
-      // metadata. Dynamic text resolution must not run in this auth path.
+      // Inspect the static submission contract, not request presentation.
       const hiddenFieldNames = yield* resolveHiddenFormFieldNames({
         form,
         stepPath,
         context,
       })
-      const formDefinition = omitClientFormDefinitionFields(
-        yield* form.clientFormDefinition(),
-        hiddenFieldNames,
-      )
       if (
-        !isPublicCalendarSlotComponent(
-          findClientComponentByField(formDefinition.components, args.field),
+        hiddenFieldNames.has(args.field) ||
+        Option.isNone(
+          getSchemaAnnotationDeep(
+            fieldSchema as Schema.Top,
+            FormCalendarSlotInput,
+          ),
         )
       ) {
         return yield* new NotAuthorized({
@@ -1877,10 +1360,7 @@ export const systemSchema = Effect.gen(function* () {
 
       if (
         Option.isSome(
-          getSchemaAnnotationDeep(
-            fieldSchema as Schema.Schema.Any,
-            FormPermission,
-          ),
+          getSchemaAnnotationDeep(fieldSchema as Schema.Top, FormPermission),
         )
       ) {
         return yield* new NotAuthorized({
@@ -1892,7 +1372,7 @@ export const systemSchema = Effect.gen(function* () {
 
       const metadata = Option.getOrUndefined(
         getSchemaAnnotationDeep(
-          fieldSchema as Schema.Schema.Any,
+          fieldSchema as Schema.Top,
           FormCalendarSlotInput,
         ),
       ) as CalendarSlotFieldMetadata | undefined
@@ -1927,58 +1407,89 @@ export const systemSchema = Effect.gen(function* () {
       )
     })
 
-  const requestFreshPublicTodoLink = (token: string, context: UserContext) =>
+  const requestFreshPublicTodoLink = (token: string, _context: UserContext) =>
     Effect.gen(function* () {
-      const capability = yield* validatePublicTodoCapability(token, context, {
-        allowExpired: true,
+      return yield* renewPublicCompletionInvitation({
+        capability: yield* decryptPublicTodoToken(token),
       })
-      if (capability.type === "done") {
-        return capability.result
-      }
-
-      const runtimeContext =
-        yield* loadPublicCompletionRuntimeContext(capability)
-      if (!runtimeContext) {
-        return {
-          todoId: capability.payload.tid,
-          status: "UNAVAILABLE",
-          formMetadata: null,
-        } satisfies PublicTodoResult
-      }
-
-      const queueService = yield* QueueService
-      if (queueService.queueInTransaction) {
-        const sql = yield* SqlClient.SqlClient
-        yield* sql.withTransaction(
-          enqueueFreshPublicCompletionInvitation(
-            capability,
-            context,
-            runtimeContext.processStateData.state,
-            runtimeContext.ctx,
-            runtimeContext.item,
-          ),
-        )
-      } else {
-        // External queues cannot share this DB transaction; an orphaned attempt
-        // is acceptable if enqueue fails because no provider send happened.
-        yield* enqueueFreshPublicCompletionInvitation(
-          capability,
-          context,
-          runtimeContext.processStateData.state,
-          runtimeContext.ctx,
-          runtimeContext.item,
-        )
-      }
-
-      return {
-        todoId: capability.payload.tid,
-        status: "ACTIVE",
-        formMetadata: null,
-      } satisfies PublicTodoResult
     })
 
   const resolvers: ResolverMap = {
+    FormMetadata: {
+      processId: (parent: unknown) =>
+        Schema.decodeUnknownEffect(
+          Schema.Struct({ processPath: Schema.String }),
+        )(parent).pipe(
+          Effect.orDie,
+          Effect.flatMap(({ processPath }) =>
+            processQueries.listProcesses({
+              processPath: normalizePath(processPath),
+              offset: 0,
+              limit: 1,
+            }),
+          ),
+          Effect.map((rows) => rows[0]?.id ?? null),
+        ),
+      canSkipScheduleWaits: (
+        parent: unknown,
+        _args: unknown,
+        context: UserContext,
+      ) =>
+        Schema.decodeUnknownEffect(
+          Schema.Struct({ processPath: Schema.String }),
+        )(parent).pipe(
+          Effect.orDie,
+          Effect.flatMap(({ processPath }) =>
+            canSkipScheduleWaits(context, normalizePath(processPath)),
+          ),
+          Effect.catch(() => Effect.succeed(false)),
+        ),
+    },
+    SettingsUserDetail: {
+      taskAssignmentEmailAvailable: () =>
+        Effect.gen(function* () {
+          const { organisation } = yield* OrganisationProvider
+          const layer = organisation.notificationEmailLayer?.()
+          if (layer === undefined) return false
+          return yield* Effect.scoped(
+            Effect.gen(function* () {
+              const services = yield* Layer.build(layer)
+              const config = Context.getOrUndefined(
+                services,
+                NotificationDeliveryConfig,
+              )
+              const sender = Context.getOrUndefined(services, EmailSender)
+              return (
+                config?.getSenderIdentity() !== undefined &&
+                sender !== undefined &&
+                !sender.loggingOnly
+              )
+            }),
+          ).pipe(Effect.catch(() => Effect.succeed(false)))
+        }),
+    },
     Query: {
+      deploymentProbe: (
+        _parent: unknown,
+        args: { input: unknown },
+        context: UserContext,
+      ) => resolveDeploymentProbe("status", args.input, context),
+      delegatedSession: (
+        _parent: unknown,
+        _args: unknown,
+        context: UserContext,
+      ) => {
+        const session = context.jwt?.properties
+        return session && "delegation" in session && session.delegation
+          ? Effect.succeed(session)
+          : Effect.fail(
+              new NotAuthorized({
+                action: "login",
+                resource: "GraphQL",
+                message: "Delegated session required",
+              }),
+            )
+      },
       org: () =>
         orgQueries.queryRoot.pipe(
           Effect.map((o): ResolversTypes["OrgUnit"] | null | undefined => {
@@ -2009,6 +1520,7 @@ export const systemSchema = Effect.gen(function* () {
           readonly limit: number
           readonly processPath?: string | null
           readonly status?: string | null
+          readonly requireStartMutation?: boolean
         },
         context: UserContext,
       ) =>
@@ -2023,8 +1535,95 @@ export const systemSchema = Effect.gen(function* () {
                 ...window,
                 processPath: args.processPath,
               }),
-            authorizeRows: (rows) => filterAuthorizedProcessRows(context, rows),
+            authorizeRows: (rows) =>
+              filterAuthorizedProcessRows(context, rows).pipe(
+                Effect.flatMap((authorized) =>
+                  args.requireStartMutation
+                    ? startMutationRows(context, authorized)
+                    : Effect.succeed(authorized),
+                ),
+              ),
           })
+        }),
+      processStartForm: (
+        _parent: unknown,
+        args: { processPath: string; input?: unknown },
+        context: UserContext,
+      ) =>
+        Effect.gen(function* () {
+          const path = normalizePath(args.processPath)
+          const rows = yield* processQueries.listProcesses({
+            processPath: path,
+            offset: 0,
+            limit: 1,
+          })
+          const [process] = yield* filterAuthorizedProcessRows(
+            context,
+            rows,
+          ).pipe(
+            Effect.flatMap((authorized) =>
+              startMutationRows(context, authorized),
+            ),
+          )
+          if (!process) return null
+
+          const input = yield* Schema.decodeUnknownEffect(
+            Schema.Record(Schema.String, Schema.Unknown),
+          )(args.input ?? {}).pipe(
+            Effect.mapError(
+              () =>
+                new InputValidationError({
+                  errors: [{ field: "input", message: "Expected an object" }],
+                }),
+            ),
+          )
+          const { organisation } = yield* OrganisationProvider
+          const step = organisation.stepByPath(process.startStepPath)
+          if (!step) return null
+          const form = organisation.formByPath(process.startStepPath)
+          const base = {
+            startStepPath: process.startStepPath,
+            mutationName: step.process.startMutationName(),
+            inputTypeName: null,
+            fields: [],
+            defaultValues: {},
+            errors: [],
+            requiresDashboard: false,
+            unconfirmedDefaults: [],
+            submissionInput: {},
+          }
+          if (!form || Object.keys(form.output ?? {}).length === 0) return base
+
+          const metadata = yield* resolveFormMetadata(
+            { stepPath: process.startStepPath },
+            context,
+            "complete",
+          )
+          const requestData = yield* Schema.decodeUnknownEffect(
+            FormRequestData,
+          )(metadata.requestData)
+          const defaults = yield* resolveFormFieldDefaults(
+            getSubmissionFields(
+              form.getFieldsWithState({}, startFormContext(context)),
+            ),
+            currentProviderUserDefault(context),
+          )
+          const defaultValues = Object.fromEntries(
+            Object.entries(defaults).filter(
+              ([key]) => !requestData.inaccessible.includes(key),
+            ),
+          )
+          return {
+            ...base,
+            inputTypeName: metadata.inputTypeName,
+            defaultValues,
+            ...projectProcessStartForm({
+              schema: form.sharedSchema,
+              defaults: defaultValues,
+              requestData,
+              input,
+            }),
+          }
         }),
       todos: (
         _parent: unknown,
@@ -2149,7 +1748,6 @@ export const systemSchema = Effect.gen(function* () {
         context: UserContext,
       ) =>
         Effect.gen(function* () {
-          // Check if providerUserID is present in session
           if (!context.userId) {
             return yield* new NoProviderUserID({
               message: "No provider user ID found in session context",
@@ -2159,7 +1757,6 @@ export const systemSchema = Effect.gen(function* () {
           const providerUserOption =
             yield* providerUserQueries.queryProviderUserByUserId(context.userId)
 
-          // Check if provider user was found
           if (Option.isNone(providerUserOption)) {
             return yield* new ProviderUserNotFound({
               userId: context.userId,
@@ -2174,7 +1771,33 @@ export const systemSchema = Effect.gen(function* () {
         _parent: unknown,
         args: { stepPath: string; todoId?: string | null },
         context: UserContext,
-      ) => resolveFormMetadata(args, context, true),
+      ) => resolveFormMetadata(args, context, "complete"),
+
+      todoChatForm: (
+        _parent: unknown,
+        args: { todoId: string; answers: unknown },
+        context: UserContext,
+      ) =>
+        decodeTodoChatAnswers(args.answers).pipe(
+          Effect.flatMap((input) =>
+            inspectTodoForm({
+              todoId: args.todoId,
+              input,
+              identity: executionIdentity(context),
+            }),
+          ),
+        ),
+
+      embeddedFormMetadata: (
+        _parent: unknown,
+        args: { stepPath: string },
+        context: UserContext,
+      ) =>
+        resolveFormMetadata(
+          { stepPath: args.stepPath },
+          context,
+          "viewEmbeddedForm",
+        ),
 
       publicCompletionCorrection: (
         _parent: unknown,
@@ -2182,6 +1805,21 @@ export const systemSchema = Effect.gen(function* () {
         context: UserContext,
       ) => queryPublicCompletionCorrection(args.todoId, context),
 
+      anonymousPage: (
+        _parent: unknown,
+        args: { address: string },
+        context: UserContext,
+      ) => anonymousPage(args.address, context),
+      anonymousPageLookup: (
+        _parent: unknown,
+        args: {
+          address: string
+          field: string
+          filter?: string | null
+          limit?: number | null
+          selectedValue?: string | null
+        },
+      ) => anonymousPageLookup(args),
       publicTodo: (
         _parent: unknown,
         args: { token: string },
@@ -2195,6 +1833,7 @@ export const systemSchema = Effect.gen(function* () {
           field: string
           filter?: string | null
           limit?: number | null
+          selectedValue?: string | null
         },
         context: UserContext,
       ) => publicTodoLookupSuggestions(args, context),
@@ -2368,6 +2007,19 @@ export const systemSchema = Effect.gen(function* () {
           return buildPublicTodoUrl(frontendOrigin, freshToken)
         }),
 
+      settingsUserCount: () =>
+        Effect.flatMap(SettingsQueries, (queries) => queries.countUsers()),
+      settingsRoleCount: () =>
+        Effect.flatMap(SettingsQueries, (queries) => queries.countRoles()),
+      settingsInvitationCount: () =>
+        Effect.flatMap(SettingsQueries, (queries) =>
+          queries.countInvitations(),
+        ),
+      settingsOAuthProviderCount: () =>
+        Effect.flatMap(SettingsQueries, (queries) =>
+          queries.countOAuthProviders(),
+        ),
+
       allUsers: createPaginatedCollectionResolver(
         (_args: { page: number; limit: number }, pagination) =>
           Effect.gen(function* () {
@@ -2468,6 +2120,8 @@ export const systemSchema = Effect.gen(function* () {
             process.env["APPSYNC_EVENTS_HTTP_HOST"] ?? null,
         }),
 
+      listMetadata,
+
       listCreateFormMetadata: (
         _parent: unknown,
         args: { listPath: string },
@@ -2500,7 +2154,6 @@ export const systemSchema = Effect.gen(function* () {
           const { organisation: org } = yield* OrganisationProvider
           const auth = yield* AuthorizationService
 
-          // Find the list by path
           const allLists = org.lists()
           const list = allLists.find(
             (l) => normalizePath(l.node.path) === normalizePath(args.listPath),
@@ -2549,11 +2202,6 @@ export const systemSchema = Effect.gen(function* () {
               .canDeleteList(principal, resource)
               .pipe(Effect.orElseSucceed(() => false)))
 
-          const formDefinition = yield* list.clientFormDefinition()
-
-          // Generate JSON schema for editable fields only
-          const jsonSchema = list.formSubmissionSchema()
-
           // Schema defaults only (item data is merged on the client)
           const defaultValues = list.formDefaults() ?? {}
 
@@ -2567,9 +2215,7 @@ export const systemSchema = Effect.gen(function* () {
               ? list.updateInputTypeName()
               : null,
             deleteMutationName: canDelete ? list.deleteMutationName() : null,
-            formDefinition,
             defaultValues,
-            jsonSchema,
           }
         }),
 
@@ -2605,7 +2251,6 @@ export const systemSchema = Effect.gen(function* () {
             }
           }
 
-          // Map to ListInfo type
           return yield* Effect.forEach(accessibleLists, (list) =>
             Effect.gen(function* () {
               const canCreate =
@@ -2626,6 +2271,11 @@ export const systemSchema = Effect.gen(function* () {
                 : []
               return {
                 startProcess: startProcesses[0] ?? null,
+                additionalStartProcesses: yield* filterAuthorizedProcessRows(
+                  context,
+                  [...list.additionalStartProcesses],
+                ),
+                anonymousPage: list.anonymousPage ?? null,
                 canCreate,
                 id: normalizePath(list.node.path),
                 path: normalizePath(list.node.path),
@@ -2693,6 +2343,73 @@ export const systemSchema = Effect.gen(function* () {
           }))
         }),
 
+      lookupSelection: (
+        _parent: unknown,
+        args: {
+          stepPath: string
+          field: string
+          value: string
+          todoId?: string | null
+          listCreate?: boolean | null
+        },
+        context: UserContext,
+        info: GraphQLResolveInfo,
+      ) =>
+        Effect.gen(function* () {
+          const resolve = resolvers.Query?.["lookupSuggestions"]
+          if (typeof resolve !== "function") return null
+          const result = yield* resolve(
+            {},
+            { ...args, selectedValue: args.value },
+            context,
+            info,
+          )
+          const items = yield* Schema.decodeUnknownEffect(
+            Schema.Array(
+              Schema.Struct({ value: Schema.String, label: Schema.String }),
+            ),
+          )(result)
+          return items[0] ?? null
+        }),
+
+      lookupSearch: (
+        _parent: unknown,
+        args: {
+          stepPath: string
+          field: string
+          filter?: string | null
+          limit?: number | null
+          todoId?: string | null
+          listCreate?: boolean | null
+        },
+        context: UserContext,
+        info: GraphQLResolveInfo,
+      ) =>
+        Effect.gen(function* () {
+          // Reuse the same step, field, List and Todo authorization boundary.
+          // Reserve one slot beneath the endpoint ceiling to detect truncation.
+          const limit = Math.max(1, Math.min(args.limit ?? 20, 99))
+          const resolve = resolvers.Query?.["lookupSuggestions"]
+          if (typeof resolve !== "function")
+            return yield* new NotAuthorized({
+              action: "lookup",
+              resource: args.stepPath,
+              message: "Lookup is unavailable",
+            })
+          const result = yield* resolve(
+            {},
+            { ...args, limit: limit + 1 },
+            context,
+            info,
+          )
+          const items = yield* Schema.decodeUnknownEffect(
+            Schema.Array(
+              Schema.Struct({ value: Schema.String, label: Schema.String }),
+            ),
+          )(result)
+          return { items: items.slice(0, limit), hasMore: items.length > limit }
+        }),
+
       lookupSuggestions: (
         _parent: unknown,
         args: {
@@ -2701,22 +2418,44 @@ export const systemSchema = Effect.gen(function* () {
           filter?: string | null
           limit?: number | null
           todoId?: string | null
+          listCreate?: boolean | null
+          selectedValue?: string
         },
         context: UserContext,
       ) =>
         Effect.gen(function* () {
           const { organisation: org } = yield* OrganisationProvider
           const filter = args.filter ?? ""
-          const limit = Math.max(0, Math.min(args.limit ?? 20, 100))
+          const selection = args.selectedValue
+          const lookupLimit = (
+            field: Schema.Struct.Fields[string] | undefined,
+          ) => {
+            const annotation = field
+              ? getSchemaAnnotationDeep(field, FormLookupInput)
+              : Option.none()
+            const metadata = Option.getOrUndefined(annotation)
+            if (
+              typeof metadata === "object" &&
+              metadata !== null &&
+              "mode" in metadata &&
+              metadata.mode === "local" &&
+              "maxItems" in metadata &&
+              typeof metadata.maxItems === "number"
+            )
+              return metadata.maxItems + 1
+            return Math.max(0, Math.min(args.limit ?? 20, 100))
+          }
 
-          // First try a normal form step path.
-          const form = org.formByPath(args.stepPath)
+          const listCreate = args.listCreate === true
+          // An explicit List create request cannot resolve to a process form.
+          const form = listCreate ? undefined : org.formByPath(args.stepPath)
           if (form) {
             yield* checkStepAuthorization(context, args.stepPath)
             const fieldSchema = getSubmissionFields(form.output)[args.field]
+            const limit = lookupLimit(fieldSchema)
             const permission = fieldSchema
               ? getSchemaAnnotationDeep(
-                  fieldSchema as Schema.Schema.Any,
+                  fieldSchema as Schema.Top,
                   FormPermission,
                 )
               : Option.none()
@@ -2747,7 +2486,7 @@ export const systemSchema = Effect.gen(function* () {
                         stepPath: args.stepPath,
                       }),
                     ),
-                    Effect.catchAll(() => Effect.succeed(false)),
+                    Effect.catch(() => Effect.succeed(false)),
                   )
                 : false
               if (!allowed) {
@@ -2760,8 +2499,9 @@ export const systemSchema = Effect.gen(function* () {
             }
             if (
               fieldSchema &&
-              hasProviderUserInput(fieldSchema as Schema.Schema.Any)
+              hasProviderUserInput(fieldSchema as Schema.Top)
             ) {
+              if (selection !== undefined) return []
               return yield* providerUserLookupSuggestions(
                 context,
                 filter,
@@ -2769,8 +2509,39 @@ export const systemSchema = Effect.gen(function* () {
               )
             }
 
-            if (args.todoId && !form.lookupOverrides().has(args.field)) {
+            if (
+              selection !== undefined &&
+              !args.todoId &&
+              !form.process
+                .startNodes()
+                .some((node) => node.node.path === form.node.path)
+            ) {
+              return yield* new NotAuthorized({
+                action: "lookup",
+                resource: args.stepPath,
+                message: "Lookup selection requires a Todo",
+              })
+            }
+            if (
+              args.todoId &&
+              (selection !== undefined ||
+                !form.lookupOverrides().has(args.field))
+            ) {
               const stepCompletionOps = yield* StepCompletionOperations
+              if (selection !== undefined) {
+                const todo = yield* stepCompletionOps.queryTodoById(args.todoId)
+                if (
+                  !todo ||
+                  normalizePath(todo.targetStepPath) !==
+                    normalizePath(args.stepPath)
+                )
+                  return yield* new NotAuthorized({
+                    action: "lookup",
+                    resource: args.stepPath,
+                    message: "Lookup Todo does not match this form",
+                  })
+                yield* checkTodoAuthorization(context, todo)
+              }
               const processStateData =
                 yield* stepCompletionOps.getProcessStateByTodoId(args.todoId)
 
@@ -2818,6 +2589,19 @@ export const systemSchema = Effect.gen(function* () {
                 unknown
               >
 
+              if (selection !== undefined) {
+                const item = yield* statefulForm.resolveLookupSelection(
+                  args.field,
+                  selection,
+                  statefulForm.getFieldsWithState(
+                    processStateData.state,
+                    ctx as FlowContext<Record<string, StepMeta>>,
+                    todoInfo.itemData ?? undefined,
+                  ),
+                )
+                return item ? [item] : []
+              }
+
               return yield* statefulForm.executeLookupWithState(
                 args.field,
                 filter,
@@ -2828,6 +2612,14 @@ export const systemSchema = Effect.gen(function* () {
               )
             }
 
+            if (selection !== undefined) {
+              const item = yield* form.resolveLookupSelection(
+                args.field,
+                selection,
+                form.getFieldsWithState({}, startFormContext(context)),
+              )
+              return item ? [item] : []
+            }
             if (
               !form.process
                 .startNodes()
@@ -2844,18 +2636,24 @@ export const systemSchema = Effect.gen(function* () {
             )
           }
 
-          // Also support list item edit forms, where the frontend passes
-          // the list path as stepPath.
+          // List form lookups pass the list path as stepPath.
           const list = org.listByPath(args.stepPath)
-          if (list?.hasForm) {
+          if (list && (listCreate ? list.hasCreate : list.hasForm)) {
             const listPath = normalizePath(list.node.path)
             const rolePaths = rolePathsForList(list.roles)
 
-            yield* checkListUpdateAuthorization(context, listPath, rolePaths)
+            if (listCreate) {
+              yield* checkListAuthorization(context, listPath, rolePaths)
+              yield* checkListCreateAuthorization(context, listPath, rolePaths)
+            } else {
+              yield* checkListUpdateAuthorization(context, listPath, rolePaths)
+            }
 
-            const fieldSchema = getSubmissionFields(list.editableFormFields())[
-              args.field
-            ]
+            const fields = listCreate
+              ? (list.createFormFields ?? {})
+              : list.editableFormFields()
+            const fieldSchema = getSubmissionFields(fields)[args.field]
+            const limit = lookupLimit(fieldSchema)
             if (!fieldSchema) {
               return yield* new LookupFieldNotFoundError({
                 fieldName: args.field,
@@ -2865,7 +2663,7 @@ export const systemSchema = Effect.gen(function* () {
             }
 
             const permission = getSchemaAnnotationDeep(
-              fieldSchema as Schema.Schema.Any,
+              fieldSchema as Schema.Top,
               FormPermission,
             )
             if (
@@ -2892,8 +2690,9 @@ export const systemSchema = Effect.gen(function* () {
 
             if (
               fieldSchema &&
-              hasProviderUserInput(fieldSchema as Schema.Schema.Any)
+              hasProviderUserInput(fieldSchema as Schema.Top)
             ) {
+              if (selection !== undefined) return []
               return yield* providerUserLookupSuggestions(
                 context,
                 filter,
@@ -2901,8 +2700,17 @@ export const systemSchema = Effect.gen(function* () {
               )
             }
 
-            const metadata = (fieldSchema as Schema.Schema.Any).ast
-              .annotations?.[FormLookupInput] as LookupFieldMetadata | undefined
+            const metadata = getSchemaAnnotationDeep(
+              fieldSchema as Schema.Top,
+              FormLookupInput,
+            ).pipe(Option.getOrUndefined) as LookupFieldMetadata | undefined
+
+            if (selection !== undefined) {
+              const item = metadata?.resolve
+                ? yield* metadata.resolve(selection)
+                : null
+              return item?.value === selection ? [item] : []
+            }
 
             if (!metadata?.query) {
               return yield* new LookupFieldNotFoundError({
@@ -2961,7 +2769,7 @@ export const systemSchema = Effect.gen(function* () {
           }
 
           const permission = getSchemaAnnotationDeep(
-            fieldSchema as Schema.Schema.Any,
+            fieldSchema as Schema.Top,
             FormPermission,
           )
           if (
@@ -2993,7 +2801,7 @@ export const systemSchema = Effect.gen(function* () {
                       },
                     ),
                   ),
-                  Effect.catchAll(() => Effect.succeed(false)),
+                  Effect.catch(() => Effect.succeed(false)),
                 )
               : false
             if (!allowed) {
@@ -3160,7 +2968,6 @@ export const systemSchema = Effect.gen(function* () {
             context,
           )
 
-          // Get all roles in the system
           const allRoles = yield* db.queryAllRoles()
 
           // Filter by Cedar permission (read-only - no database writes)
@@ -3197,6 +3004,30 @@ export const systemSchema = Effect.gen(function* () {
       // biome-ignore lint/suspicious/noExplicitAny: graphql resolver type mismatch
     } as any,
     Mutation: {
+      completeTodoFromChat: (
+        _parent: unknown,
+        args: { todoId: string; answers: unknown },
+        context: UserContext,
+      ) =>
+        decodeTodoChatAnswers(args.answers).pipe(
+          Effect.flatMap((input) =>
+            completeTodoFromChat({
+              todoId: args.todoId,
+              input,
+              identity: executionIdentity(context),
+            }),
+          ),
+        ),
+      startDeploymentProbe: (
+        _parent: unknown,
+        args: { input: unknown },
+        context: UserContext,
+      ) => resolveDeploymentProbe("start", args.input, context),
+      submitAnonymousPage: (
+        _parent: unknown,
+        args: { address: string; input: Record<string, unknown> },
+        context: UserContext,
+      ) => submitAnonymousPage(args, context).pipe(Effect.as(true)),
       completePublicTodo: (
         _parent: unknown,
         args: { token: string; input?: Record<string, unknown> | null },
@@ -3261,6 +3092,10 @@ export const systemSchema = Effect.gen(function* () {
           // Determine if this is an M2M (service account) or provider user request
           const props = context.jwt?.properties
           const m2mProps = isServiceAccountSession(props) ? props : null
+          const preparationVersion =
+            isProviderUserSession(props) && !props.delegation
+              ? yield* providerUserAuthorityVersion(props.userId)
+              : undefined
 
           if (!context.userId) {
             return {
@@ -3271,7 +3106,6 @@ export const systemSchema = Effect.gen(function* () {
           }
           const userId = context.userId
 
-          // Check if role exists
           const roleOption = yield* providerUserDb.queryRoleByPath(
             args.rolePath,
           )
@@ -3323,7 +3157,6 @@ export const systemSchema = Effect.gen(function* () {
             }
           }
 
-          // Check Cedar authorization
           const canRequest = yield* auth
             .canRequestRole(principal, new RoleRef(args.rolePath))
             .pipe(
@@ -3399,7 +3232,6 @@ export const systemSchema = Effect.gen(function* () {
               }),
             )
           } else {
-            // Provider user: write to permitted_role table
             if (!providerUser) {
               return {
                 success: false,
@@ -3408,11 +3240,29 @@ export const systemSchema = Effect.gen(function* () {
               }
             }
 
-            // This is a single upsert statement, so retry lock contention
-            // directly instead of starting a separate transaction.
-            yield* providerUserDb
-              .addPermittedRole(providerUser.id, role.id)
-              .pipe(Effect.retry(SQLITE_PERMISSION_WRITE_RETRY_SCHEDULE))
+            if (!isProviderUserSession(props) || !preparationVersion) {
+              return {
+                success: false,
+                rolePath: null,
+                error: "A new login is required",
+              }
+            }
+            yield* prepareRoleSwitch(
+              props,
+              args.rolePath,
+              preparationVersion,
+            ).pipe(
+              Effect.retry({
+                schedule: SQLITE_PERMISSION_WRITE_RETRY_SCHEDULE,
+                while: (error) => isSqlLockError(error) || isSqliteBusy(error),
+              }),
+              Effect.annotateLogs({
+                userId,
+                rolePath: args.rolePath,
+                orgUnitId: props.orgUnitId,
+                orgUnitPath: props.orgUnitPath,
+              }),
+            )
 
             yield* Effect.log("Role request authorized for provider user").pipe(
               Effect.annotateLogs({
@@ -3429,211 +3279,10 @@ export const systemSchema = Effect.gen(function* () {
           }
         }),
 
-      requestProviderUserPermissions: (
-        _parent: unknown,
-        args: { email: string },
-        context: UserContext,
-      ) =>
-        Effect.gen(function* () {
-          yield* rejectUnsupportedDelegationHandoff(
-            context.jwt?.properties,
-            "impersonation",
-          )
-          const auth = yield* AuthorizationService
-          const providerUserDb = yield* ProviderUserQueries
-          const oauthClientDb = yield* OAuthClientQueries
-          const sql = yield* SqlClient.SqlClient
-
-          // Get M2M client info from context
-          const props = context.jwt?.properties
-          if (!props || !("clientId" in props)) {
-            return { success: false, email: null, error: "Invalid session" }
-          }
-          const m2mProps = props as {
-            clientId: string
-            roles?: readonly string[]
-          }
-
-          // Get OAuth client from database
-          const clientOption = yield* oauthClientDb.queryOAuthClientByClientId(
-            m2mProps.clientId,
-          )
-          if (Option.isNone(clientOption)) {
-            return {
-              success: false,
-              email: null,
-              error: "OAuth client not found",
-            }
-          }
-          const client = clientOption.value
-
-          const normalizedEmail = args.email.trim().toLowerCase()
-          const settingsQueries = yield* SettingsQueries
-          const principal = new ServiceAccountPrincipal(
-            m2mProps.clientId,
-            m2mProps.roles ?? [],
-          )
-
-          const authorizeRequest = (
-            email: string,
-            roles: readonly string[],
-            orgUnitId: string,
-          ) =>
-            auth
-              .canRequestProviderUserPermissions(
-                principal,
-                new ProviderUserPrincipal(email, { roles, orgUnitId }),
-              )
-              .pipe(
-                Effect.catchTag("AuthorizationError", (e) =>
-                  Effect.fail(
-                    new NotAuthorized({
-                      action: "requestProviderUserPermissions",
-                      resource: email,
-                      message: e.message,
-                    }),
-                  ),
-                ),
-              )
-
-          // Transaction: get/create provider user, then upsert permission
-          const result = yield* sql
-            .withTransaction(
-              Effect.gen(function* () {
-                // Step 1: Find or create provider user
-                let providerUserOpt =
-                  yield* providerUserDb.queryProviderUserByEmail(
-                    normalizedEmail,
-                  )
-
-                if (Option.isNone(providerUserOpt)) {
-                  // No provider user - check for invitation
-                  const invitationRoleIds =
-                    yield* providerUserDb.findInvitationRoleIds(normalizedEmail)
-
-                  if (invitationRoleIds.length === 0) {
-                    // No provider user AND no invitation - fail early
-                    return {
-                      success: false,
-                      email: null,
-                      error: `Provider user not found and no invitation exists for: ${normalizedEmail}`,
-                    }
-                  }
-
-                  const rootOrgUnitOpt = yield* providerUserDb.findRootOrgUnit()
-                  if (Option.isNone(rootOrgUnitOpt)) {
-                    return {
-                      success: false,
-                      email: null,
-                      error: "No root org unit found",
-                    }
-                  }
-
-                  // Authorize against the intended invitation grant before any
-                  // durable bootstrap writes. Soft-deny is safe here (no side
-                  // effects yet).
-                  const invitationRoles =
-                    yield* settingsQueries.queryRolesByIds(invitationRoleIds)
-                  const invitationRolePaths = invitationRoles.map(
-                    (role) => role.path,
-                  )
-                  const canBootstrap = yield* authorizeRequest(
-                    normalizedEmail,
-                    invitationRolePaths,
-                    rootOrgUnitOpt.value.id,
-                  )
-                  if (!canBootstrap) {
-                    return {
-                      success: false,
-                      email: null,
-                      error: `Not authorized to request permissions for: ${normalizedEmail}`,
-                    }
-                  }
-
-                  const newProviderUser =
-                    yield* providerUserDb.createProviderUserFromInvitation({
-                      email: normalizedEmail,
-                      orgUnitId: rootOrgUnitOpt.value.id,
-                    })
-                  yield* providerUserDb.assignProviderUserRoles(
-                    newProviderUser.providerUserId,
-                    invitationRoleIds,
-                  )
-                  const accepted =
-                    yield* providerUserDb.acceptPendingInvitationForProviderUser(
-                      {
-                        email: normalizedEmail,
-                        providerUserId: newProviderUser.providerUserId,
-                        provider: "m2m",
-                        subject: `m2m:${normalizedEmail}`,
-                      },
-                    )
-                  if (!accepted) {
-                    // Concurrent acceptance won or invitation was revoked mid-flight.
-                    // Fail the Effect so the transaction rolls back create/assign.
-                    return yield* new InvitationBootstrapFailed({
-                      email: normalizedEmail,
-                    })
-                  }
-
-                  // Re-fetch the provider user with full details
-                  providerUserOpt =
-                    yield* providerUserDb.queryProviderUserByEmail(
-                      normalizedEmail,
-                    )
-                }
-
-                const providerUser = Option.getOrThrow(providerUserOpt)
-
-                // Step 2: Cedar authorization against the actual provider user.
-                // After durable bootstrap writes, denial must fail the Effect so
-                // the transaction rolls back rather than committing a burned grant.
-                const providerUserRolePaths =
-                  yield* providerUserDb.queryProviderUserRolePaths(
-                    providerUser.id,
-                  )
-                const canRequest = yield* authorizeRequest(
-                  providerUser.email,
-                  providerUserRolePaths,
-                  providerUser.orgUnitId,
-                )
-                if (!canRequest) {
-                  return yield* new InvitationPermissionDenied({
-                    email: normalizedEmail,
-                  })
-                }
-
-                // Step 3: Upsert to permitted_client_email (with retry for SQLite locks)
-                yield* oauthClientDb
-                  .addPermittedClientEmail(client.id, normalizedEmail)
-                  .pipe(Effect.retry(SQLITE_PERMISSION_WRITE_RETRY_SCHEDULE))
-
-                return { success: true, email: normalizedEmail, error: null }
-              }),
-            )
-            .pipe(
-              Effect.catchTag("InvitationBootstrapFailed", (error) =>
-                Effect.succeed({
-                  success: false,
-                  email: null,
-                  error: `Pending invitation could not be consumed for: ${error.email}`,
-                }),
-              ),
-              Effect.catchTag("InvitationPermissionDenied", (error) =>
-                Effect.succeed({
-                  success: false,
-                  email: null,
-                  error: `Not authorized to request permissions for: ${error.email}`,
-                }),
-              ),
-            )
-
-          return result
-        }),
-
       createInvitation: (
         _parent: unknown,
         args: {
+          registrationLink?: boolean
           input: {
             email: string
             roleIds: readonly string[]
@@ -3646,51 +3295,108 @@ export const systemSchema = Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           const updatedBy = context._userDetails.by
 
-          const validation = yield* validateInvitationMutationInput(
-            settingsQueries,
-            args.input,
-          )
-          if (!validation.success) {
-            return {
-              __typename: "SaveInvitationFailure" as const,
-              error: validation.error,
+          // Both Dashboard operations currently require administerUsers. Check
+          // issuance explicitly so the combined operation retains that gate.
+          if (args.registrationLink) {
+            const auth = yield* AuthorizationService
+            const principal = yield* buildPrincipal(context)
+            if (
+              !(yield* auth.canAccessFeature(
+                principal,
+                new Application("default"),
+                "administerUsers",
+              ))
+            ) {
+              return {
+                __typename: "SaveInvitationFailure" as const,
+                error: "Not authorized to issue Registration Links",
+              }
             }
           }
 
-          const invitationId = yield* sql.withTransaction(
-            Effect.gen(function* () {
-              const createdInvitationId =
-                yield* settingsQueries.createInvitation({
-                  invitationId: randomUUID(),
-                  email: validation.normalizedEmail,
-                  source: InvitationSource.Dashboard,
-                  createdBy: updatedBy,
+          return yield* sql
+            .withTransaction(
+              Effect.gen(function* () {
+                const validation = yield* validateInvitationMutationInput(
+                  settingsQueries,
+                  args.input,
+                )
+                if (!validation.success) {
+                  return yield* new InvitationCreationFailed({
+                    message: validation.error,
+                  })
+                }
+                const createdInvitationId =
+                  yield* settingsQueries.createInvitation({
+                    invitationId: randomUUID(),
+                    email: validation.normalizedEmail,
+                    source: InvitationSource.Dashboard,
+                    createdBy: updatedBy,
+                    updatedBy,
+                  })
+
+                yield* settingsQueries.replaceInvitationRoles(
+                  createdInvitationId,
+                  args.input.roleIds,
                   updatedBy,
-                })
+                )
 
-              yield* settingsQueries.replaceInvitationRoles(
-                createdInvitationId,
-                args.input.roleIds,
-                updatedBy,
-              )
-
-              return createdInvitationId
-            }),
-          )
-
-          const invitation =
-            yield* settingsQueries.queryInvitationDetail(invitationId)
-          if (!invitation) {
-            return {
-              __typename: "SaveInvitationFailure" as const,
-              error: INVITATION_NOT_FOUND_MESSAGE,
-            }
-          }
-
-          return {
-            __typename: "SaveInvitationSuccess" as const,
-            invitation: toGraphQLInvitation(invitation),
-          }
+                const invitation =
+                  yield* settingsQueries.queryInvitationDetail(
+                    createdInvitationId,
+                  )
+                if (!invitation) {
+                  return yield* new InvitationCreationFailed({
+                    message: INVITATION_NOT_FOUND_MESSAGE,
+                  })
+                }
+                if (args.registrationLink) {
+                  const result = yield* issueRegistrationLink(
+                    yield* SettingsQueries,
+                    {
+                      invitation,
+                      rotate: false,
+                      actor: updatedBy,
+                      organisationScope:
+                        resolveRegistrationLinkOrganisationScope(),
+                      frontendOrigin:
+                        resolveRegistrationLinkFrontendOrigin() ?? "",
+                    },
+                  )
+                  // A value-level issuance failure must roll back creation too.
+                  if (!result.ok)
+                    return yield* new InvitationCreationFailed({
+                      message: result.error,
+                    })
+                  return {
+                    __typename: "SaveInvitationSuccess" as const,
+                    invitation: toGraphQLInvitation(result.invitation),
+                    registrationLinkUrl: result.registrationLinkUrl,
+                    expiresAt: result.expiresAt,
+                  }
+                }
+                return {
+                  __typename: "SaveInvitationSuccess" as const,
+                  invitation: toGraphQLInvitation(invitation),
+                }
+              }),
+            )
+            .pipe(
+              Effect.provideService(immediateTransactionRequested, true),
+              Effect.catchTag("InvitationCreationFailed", (error) =>
+                Effect.succeed({
+                  __typename: "SaveInvitationFailure" as const,
+                  error: error.message,
+                }),
+              ),
+              Effect.catchTag("SqlError", () =>
+                Effect.succeed({
+                  __typename: "SaveInvitationFailure" as const,
+                  error:
+                    "Could not create Invitation. Check for an existing pending Invitation before retrying; if none exists, contact your administrator.",
+                }),
+              ),
+            )
         }),
 
       updateInvitation: (
@@ -3846,7 +3552,7 @@ export const systemSchema = Effect.gen(function* () {
           }
 
           const frontendOrigin = resolveRegistrationLinkFrontendOrigin()
-          const result = yield* issueRegistrationLink({
+          const result = yield* issueRegistrationLink(yield* SettingsQueries, {
             invitation: existing,
             rotate: false,
             actor: context._userDetails.by,
@@ -3992,7 +3698,7 @@ export const systemSchema = Effect.gen(function* () {
           }
 
           const frontendOrigin = resolveRegistrationLinkFrontendOrigin()
-          const result = yield* issueRegistrationLink({
+          const result = yield* issueRegistrationLink(yield* SettingsQueries, {
             invitation: existing,
             rotate: true,
             actor: context._userDetails.by,
@@ -4072,9 +3778,11 @@ export const systemSchema = Effect.gen(function* () {
           providerUserId: string
           input: {
             roleIds: readonly string[]
+            firstName?: string | null
+            lastName?: string | null
           }
         },
-        _context: UserContext,
+        context: UserContext,
       ) =>
         Effect.gen(function* () {
           const settingsQueries = yield* SettingsQueries
@@ -4088,6 +3796,30 @@ export const systemSchema = Effect.gen(function* () {
             return {
               __typename: "UpdateProviderUserFailure" as const,
               error: "Provider user not found",
+            }
+          }
+
+          const changesNames =
+            args.input.firstName != null || args.input.lastName != null
+          if (changesNames && providerUser.provider !== "passkey") {
+            return {
+              __typename: "UpdateProviderUserFailure" as const,
+              error:
+                "Names for this user are managed by the external identity provider.",
+            }
+          }
+
+          const firstName =
+            args.input.firstName?.trim() ?? providerUser.firstName
+          const lastName = args.input.lastName?.trim() ?? providerUser.lastName
+          if (
+            changesNames &&
+            (firstName.length > 128 || lastName.length > 128)
+          ) {
+            return {
+              __typename: "UpdateProviderUserFailure" as const,
+              error:
+                "First and last names must each be at most 128 characters.",
             }
           }
 
@@ -4107,7 +3839,19 @@ export const systemSchema = Effect.gen(function* () {
           // Wrap in transaction for atomicity
           yield* sql.withTransaction(
             Effect.gen(function* () {
-              // Replace role assignments
+              if (changesNames) {
+                yield* settingsQueries.updateProviderUserNames(
+                  args.providerUserId,
+                  {
+                    firstName,
+                    lastName,
+                    name:
+                      [firstName, lastName].filter(Boolean).join(" ") ||
+                      providerUser.email,
+                  },
+                  context._userDetails.by,
+                )
+              }
               yield* settingsQueries.replaceProviderUserRoles(
                 args.providerUserId,
                 args.input.roleIds,
@@ -4115,7 +3859,6 @@ export const systemSchema = Effect.gen(function* () {
             }),
           )
 
-          // Fetch updated provider user data
           const updated = yield* settingsQueries.queryProviderUserDetail(
             args.providerUserId,
           )
@@ -4132,7 +3875,20 @@ export const systemSchema = Effect.gen(function* () {
             __typename: "UpdateProviderUserSuccess" as const,
             providerUser: updated,
           }
-        }),
+        }).pipe(
+          Effect.tapError((error) =>
+            Effect.logError("updateProviderUser: database operation failed", {
+              providerUserId: args.providerUserId,
+              error,
+            }),
+          ),
+          Effect.catchTag("SqlError", () =>
+            Effect.succeed({
+              __typename: "UpdateProviderUserFailure" as const,
+              error: "Failed to update user. Please try again.",
+            }),
+          ),
+        ),
 
       updateNotificationPreferences: (
         _parent: unknown,
@@ -4190,279 +3946,12 @@ export const systemSchema = Effect.gen(function* () {
         _parent: unknown,
         args: { executionId: string },
         context: UserContext,
-      ) =>
-        Effect.gen(function* () {
-          const auth = yield* AuthorizationService
-          const executionQueries = yield* ExecutionQueries
-          const stepCompletionOps = yield* StepCompletionOperations
-          const flowExecutionOps = yield* FlowExecutionOperations
-          const queueService = yield* QueueService
-          const sql = yield* SqlClient.SqlClient
-
-          // 1. Get execution
-          const executions = yield* executionQueries.getExecutions([
-            args.executionId,
-          ])
-          const execution = executions[0]
-          if (!execution) {
-            return {
-              success: false,
-              restartedCount: 0,
-              error: `Execution not found: ${args.executionId}`,
-            }
-          }
-
-          // 2. Build principal and resource
-          const principal = yield* buildStepPrincipal(context)
-          const resource = new AuthExecution(
-            args.executionId,
-            execution.startedByEmail,
-            execution.processPath,
-            [], // empty orgUnitPaths - only checking startedBy
-          )
-
-          // 3. Check authorization
-          const canRestart = yield* auth.canRestartExecution(
-            principal,
-            resource,
-          )
-          if (!canRestart) {
-            return {
-              success: false,
-              restartedCount: 0,
-              error: "Not authorized to restart this execution",
-            }
-          }
-
-          // 4. Query failed todos
-          const failedTodos =
-            yield* stepCompletionOps.queryFailedTodosForExecution(
-              args.executionId,
-            )
-
-          // 5. Get process ID for events
-          const processId = yield* flowExecutionOps.getProcessIdForExecution(
-            args.executionId,
-          )
-
-          // 5b. Todo-less system-start restart:
-          // - Failed roleless start (execution-level failure, no Todo), or
-          // - Pending external restart outbox after reopen committed but SQS
-          //   drain failed (status is already Running; sequential GraphQL retry
-          //   must still recover the outbox).
-          if (failedTodos.length === 0) {
-            const isRolelessStart = execution.startStepRoleId === null
-            const isFailedSystemStart =
-              execution.status === "Failed" &&
-              isRolelessStart &&
-              execution.abandonedReason != null
-
-            const pendingExternalRestart =
-              isRolelessStart &&
-              execution.status !== "Abandoned" &&
-              (yield* hasPendingSystemStartRestartDispatch(args.executionId))
-
-            if (!isFailedSystemStart && !pendingExternalRestart) {
-              return {
-                success: false,
-                restartedCount: 0,
-                error: "No failed todos found for this execution",
-              }
-            }
-
-            return yield* restartFailedSystemStartExecution({
-              executionId: args.executionId,
-              stepId: execution.startStepId,
-              stepPath: execution.startStepPath,
-              processId,
-            })
-          }
-
-          // Helper to enqueue all jobs (system step re-execution + event notifications)
-          const systemStepTodos = failedTodos.filter((t) => t.isSystemStep)
-          const enqueueJobs = Effect.gen(function* () {
-            // Enqueue system-step-execution jobs for each failed system step
-            for (const todo of systemStepTodos) {
-              const retryLimit =
-                yield* flowExecutionOps.getStepRetryLimitByPath(todo.stepPath)
-              yield* queueService.enqueue(
-                SYSTEM_STEP_EXECUTION_QUEUE,
-                {
-                  todoId: todo.todoId,
-                  stepPath: todo.stepPath,
-                  processExecutionId: args.executionId,
-                },
-                {
-                  logicalJobId: `system-step:${todo.todoId}`,
-                  ...(retryLimit === null ? {} : { retryLimit }),
-                },
-              )
-            }
-
-            // Publish event notifications
-            if (failedTodos.length > 0) {
-              yield* queueService.enqueue(TODO_EVENT_QUEUE, {
-                todoIds: failedTodos.map((t) => t.todoId),
-              })
-            }
-
-            yield* queueService.enqueue(EXECUTION_EVENT_QUEUE, {
-              executionId: args.executionId,
-              processId,
-              eventType: "updated",
-            })
-
-            yield* queueService.enqueue(PROCESS_EVENT_QUEUE, {
-              processId,
-              eventType: "updated",
-            })
-          })
-
-          // 6. In transaction: clear failures, reset execution, and enqueue if DB-backed queue
-          yield* sql.withTransaction(
-            Effect.gen(function* () {
-              // Clear todo failures
-              yield* stepCompletionOps.clearTodoFailures(
-                failedTodos.map((t) => t.todoId),
-              )
-
-              // Clear execution finished status
-              yield* stepCompletionOps.clearProcessExecutionFinished(
-                args.executionId,
-              )
-
-              // For DB-backed queues, enqueue inside transaction to avoid lock contention
-              if (queueService.queueInTransaction) {
-                yield* enqueueJobs
-              }
-            }),
-          )
-
-          // For external queues (SQS), enqueue after transaction commits
-          // to ensure data is visible in the database before handlers run
-          if (!queueService.queueInTransaction) {
-            yield* enqueueJobs
-          }
-
-          // 7. Return result
-          return {
-            success: true,
-            restartedCount: failedTodos.length,
-            error: null,
-          }
-        }),
-
+      ) => restartExecution({ ...args, identity: executionIdentity(context) }),
       abandonExecution: (
         _parent: unknown,
         args: { executionId: string; reason?: string | null },
         context: UserContext,
-      ) =>
-        Effect.gen(function* () {
-          const executionQueries = yield* ExecutionQueries
-          const stepCompletionOps = yield* StepCompletionOperations
-          const scheduledFlowOps = yield* ScheduledFlowOperations
-          const flowExecutionOps = yield* FlowExecutionOperations
-          const queueService = yield* QueueService
-          const sqlClient = yield* SqlClient.SqlClient
-
-          // 1. Get execution
-          const executions = yield* executionQueries.getExecutions([
-            args.executionId,
-          ])
-          const execution = executions[0]
-          if (!execution) {
-            return {
-              success: false,
-              error: `Execution not found: ${args.executionId}`,
-            }
-          }
-
-          // 2. Check abandonable status
-          if (!isAbandonableExecutionStatus(execution.status)) {
-            return {
-              success: false,
-              error: "Only running or failed executions can be abandoned",
-            }
-          }
-
-          // 3. Build principal
-          const principal = yield* buildStepPrincipal(context)
-
-          // 4. Step-based authorization check
-          const abandonAuthorization =
-            yield* checkExecutionAbandonAuthorization(
-              principal,
-              args.executionId,
-              execution.status,
-              { startStepPath: execution.startStepPath },
-            )
-
-          if (!abandonAuthorization.hasAbandonableSteps) {
-            return {
-              success: false,
-              error: "No active steps found for this execution",
-            }
-          }
-
-          if (!abandonAuthorization.authorized) {
-            return {
-              success: false,
-              error: "Not authorized to abandon this execution",
-            }
-          }
-
-          // 5. Get processId for events
-          const processId = yield* flowExecutionOps.getProcessIdForExecution(
-            args.executionId,
-          )
-
-          // 6. In transaction: abandon execution, soft-delete todos, delete scheduled flows
-          const deletedTodoIds = yield* sqlClient.withTransaction(
-            Effect.gen(function* () {
-              yield* stepCompletionOps.setProcessExecutionAbandoned(
-                args.executionId,
-                args.reason ?? undefined,
-              )
-              const todoIds =
-                yield* stepCompletionOps.softDeleteActiveTodosForExecution(
-                  args.executionId,
-                )
-              yield* scheduledFlowOps.deleteScheduledFlowsForExecution(
-                args.executionId,
-              )
-
-              return todoIds
-            }),
-          )
-
-          // 7. Enqueue event notifications after transaction commits
-          yield* Effect.gen(function* () {
-            yield* queueService.enqueue(EXECUTION_EVENT_QUEUE, {
-              executionId: args.executionId,
-              processId,
-              eventType: "updated",
-            })
-
-            // Only enqueue todo events if there were deleted todos
-            if (deletedTodoIds.length > 0) {
-              yield* queueService.enqueue(TODO_EVENT_QUEUE, {
-                todoIds: deletedTodoIds,
-              })
-            }
-
-            yield* queueService.enqueue(PROCESS_EVENT_QUEUE, {
-              processId,
-              eventType: "updated",
-            })
-          })
-
-          // 7. Return success
-          return {
-            success: true,
-            error: null,
-          }
-        }),
-
+      ) => abandonExecution({ ...args, identity: executionIdentity(context) }),
       requestUploadUrl: (
         _parent: unknown,
         args: {
@@ -4507,18 +3996,26 @@ export const systemSchema = Effect.gen(function* () {
             })
           }
 
-          // Create file row in DB with the current user as the owner
-          const principal = yield* buildPrincipal(context)
+          // Preserve the caller's machine identity for deployment artifacts.
+          const principal = yield* buildStepPrincipal(context)
           const fileId = yield* fileOps.createFile(
             store.id,
             args.contentType ?? undefined,
-            principal.uid.id,
+            principal.uid.type === "PF::ServiceAccount"
+              ? `service-account:${principal.uid.id}`
+              : principal.uid.id,
           )
 
           // Request upload URL from storage backend
           return yield* docStoreService.requestUploadUrl({
             fileId,
             storePrefix: store.name,
+            ...(context.jwt?.properties.workload && {
+              expiresAt: Math.min(
+                context.jwt.properties.workload.expiresAt,
+                context.jwt.exp * 1000,
+              ),
+            }),
             ...(args.contentType != null && {
               contentType: args.contentType,
             }),
@@ -4547,7 +4044,7 @@ export const systemSchema = Effect.gen(function* () {
           const docStoreService = yield* DocumentStoreService
 
           // Build principal first (for consistent timing whether file exists or not)
-          const principal = yield* buildPrincipal(context)
+          const principal = yield* buildStepPrincipal(context)
 
           // Look up file owner info for authorization and store info for cleanup
           const fileInfo = yield* fileOps.getFileOwnerInfo(args.fileId)
@@ -4585,7 +4082,7 @@ export const systemSchema = Effect.gen(function* () {
             yield* docStoreService
               .deleteFile(args.fileId, fileWithStore.storeName)
               .pipe(
-                Effect.catchAll((error: DocumentStoreError) =>
+                Effect.catch((error: DocumentStoreError) =>
                   Effect.log("Failed to delete storage object (best-effort)", {
                     fileId: args.fileId,
                     storeName: fileWithStore.storeName,

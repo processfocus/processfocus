@@ -1,0 +1,33 @@
+---
+title: SLAs and KPIs
+description: Set time targets for work and measure how often you meet them.
+---
+
+A **service-level agreement (SLA)** sets a time target for a process or step.
+A **key performance indicator (KPI)** measures performance over time. For
+example, shipping an order within eight business hours is an SLA target.
+The percentage of orders that met that target last month is a KPI.
+
+## Set an SLA for a process or step
+
+Use a process SLA when the target applies to an entire run of a
+[process](/docs/concepts/processes/). Use a step SLA when the
+target applies to one part of the work, such as approving an order within
+two business hours. The step that starts a process cannot have its own SLA.
+
+See the [SLAs reference](/docs/reference/processes/slas/) for configuration
+examples.
+
+Business-hour targets follow the organisation’s
+[business calendar](/docs/reference/organisation-structure/settings/#business-calendar).
+For example, if your working hours are 09:00 to 17:00 on weekdays, an
+eight-business-hour target for an order received at 16:00 on Friday falls at
+16:00 on Monday, assuming neither day is a holiday.
+
+## Measure performance with a KPI
+
+Choose a measure that answers a question about the process. To see how
+consistently orders ship on time, divide the number of orders shipped within
+the SLA by the total number of orders shipped in the same reporting period.
+That measure describes the group of orders; the SLA is the target each
+individual order is measured against.

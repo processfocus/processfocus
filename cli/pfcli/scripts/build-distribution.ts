@@ -1,5 +1,6 @@
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { generateReference } from "./generate-reference"
 
 const projectRoot = resolve(import.meta.dir, "..")
 const workspaceRoot = resolve(projectRoot, "../..")
@@ -21,7 +22,9 @@ mkdirSync(dist, { recursive: true })
 
 const build = async (entrypoint: string, naming: string) => {
   const result = await Bun.build({
-    define: { PFCLI_DISTRIBUTION_BUILD: "true" },
+    define: {
+      PFCLI_DISTRIBUTION_BUILD: "true",
+    },
     entrypoints: [resolve(projectRoot, entrypoint)],
     outdir: dist,
     naming,
@@ -56,6 +59,7 @@ await build(
   "prepare-deployment-artifact.mjs",
 )
 await build("src/main.ts", "main.mjs")
+await build("src/bundle-organisation-main.ts", "bundle-organisation.mjs")
 
 cpSync(
   resolve(workspaceRoot, "packages/auth-policy/cedar"),
@@ -67,3 +71,5 @@ cpSync(
   resolve(dist, "resources/system-migrations"),
   { recursive: true },
 )
+
+await generateReference(dist)

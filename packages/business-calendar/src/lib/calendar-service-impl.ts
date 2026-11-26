@@ -69,8 +69,8 @@ export const makeBusinessCalendarService = (
     // Create timezone zone for local time conversions
     // Defaults to UTC if no timezone specified
     const timezone = config.timezone
-      ? DateTime.zoneUnsafeMakeNamed(config.timezone)
-      : DateTime.zoneUnsafeMakeNamed("UTC")
+      ? DateTime.zoneMakeNamedUnsafe(config.timezone)
+      : DateTime.zoneMakeNamedUnsafe("UTC")
 
     /**
      * Get date/time parts in the calendar's local timezone.
@@ -89,15 +89,14 @@ export const makeBusinessCalendarService = (
       year: number,
       month: number,
       day: number,
-      hours: number,
-      minutes: number,
+      hour: number,
+      minute: number,
     ): DateTime.Utc => {
       // Create a zoned datetime in the local timezone, treating input as local time
-      const zoned = DateTime.unsafeMakeZoned(
-        { year, month, day, hours, minutes, seconds: 0, millis: 0 },
+      const zoned = DateTime.makeZonedUnsafe(
+        { year, month, day, hour, minute, second: 0, millisecond: 0 },
         { timeZone: timezone, adjustForTimeZone: true },
       )
-      // Convert to UTC
       return DateTime.toUtc(zoned)
     }
 
@@ -119,12 +118,12 @@ export const makeBusinessCalendarService = (
       year: number,
     ): Effect.Effect<HolidayInstance[], never, never> =>
       calculateHolidaysForYear(config.holidays, year).pipe(
-        Effect.catchAllCause(
+        Effect.catchCause(
           (cause): Effect.Effect<HolidayInstance[], never, never> => {
             // Interrupts and defects are re-raised so they are never converted
             // into a cacheable success []. Typed Fail causes log and fall back
             // to [] (calendar ops keep working with degraded holiday data).
-            if (Cause.isInterrupted(cause) || Cause.isDie(cause)) {
+            if (Cause.hasInterrupts(cause) || Cause.hasDies(cause)) {
               return Effect.failCause(cause as Cause.Cause<never>)
             }
             return Effect.logWarning(
@@ -196,7 +195,7 @@ export const makeBusinessCalendarService = (
               // Joiner interrupts still propagate (catchAll does not swallow them).
               return yield* restore(
                 Deferred.await(acquired.deferred).pipe(
-                  Effect.catchAll(() => getHolidaysForYearCached(year)),
+                  Effect.catch(() => getHolidaysForYearCached(year)),
                 ),
               )
             case "owner": {
@@ -205,7 +204,7 @@ export const makeBusinessCalendarService = (
                   Effect.gen(function* () {
                     // Cooperative yield so tests / cancellation can land
                     // after InFlight registration.
-                    yield* Effect.yieldNow()
+                    yield* Effect.yieldNow
                     return yield* computeHolidaysForYear(year)
                   }),
                 ),
@@ -463,9 +462,6 @@ export const makeBusinessCalendarService = (
       )
     }
 
-    /**
-     * Service implementation
-     */
     const service: BusinessCalendarServiceShape = {
       isBusinessDay: (date) =>
         Effect.gen(function* () {
@@ -488,7 +484,7 @@ export const makeBusinessCalendarService = (
           // the probe's UTC y/m/d would misclassify local midnight in UTC+ zones
           // (e.g. Europe/Berlin 00:00 on Christmas is still 23:00 UTC previous day).
           const holidays = yield* getHolidaysForYearCached(parts.year)
-          const civilDateForHoliday = DateTime.unsafeMake({
+          const civilDateForHoliday = DateTime.makeUnsafe({
             year: parts.year,
             month: parts.month,
             day: parts.day,
@@ -497,7 +493,6 @@ export const makeBusinessCalendarService = (
             return false
           }
 
-          // Check required period
           if (!isWithinRequiredPeriod(date)) {
             return false
           }
@@ -532,8 +527,8 @@ export const makeBusinessCalendarService = (
           // Use local timezone to determine the current time of day
           const parts = getLocalParts(datetime)
           const currentTime: TimeOfDay = {
-            hour: parts.hours,
-            minute: parts.minutes,
+            hour: parts.hour,
+            minute: parts.minute,
           }
 
           // Check exception first
@@ -547,7 +542,6 @@ export const makeBusinessCalendarService = (
             return false
           }
 
-          // Get effective schedule
           const schedule = getEffectiveWeeklySchedule(datetime)
           const daySchedule = getScheduleForDayOfWeek(
             schedule,
@@ -630,8 +624,8 @@ export const makeBusinessCalendarService = (
             // Use local timezone to determine current time of day
             const parts = getLocalParts(current)
             const currentTime: TimeOfDay = {
-              hour: parts.hours,
-              minute: parts.minutes,
+              hour: parts.hour,
+              minute: parts.minute,
             }
 
             // Get current range
@@ -672,8 +666,8 @@ export const makeBusinessCalendarService = (
             // Check if there are more ranges today
             const newParts = getLocalParts(current)
             const newTime: TimeOfDay = {
-              hour: newParts.hours,
-              minute: newParts.minutes,
+              hour: newParts.hour,
+              minute: newParts.minute,
             }
 
             let foundNextRange = false
@@ -748,7 +742,6 @@ export const makeBusinessCalendarService = (
             0,
             0,
           )
-          // Then go back one day
           current = DateTime.add(current, { days: -1 })
 
           // Safety limit to prevent infinite loop if no business days exist
@@ -927,8 +920,8 @@ export const makeBusinessCalendarService = (
           // Use local timezone to determine current time of day
           const parts = getLocalParts(datetime)
           const currentTime: TimeOfDay = {
-            hour: parts.hours,
-            minute: parts.minutes,
+            hour: parts.hour,
+            minute: parts.minute,
           }
 
           // Get current ranges
@@ -1025,8 +1018,8 @@ export const makeBusinessCalendarService = (
           // start/end boundary days use a partial window. O(minutes) → O(days).
           const startParts = getLocalParts(start)
           const endParts = getLocalParts(end)
-          const startMinuteOfDay = startParts.hours * 60 + startParts.minutes
-          const endMinuteOfDay = endParts.hours * 60 + endParts.minutes
+          const startMinuteOfDay = startParts.hour * 60 + startParts.minute
+          const endMinuteOfDay = endParts.hour * 60 + endParts.minute
 
           if (isSameLocalDate(start, end)) {
             const minutes = yield* businessMinutesOnDayInWindow(
@@ -1103,7 +1096,7 @@ export const makeBusinessCalendarService = (
           // Match holidays by local civil date (see isBusinessDay).
           const parts = getLocalParts(date)
           const holidays = yield* getHolidaysForYearCached(parts.year)
-          const civilDateForHoliday = DateTime.unsafeMake({
+          const civilDateForHoliday = DateTime.makeUnsafe({
             year: parts.year,
             month: parts.month,
             day: parts.day,
@@ -1136,7 +1129,6 @@ export const makeBusinessCalendarService = (
             const rangeStart = DateTime.toEpochMillis(start)
             const rangeEnd = DateTime.toEpochMillis(end)
 
-            // Check for overlap
             return periodStart <= rangeEnd && periodEnd >= rangeStart
           }),
         ),

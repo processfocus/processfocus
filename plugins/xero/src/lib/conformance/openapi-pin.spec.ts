@@ -39,8 +39,7 @@ const sampleInput = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
     postalCode: "6011",
     country: "New Zealand",
   },
-  productSku: "TBS-100",
-  agreedPrice: "100.00",
+  lines: [{ productSku: "TBS-100", quantity: 1, unitAmount: "100.00" }],
   currency: "NZD",
   reference: "ORD-1001",
   date: "2026-03-15",
@@ -65,11 +64,13 @@ describe("Xero Accounting OpenAPI pin", () => {
       sampleInput,
       "Ada Lovelace",
       undefined,
+      true,
     )
     const updated = xeroContactWritePayload(
       sampleInput,
       "Ada Lovelace",
       "33333333-3333-4333-8333-333333333333",
+      false,
     )
     const contact = created.Contacts[0]
     const updatedContact = updated.Contacts[0]

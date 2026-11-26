@@ -4,6 +4,9 @@ import { listDelegations } from "./actions"
 import { DelegationsClient } from "./delegations-client"
 import { BasePage } from "@/lib/effect/runtime"
 
+// The authenticated layout can omit this page while checking the session.
+export const instant = false
+
 const PersonalTokens = BasePage.build(() =>
   Effect.gen(function* () {
     const result = yield* Effect.promise(() => listDelegations())

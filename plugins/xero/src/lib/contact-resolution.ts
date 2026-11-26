@@ -40,10 +40,11 @@ export interface XeroContactOperations {
     contact: ResolvedXeroContact,
     input: IssueAuthorisedSalesInvoiceInput,
     idempotencyKey: string,
+    name: string,
   ) => Effect.Effect<ResolvedXeroContact, XeroInvoiceError>
 }
 
-export const conflictContactName = ({
+const conflictContactName = ({
   customerName,
   orderNumber,
 }: {
@@ -91,6 +92,7 @@ const recoverOriginalNameOrCreateSuffix = (
         recoveredOriginal,
         input,
         xeroIdempotencyKey(todoId, "contact.update"),
+        input.customer.name,
       )
     }
     return yield* contacts.create(
@@ -122,7 +124,31 @@ export const resolveInvoiceContact = (
     const named = yield* contacts.findByName(conflictName)
     const priorSuffixed = onlyItem(named)
     if (priorSuffixed !== undefined) {
-      return priorSuffixed.contactId
+      return (yield* contacts.update(
+        priorSuffixed,
+        input,
+        xeroIdempotencyKey(todoId, "contact.update"),
+        conflictName,
+      )).contactId
+    }
+    if (input.legacyReference && input.legacyReference !== input.reference) {
+      const legacyNamed = yield* contacts.findByName(
+        conflictContactName({
+          customerName: input.customer.name,
+          orderNumber: input.legacyReference,
+        }),
+      )
+      const legacySuffixed = onlyItem(legacyNamed)
+      if (legacySuffixed !== undefined)
+        return (yield* contacts.update(
+          legacySuffixed,
+          input,
+          xeroIdempotencyKey(todoId, "contact.update"),
+          conflictContactName({
+            customerName: input.customer.name,
+            orderNumber: input.legacyReference,
+          }),
+        )).contactId
     }
 
     const emailMatches = yield* contacts.findByEmail(input.customer.email)
@@ -134,6 +160,7 @@ export const resolveInvoiceContact = (
         uniqueMatch,
         input,
         xeroIdempotencyKey(todoId, "contact.update"),
+        input.customer.name,
       )
       return updated.contactId
     }
@@ -157,7 +184,7 @@ export const resolveInvoiceContact = (
         xeroIdempotencyKey(todoId, "contact.create"),
       )
       .pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           isContactNameConflict(error.message)
             ? recoverOriginalNameOrCreateSuffix(
                 contacts,

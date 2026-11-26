@@ -7,13 +7,14 @@ import { flattenOrgUnits } from "@/lib/org-chart-data"
 import { getDepthConfig } from "@/lib/org-chart-depth-config"
 import { layoutOrgChart } from "@/lib/org-chart-layout"
 
+// The authenticated layout can omit this page while checking the session.
+export const instant = false
+
 const OrgChartPage = Effect.fn("OrgChartPage")(function* () {
   // Fetch data with error handling - return empty state on error
   const data = yield* fetchOrgChartDataEffect().pipe(
-    Effect.catchAll((error) => {
-      // Log error for debugging
+    Effect.catch((error) => {
       console.error("Failed to fetch org chart data:", error.message)
-      // Return empty data structure for graceful degradation
       return Effect.succeed({
         orgLevels: [],
         org: {
@@ -26,7 +27,6 @@ const OrgChartPage = Effect.fn("OrgChartPage")(function* () {
     }),
   )
 
-  // Handle empty data case
   if (data.orgLevels.length === 0) {
     return (
       <div className="flex h-full flex-col">
@@ -45,21 +45,17 @@ const OrgChartPage = Effect.fn("OrgChartPage")(function* () {
     )
   }
 
-  // Create mapping from level name to depth (maxDepth)
   const levelToDepth = new Map(
     data.orgLevels.map((level) => [level.level, level.maxDepth]),
   )
 
-  // Flatten nested structure to flat array with parentId
   // Type assertion is safe because the GraphQL type is structurally compatible with RecursiveOrgUnit
   const flatOrgUnits = flattenOrgUnits(
     data.org as Parameters<typeof flattenOrgUnits>[0],
   )
 
-  // Layout the org chart
   const { nodes, edges } = layoutOrgChart(flatOrgUnits)
 
-  // Enrich nodes with depth information from levelToDepth mapping
   const enrichedNodes = nodes.map((node) => ({
     ...node,
     data: {
@@ -68,7 +64,6 @@ const OrgChartPage = Effect.fn("OrgChartPage")(function* () {
     },
   }))
 
-  // Create legend items from actual org levels
   const legendItems = data.orgLevels
     .sort((a, b) => a.maxDepth - b.maxDepth)
     .map((level) => {

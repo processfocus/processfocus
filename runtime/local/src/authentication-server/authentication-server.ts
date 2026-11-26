@@ -1,11 +1,5 @@
 import { parseArgs as utilParseArgs } from "node:util"
-import * as Otel from "@effect/opentelemetry"
-import {
-  FetchHttpClient,
-  type HttpApp,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
@@ -19,35 +13,39 @@ import {
   Effect,
   Exit,
   Layer,
-  LogLevel,
   Logger,
   Option,
-  Runtime,
+  References,
   Schema,
 } from "effect"
+import { FetchHttpClient } from "effect/http"
 import {
-  DelegationSessionServiceIsolated,
+  AuthenticationDelegationIdentityFactsLive,
   buildFrontendClients,
+  createAuthenticationFetchHandler,
   createAuthenticationServer,
-} from "@pf/auth-api"
+} from "@pf/auth-api/issuer"
 import {
   DatabaseConnectionInfo,
   LOCAL_SQLITE_BUSY_TIMEOUT_MS,
 } from "@pf/db-info"
+import { DelegationCredentialServiceLive } from "@pf/delegation"
+import { NumberFromString } from "@pf/form-schema"
 import { TypedSqliteDrizzleLayer } from "@pf/service-drizzle-sqlite"
 import {
   SqliteAuthenticationDatabaseLive,
   SqliteDelegationDatabaseLive,
   SqliteOpenAuthStorageServiceLive,
   removeExpiredOAuthStorage,
-} from "@pf/sqlite-operations"
+} from "@pf/sqlite-operations/authentication"
 import {
   serveOnExactPort,
   serveWithPortFallback,
   writePortFile,
 } from "../server-utils"
+import { LocalRuntimeAuditLive } from "../services/audit"
 import { makeLocalSqlClientLayer } from "../services/local-sql-client-layer"
-import { AuthenticationAuthorizationLive } from "./authorization"
+import { LocalPolicyRevisionLive } from "../services/policy-revision"
 
 // CLI argument parsing
 class InvalidUsageError extends Data.TaggedError("InvalidUsageError")<{
@@ -56,7 +54,12 @@ class InvalidUsageError extends Data.TaggedError("InvalidUsageError")<{
 
 const ParsedArgsSchema = Schema.Struct({
   port: Schema.optional(
-    Schema.NumberFromString.pipe(Schema.int(), Schema.between(1, 65535)),
+    NumberFromString.pipe(
+      Schema.check(
+        Schema.isInt(),
+        Schema.isBetween({ minimum: 1, maximum: 65535 }),
+      ),
+    ),
   ),
 })
 
@@ -79,7 +82,7 @@ const parseArgs = (
       catch: () => new InvalidUsageError({ _: undefined }),
     })
 
-    return yield* Schema.decodeUnknown(ParsedArgsSchema)({
+    return yield* Schema.decodeUnknownEffect(ParsedArgsSchema)({
       port: parseResult.values.port,
     }).pipe(Effect.mapError(() => new InvalidUsageError({ _: undefined })))
   })
@@ -96,13 +99,13 @@ interface CliConfig {
   readonly bypassAuthEmail: Option.Option<string>
 }
 
-const CliConfig = Context.GenericTag<CliConfig>(
+const CliConfig = Context.Service<CliConfig>(
   "@pf/runtime-local/AuthServerCliConfig",
 )
 
 const resolveCliConfig = Effect.gen(function* () {
   const args = yield* parseArgs(process.argv.slice(2)).pipe(
-    Effect.catchAll((error) => {
+    Effect.catch((error) => {
       console.error(
         "Invalid arguments. Usage: bun run authentication-server.ts [--port PORT | -p PORT]",
       )
@@ -116,8 +119,8 @@ const resolveCliConfig = Effect.gen(function* () {
     }),
   )
 
-  const bypassAuth = yield* Config.option(Config.string("PF_BYPASS_AUTH"))
-  const basePort = yield* Config.withDefault(Config.number("PORT"), 4020)
+  const bypassAuth = yield* Config.option(Config.String("PF_BYPASS_AUTH"))
+  const basePort = yield* Config.withDefault(Config.Number("PORT"), 4020)
 
   if (Option.isSome(bypassAuth)) {
     yield* Effect.logWarning(
@@ -126,7 +129,7 @@ const resolveCliConfig = Effect.gen(function* () {
   }
 
   return {
-    port: Option.fromNullable(args.port),
+    port: Option.fromNullishOr(args.port),
     basePort,
     bypassAuthEmail: bypassAuth,
   } satisfies CliConfig
@@ -139,7 +142,8 @@ const DatabaseLayer = TypedSqliteDrizzleLayer.pipe(
   ),
 )
 
-const AuthenticationLayer = SqliteAuthenticationDatabaseLive.pipe(
+const AuthenticationLayer = AuthenticationDelegationIdentityFactsLive.pipe(
+  Layer.provideMerge(SqliteAuthenticationDatabaseLive),
   Layer.provideMerge(DatabaseLayer),
 )
 
@@ -147,13 +151,14 @@ const StorageLayer = SqliteOpenAuthStorageServiceLive.pipe(
   Layer.provideMerge(AuthenticationLayer),
 )
 
-const AppLayer = DelegationSessionServiceIsolated.pipe(
+const AppLayer = DelegationCredentialServiceLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
+      LocalRuntimeAuditLive,
       StorageLayer,
       SqliteDelegationDatabaseLive.pipe(Layer.provide(DatabaseLayer)),
       FetchHttpClient.layer,
-      AuthenticationAuthorizationLive,
+      LocalPolicyRevisionLive,
     ),
   ),
 )
@@ -161,16 +166,16 @@ const AppLayer = DelegationSessionServiceIsolated.pipe(
 /**
  * OpenTelemetry NodeSdk layer for tracing authentication operations
  */
-const NodeSdkLive = Layer.unwrapEffect(
+const NodeSdkLive = Layer.unwrap(
   Effect.gen(function* () {
-    const otlpMetricsUrl = yield* Config.string("OTLP_METRICS_URL").pipe(
+    const otlpMetricsUrl = yield* Config.String("OTLP_METRICS_URL").pipe(
       Config.withDefault("http://127.0.0.1:4318/v1/metrics"),
     )
-    const otlpTracesUrl = yield* Config.string("OTLP_TRACES_URL").pipe(
+    const otlpTracesUrl = yield* Config.String("OTLP_TRACES_URL").pipe(
       Config.withDefault("http://127.0.0.1:4318/v1/traces"),
     )
 
-    return Otel.NodeSdk.layer(() => ({
+    return NodeSdk.layer(() => ({
       resource: { serviceName: "authentication-server" },
       metricReader: new PeriodicExportingMetricReader({
         exporter: new OTLPMetricExporter({
@@ -186,54 +191,6 @@ const NodeSdkLive = Layer.unwrapEffect(
   }),
 )
 
-/**
- * Create fetch handler that wraps requests with OpenTelemetry spans.
- * The span name `${method} ${pathname}` becomes the trace name.
- *
- * Runs the HTTP app directly as an Effect within the span so that
- * child spans (sql.transaction, auth.success, etc.) are properly connected.
- */
-const createFetchHandler = (
-  app: HttpApp.Default<never>,
-  runtime: Runtime.Runtime<never>,
-): ((req: Request) => Promise<Response>) => {
-  const runPromise = Runtime.runPromise(runtime)
-  return (req: Request): Promise<Response> => {
-    const url = new URL(req.url)
-    return runPromise(
-      Effect.gen(function* () {
-        // Run the HTTP app directly as an Effect (not via Promise)
-        // so child spans are connected to this parent span
-        const serverRequest = HttpServerRequest.fromWeb(req)
-        const response = yield* app.pipe(
-          Effect.provideService(
-            HttpServerRequest.HttpServerRequest,
-            serverRequest,
-          ),
-        )
-        const webResponse = HttpServerResponse.toWeb(response, { runtime })
-        yield* Effect.annotateCurrentSpan(
-          "http.status_code",
-          webResponse.status,
-        )
-        return webResponse
-      }).pipe(
-        Effect.withSpan(`${req.method} ${url.pathname}`, {
-          attributes: {
-            "http.method": req.method,
-            "http.url": url.pathname,
-          },
-        }),
-        Effect.catchAllCause(() =>
-          Effect.logError("Unhandled auth server request failure").pipe(
-            Effect.as(new Response("Internal Server Error", { status: 500 })),
-          ),
-        ),
-      ),
-    )
-  }
-}
-
 const main = Effect.gen(function* () {
   const cliConfig = yield* CliConfig
 
@@ -248,14 +205,14 @@ const main = Effect.gen(function* () {
       yield* Effect.log(`🧹 Removed ${count} expired OAuth token(s)`)
     }
   }).pipe(
-    Effect.catchAllCause((cause) =>
+    Effect.catchCause((cause) =>
       Effect.logError("OAuth cleanup failed", cause),
     ),
-    Effect.fork,
+    Effect.forkChild,
   )
 
   // Build frontend clients (with hashed secrets if configured)
-  const frontendClients = yield* Effect.promise(buildFrontendClients)
+  const frontendClients = yield* buildFrontendClients()
 
   // Create the authentication server issuer
   // When PF_BYPASS_AUTH is set, use dummy provider for testing
@@ -273,7 +230,7 @@ const main = Effect.gen(function* () {
 
   // Create fetch handler that runs the app with OpenTelemetry tracing
   // The unified runtime has both auth services and OTEL tracer
-  const fetch = createFetchHandler(app, runtime)
+  const fetch = createAuthenticationFetchHandler(app, runtime, "local")
 
   // Start the server - use exact port if specified (strict mode), otherwise fallback
   const server = yield* Option.match(cliConfig.port, {
@@ -318,8 +275,8 @@ Effect.runPromiseExit(
           decorate: (effect) =>
             effect.pipe(
               Effect.provide(NodeSdkLive),
-              Logger.withMinimumLogLevel(LogLevel.Debug),
-              Effect.provide(Logger.pretty),
+              Effect.provideService(References.MinimumLogLevel, "Debug"),
+              Effect.provide(Logger.layer([Logger.consolePretty()])),
             ),
         },
       }),
@@ -329,7 +286,7 @@ Effect.runPromiseExit(
   if (Exit.isFailure(exit)) {
     console.error(
       "Authentication server failed to start:",
-      Cause.pretty(exit.cause, { renderErrorCause: true }),
+      Cause.pretty(exit.cause),
     )
     process.exit(1)
   }

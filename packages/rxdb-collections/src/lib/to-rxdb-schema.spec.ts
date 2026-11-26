@@ -1,5 +1,4 @@
-import { Schema as ES, JSONSchema } from "effect"
-import type { JsonSchema7Object } from "effect/JSONSchema"
+import { Schema as ES } from "effect"
 import { DraftProcessExecutionSchema } from "./rxdb-collections"
 import {
   toRxDbJsonSchema,
@@ -53,6 +52,24 @@ describe("toRxDbProperty", () => {
       minimum: 0,
       maximum: 100,
     })
+  })
+
+  it("drops Effect's safe-integer bounds but keeps explicit bounds", () => {
+    expect(
+      toRxDbProperty({
+        type: "integer",
+        minimum: Number.MIN_SAFE_INTEGER,
+        maximum: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({ type: "integer" })
+
+    expect(
+      toRxDbProperty({
+        type: "integer",
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({ type: "integer", minimum: 0 })
   })
 })
 
@@ -120,7 +137,6 @@ describe("toRxDbJsonSchema", () => {
   it("converts DraftProcessExecutionSchema to RxDB-compatible format", () => {
     const result = toRxDbJsonSchema(DraftProcessExecutionSchema)
 
-    // Validate exact expected output - this catches any regressions
     // Note: _deleted is excluded because RxDB handles it internally via deletedField config
     expect(result).toEqual({
       properties: {
@@ -187,29 +203,10 @@ describe("toRxDbJsonSchema", () => {
   })
 })
 
-describe("Effect Schema JSON generation", () => {
-  it("generates $defs for DateTimeUtc", () => {
-    // Verify Effect Schema generates $defs that we need to handle
-    const generated = JSONSchema.make(
-      DraftProcessExecutionSchema,
-    ) as JsonSchema7Object & {
-      $defs?: Record<string, unknown>
-    }
-
-    // DateTimeUtc typically creates a $ref to a $def
-    // This test documents the behavior we're handling
-    expect(generated.$defs).toBeDefined()
-  })
-
-  it("generates $id: /schemas/unknown for ES.Unknown", () => {
-    const UnknownSchema = ES.Struct({ data: ES.Unknown })
-    const generated = JSONSchema.make(UnknownSchema) as JsonSchema7Object
-
-    // Verify Effect generates the pattern we're handling
-    const dataProp = generated.properties["data"] as unknown as Record<
-      string,
-      unknown
-    >
-    expect(dataProp["$id"]).toBe("/schemas/unknown")
+describe("collection JSON schema", () => {
+  it("inlines date-time definitions into replication fields", () => {
+    const generated = toRxDbJsonSchema(DraftProcessExecutionSchema)
+    expect(generated.properties["lastSaved"]).toMatchObject({ type: "string" })
+    expect(generated.properties["lastSaved"]).not.toHaveProperty("$ref")
   })
 })

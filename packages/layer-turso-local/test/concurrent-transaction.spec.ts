@@ -1,26 +1,152 @@
-import { unlink } from "node:fs/promises"
-import * as SqlClient from "@effect/sql/SqlClient"
+import { existsSync } from "node:fs"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import { ConfigProvider, Effect, Layer } from "effect"
-import { withReadSnapshot } from "@pf/db-info"
+import * as SqlClient from "effect/sql/SqlClient"
+import {
+  isSqlLockError,
+  withImmediateTransaction,
+  withReadSnapshot,
+} from "@pf/db-info"
 import { makeTursoLive } from "../src/index"
 import { describe, expect, it } from "bun:test"
 
-const tempDbPath = () =>
-  `/tmp/test-turso-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+const tempDbPath = async () =>
+  join(await mkdtemp(join(tmpdir(), "test-turso-")), "test.db")
 
 const sqlQuery = (sql: string) => Object.assign([sql], { raw: [sql] })
 
 const cleanupDb = async (dbPath: string) => {
-  await unlink(dbPath).catch(() => {})
-  await unlink(`${dbPath}-wal`).catch(() => {})
-  await unlink(`${dbPath}-shm`).catch(() => {})
+  await rm(dirname(dbPath), { recursive: true })
 }
 
 describe("makeTursoLive", () => {
+  it("removes the database and all sidecars after a failed database operation", async () => {
+    const dbPath = await tempDbPath()
+    const layer = makeTursoLive().pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ SQLITE_DATABASE_PATH: dbPath }),
+        ),
+      ),
+    )
+    const run = async () => {
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            yield* sql.unsafe("CREATE TABLE cleanup_value (value TEXT)")
+            yield* Effect.fail(new Error("operation failed"))
+          }).pipe(Effect.provide(layer)),
+        )
+      } finally {
+        await cleanupDb(dbPath)
+      }
+    }
+    await expect(run()).rejects.toThrow("operation failed")
+    expect(existsSync(dirname(dbPath))).toBe(false)
+  })
+
+  it("excludes a competing process before reads, then progresses and rolls back without replay", async () => {
+    const dbPath = await tempDbPath()
+    const layer = makeTursoLive({ busy_timeout: 25 }).pipe(
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({
+            SQLITE_DATABASE_PATH: dbPath,
+            TURSO_CONCURRENT_TX: "1",
+          }),
+        ),
+      ),
+    )
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql.unsafe(
+            "CREATE TABLE immediate_values (value TEXT NOT NULL)",
+          )
+          const writer = Bun.spawn(
+            [
+              process.execPath,
+              `${import.meta.dir}/fixtures/holding-writer.ts`,
+              dbPath,
+            ],
+            {
+              stdin: "pipe",
+              stdout: "pipe",
+              stderr: "pipe",
+            },
+          )
+          yield* Effect.gen(function* () {
+            const reader = writer.stdout.getReader()
+            const ready = yield* Effect.promise(() => reader.read())
+            expect(new TextDecoder().decode(ready.value)).toBe("ready\n")
+            reader.releaseLock()
+            let bodyRuns = 0
+            const body = Effect.gen(function* () {
+              bodyRuns += 1
+              const rows = yield* sql.unsafe(
+                "SELECT value FROM immediate_values",
+              )
+              yield* sql.unsafe(
+                "INSERT INTO immediate_values VALUES ('callback')",
+              )
+              return rows
+            })
+            const started = Date.now()
+            const error = yield* Effect.flip(
+              withImmediateTransaction(sql, body),
+            )
+            expect(isSqlLockError(error)).toBe(true)
+            expect(bodyRuns).toBe(0)
+            expect(Date.now() - started).toBeLessThan(2000)
+            writer.stdin.write("commit\n")
+            writer.stdin.end()
+            expect(yield* Effect.promise(() => writer.exited)).toBe(0)
+            expect(yield* withImmediateTransaction(sql, body)).toEqual([
+              { value: "competitor" },
+            ])
+            expect(bodyRuns).toBe(1)
+            const failure = yield* Effect.flip(
+              withImmediateTransaction(
+                sql,
+                Effect.gen(function* () {
+                  yield* sql.unsafe(
+                    "INSERT INTO immediate_values VALUES ('rolled back')",
+                  )
+                  return yield* Effect.fail("callback failure")
+                }),
+              ),
+            )
+            expect(failure).toBe("callback failure")
+            expect(
+              yield* sql.unsafe(
+                "SELECT value FROM immediate_values ORDER BY value",
+              ),
+            ).toEqual([{ value: "callback" }, { value: "competitor" }])
+          }).pipe(
+            Effect.ensuring(
+              Effect.promise(async () => {
+                writer.kill()
+                await writer.exited
+              }),
+            ),
+          )
+        }).pipe(Effect.provide(layer)),
+      )
+    } finally {
+      await cleanupDb(dbPath)
+    }
+  }, 10000)
+
   it("keeps a read snapshot stable while another connection commits", async () => {
-    const dbPath = tempDbPath()
-    const config = Layer.setConfigProvider(
-      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    const dbPath = await tempDbPath()
+    const config = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+      ),
     )
     const reader = makeTursoLive().pipe(Layer.provide(config))
     const writer = makeTursoLive().pipe(Layer.provide(config))
@@ -63,9 +189,11 @@ describe("makeTursoLive", () => {
   })
 
   it("uses WAL-backed transactions", async () => {
-    const dbPath = tempDbPath()
-    const ConfigLayer = Layer.setConfigProvider(
-      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    const dbPath = await tempDbPath()
+    const ConfigLayer = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+      ),
     )
     const TestLayer = makeTursoLive().pipe(Layer.provide(ConfigLayer))
 
@@ -94,9 +222,11 @@ describe("makeTursoLive", () => {
   })
 
   it("makes writes visible across long-lived clients", async () => {
-    const dbPath = tempDbPath()
-    const ConfigLayer = Layer.setConfigProvider(
-      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    const dbPath = await tempDbPath()
+    const ConfigLayer = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+      ),
     )
     const WriterLayer = makeTursoLive().pipe(Layer.provide(ConfigLayer))
     const ReaderLayer = makeTursoLive().pipe(Layer.provide(ConfigLayer))
@@ -140,9 +270,11 @@ describe("makeTursoLive", () => {
   })
 
   it("supports partial unique-index upserts", async () => {
-    const dbPath = tempDbPath()
-    const ConfigLayer = Layer.setConfigProvider(
-      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    const dbPath = await tempDbPath()
+    const ConfigLayer = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+      ),
     )
     const TestLayer = makeTursoLive().pipe(Layer.provide(ConfigLayer))
 
@@ -181,9 +313,11 @@ describe("makeTursoLive", () => {
   })
 
   it("preserves duplicate selected columns in values mode", async () => {
-    const dbPath = tempDbPath()
-    const ConfigLayer = Layer.setConfigProvider(
-      ConfigProvider.fromMap(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+    const dbPath = await tempDbPath()
+    const ConfigLayer = ConfigProvider.layer(
+      ConfigProvider.fromUnknown(
+        Object.fromEntries(new Map([["SQLITE_DATABASE_PATH", dbPath]])),
+      ),
     )
     const TestLayer = makeTursoLive().pipe(Layer.provide(ConfigLayer))
 

@@ -3,9 +3,10 @@
  * GET /oauth/userinfo
  * @packageDocumentation
  */
-import { HttpServerRequest, type HttpServerResponse } from "@effect/platform"
+
 import type { StandardSchemaV1 } from "@standard-schema/spec"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
+import { HttpServerRequest, type HttpServerResponse } from "effect/http"
 import { jwtVerify } from "jose"
 import { getIssuerUrl } from "../request"
 import { errorJson, json } from "../response"
@@ -86,13 +87,13 @@ export const handleUserinfo: Effect.Effect<
         message: "Access token verification failed",
         cause,
       }),
-  }).pipe(Effect.either)
+  }).pipe(Effect.result)
 
-  if (Either.isLeft(verifyResult)) {
+  if (Result.isFailure(verifyResult)) {
     return yield* errorJson("invalid_token", "Invalid token", 401)
   }
 
-  const result = verifyResult.right
+  const result = verifyResult.success
   const subjectSchema = subjects[result.payload.type]
   if (!subjectSchema) {
     return yield* errorJson("invalid_token", "Invalid token", 401)

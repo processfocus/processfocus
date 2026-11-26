@@ -1,7 +1,6 @@
 import { join, resolve } from "node:path"
 import * as Config from "effect/Config"
 import * as ConfigProvider from "effect/ConfigProvider"
-import * as Layer from "effect/Layer"
 
 /**
  * Resolve SQLite database path from environment variables.
@@ -36,11 +35,11 @@ export const resolveDatabasePath = (orgPath?: string): string | undefined => {
  *
  * Use this in Effect layers instead of reading process.env directly.
  */
-export const DatabasePathConfig: Config.Config<string> = Config.string(
+export const DatabasePathConfig: Config.Config<string> = Config.String(
   "SQLITE_DATABASE_PATH",
 ).pipe(
   Config.orElse(() =>
-    Config.string("PF_ORG").pipe(
+    Config.String("PF_ORG").pipe(
       Config.map((org) => join(resolve(org), "db", "pf.db")),
     ),
   ),
@@ -58,8 +57,8 @@ export const DATABASE_PATH_NOT_CONFIGURED =
  * Effect layers without mutating process.env.
  */
 export const makeDatabaseConfigLayer = (databasePath: string) =>
-  Layer.setConfigProvider(
-    ConfigProvider.fromMap(
-      new Map([["SQLITE_DATABASE_PATH", databasePath]]),
-    ).pipe(ConfigProvider.orElse(() => ConfigProvider.fromEnv())),
+  ConfigProvider.layer(
+    ConfigProvider.fromUnknown({ SQLITE_DATABASE_PATH: databasePath }).pipe(
+      ConfigProvider.orElse(ConfigProvider.fromEnv()),
+    ),
   )

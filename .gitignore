@@ -1,9 +1,8 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
-
 # compiled output
 dist
 tmp
 out-tsc
+__pycache__/
 
 # dependencies
 node_modules
@@ -67,12 +66,18 @@ cdk.out
 
 # Local dev server port files (JSON format)
 .auth-port.json
+.policy-revisions/
 .graphql-port.json
 .frontend-port.json
+.queue-worker-state.json
+.queue-worker-state.json.supervisor-tmp
 
 .claude/worktrees
 .claude/settings.local.json
 .opencode/package-lock.json
+
+# Local agent handoff notes.
+/.ready-for-agent/scope.md
 
 # Nx task terminal output artifact occasionally appears at the workspace root.
 /terminalOutput
@@ -81,7 +86,18 @@ cdk.out
 apps/frontend/lib/generated/
 apps/frontend/public/_pf/
 
+# Keep temporary boundary-test fixtures out of concurrent public-source snapshots.
+/apps/frontend/.boundary-fixture-*/
+
 .nx/polygraph
 .nx/self-healing
 
 .nx/migrate-runs
+
+# Per-job PR Review timing and coverage evidence.
+/pr-review-evidence/
+/pr-review-timing.json
+.vitest
+
+# Keep this for now
+.deepsec

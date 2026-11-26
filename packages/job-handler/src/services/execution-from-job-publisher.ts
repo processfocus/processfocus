@@ -21,9 +21,7 @@ export class ExecutionFromJobPublishError extends Data.TaggedError(
  * - AWS: Delegates to ExecutionEvents which publishes to AppSync with Cedar auth
  * - Local: HTTP POST to GraphQL server (fire-and-forget)
  */
-export class ExecutionFromJobPublisher extends Context.Tag(
-  "@pf/job-handler/ExecutionFromJobPublisher",
-)<
+export class ExecutionFromJobPublisher extends Context.Service<
   ExecutionFromJobPublisher,
   {
     /**
@@ -45,4 +43,4 @@ export class ExecutionFromJobPublisher extends Context.Tag(
       never
     >
   }
->() {}
+>()("@pf/job-handler/ExecutionFromJobPublisher") {}

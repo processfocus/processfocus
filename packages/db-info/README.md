@@ -1,42 +1,20 @@
 # @pf/db-info
 
-Shared database connection information service used across all database driver layers.
+Shared database infrastructure used by driver layers and their callers:
+connection descriptions, path configuration, transaction controls, and optional
+read batching.
 
-## Purpose
+Keeping these contracts independent of a particular driver lets the SQLite,
+Turso, and PostgreSQL packages share them without depending on one another.
 
-This package provides a single `DatabaseConnectionInfo` Effect service that database driver layers can implement to expose their connection details for logging and debugging purposes. This avoids circular dependencies between driver layers and higher-level packages.
+## Immediate transactions
 
-## Usage
+Turso adapters support reserving the writer before validation reads. Choose
+transaction mode at the outer boundary: a nested transaction cannot change the
+mode of its enclosing transaction.
 
-Database driver layers (like `@pf/layer-sqlite-bun`, `@pf/layer-turso-local`, `@pf/layer-turso-cloud`, and `@pf/service-drizzle-postgres`) provide this service with their connection information. Applications can then access it for logging:
+Transaction helpers do not replay the operation. Any retry of a complete
+transaction belongs to the caller, which knows whether its work is safe to repeat.
 
-```typescript
-import { DatabaseConnectionInfo } from "@pf/db-info"
-import { Effect } from "effect"
-
-const program = Effect.gen(function* () {
-  const connectionInfo = yield* DatabaseConnectionInfo
-  yield* Effect.log(`Connected to: ${connectionInfo}`)
-})
-```
-
-## Connection Info Examples
-
-- SQLite in-memory: `:memory:`
-- SQLite local file (sqlite-bun): `./data/pf.db`
-- Turso local file: `file://./data/pf.db`
-- Remote Turso: `libsql://my-db.turso.io`
-- PostgreSQL: `postgresql://user@localhost:5432/dbname`
-
-## Implementation
-
-Database driver layers provide this service by creating a layer that yields the connection string:
-
-```typescript
-import { DatabaseConnectionInfo } from "@pf/db-info"
-import { Layer } from "effect"
-
-const ConnectionInfoLayer = Layer.succeed(DatabaseConnectionInfo, ":memory:")
-```
-
-The service is then merged with other driver layers and passed through to consumers via `Layer.passthrough()` in typed Drizzle layers.
+See the [exports](./src/index.ts) for the available contracts and the
+[Turso Cloud layer](../layer-turso-cloud/README.md) for remote-driver behavior.

@@ -95,6 +95,9 @@ export interface RxDbCollectionOps<
    */
   readonly getByIds: (ids: string[]) => Effect.Effect<Row[], Error, UserDetails>
 
+  /** Override checkpoint-based matching for collections with optimistic edits. */
+  readonly matchesMaster?: (current: GraphQL, assumed: InsertInput) => boolean
+
   /**
    * Map a database row to GraphQL document type.
    * This is where you add computed fields, format conversions, etc.

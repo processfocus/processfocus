@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest"
-import { DateTime, Effect, FiberRef, Layer, type Schema } from "effect"
+import { DateTime, Effect, Layer, type Schema } from "effect"
 import { Monday, Tuesday, fixedHoliday } from "@pf/business-calendar"
 import * as schema from "@pf/drizzle-postgres"
 import { FileField } from "@pf/form-schema"
@@ -20,10 +20,7 @@ import { PostgresTest } from "./postgres-test"
 const TestLayer = Layer.mergeAll(
   PostgresTest,
   PostgresDbOperationsLive,
-  Layer.succeed(
-    RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
-  ),
+  Layer.succeed(RequestTime, DateTime.makeUnsafe(Date.now())),
 )
 
 const makeOrganisation = (includeOrphans: boolean) => {

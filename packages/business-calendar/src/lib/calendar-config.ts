@@ -22,8 +22,8 @@ import {
  * @property note - Optional human-readable note (e.g., "Early closing for staff party")
  */
 export const DateException = Schema.Struct({
-  date: Schema.DateTimeUtcFromSelf,
-  slots: Schema.Union(Schema.Array(TimeRange), Schema.Literal("closed")),
+  date: Schema.DateTimeUtc,
+  slots: Schema.Union([Schema.Array(TimeRange), Schema.Literal("closed")]),
   note: Schema.optional(Schema.String),
 })
 export type DateException = typeof DateException.Type
@@ -32,8 +32,8 @@ export type DateException = typeof DateException.Type
  * Schema for encoding DateException to JSON (for database storage).
  */
 export const DateExceptionFromJson = Schema.Struct({
-  date: Schema.DateTimeUtc,
-  slots: Schema.Union(Schema.Array(TimeRange), Schema.Literal("closed")),
+  date: Schema.DateTimeUtcFromString,
+  slots: Schema.Union([Schema.Array(TimeRange), Schema.Literal("closed")]),
   note: Schema.optional(Schema.String),
 })
 export type DateExceptionFromJson = typeof DateExceptionFromJson.Type
@@ -41,9 +41,6 @@ export type DateExceptionFromJson = typeof DateExceptionFromJson.Type
 /**
  * Complete business calendar configuration.
  * Combines weekly schedule, holidays, exceptions, and periods.
- *
- * Note: Timezone is stored at the Organisation/OrgUnit level, not here.
- * The calendar service receives timezone from context.
  */
 export const BusinessCalendarConfig = Schema.Struct({
   /**
@@ -96,8 +93,6 @@ export const BusinessCalendarConfig = Schema.Struct({
   timezone: Schema.optional(Schema.String),
 })
 export type BusinessCalendarConfig = typeof BusinessCalendarConfig.Type
-
-// Helper to create a standard weekday schedule (Mon-Fri, 9-5)
 
 /**
  * Creates a standard Monday-Friday 9:00-17:00 schedule.

@@ -11,13 +11,19 @@
       "inputs": [
         "{projectRoot}/src/features/**/*.feature",
         "{projectRoot}/src/features-instant/**/*.feature",
+        "{projectRoot}/src/features-sso/**/*.feature",
+        "{projectRoot}/src/features-sso-only/**/*.feature",
+        "{projectRoot}/src/features-cedar-scale/**/*.feature",
+        "{projectRoot}/src/features-initial-sync/**/*.feature",
         "{projectRoot}/src/features-lifecycle/**/*.feature",
         "{projectRoot}/src/features-boot-health-failure/**/*.feature",
         "{projectRoot}/src/features-boot-health-plugin/**/*.feature",
         "{projectRoot}/src/features-delegated-access/**/*.feature",
+        "{projectRoot}/src/features-passkey/**/*.feature",
         "{projectRoot}/src/features-delegated-access-artifacts/**/*.feature",
         "{projectRoot}/src/steps/**/*.ts",
         "{projectRoot}/playwright.config.ts",
+        { "env": "BASE_URL" },
         { "env": "FRONTEND_E2E_FEATURES" },
         { "env": "FRONTEND_E2E_TAGS" },
         { "env": "PF_INSTANT_E2E" }
@@ -32,11 +38,15 @@
         "cwd": "{projectRoot}",
         "command": "tsgo --build --emitDeclarationOnly"
       },
-      "dependsOn": ["@pf/frontend-endpoints:build"]
+      "dependsOn": [
+        "@pf/frontend-endpoints:build",
+        "@pf/graphql-schema:graphql-codegen"
+      ]
     },
     "e2e": {
       "dependsOn": ["build", "@pf/graphql-schema:graphql-codegen"],
       "cache": false
     }
-  }
+  },
+  "implicitDependencies": ["@pf/demo", "@processfocus/runtime-local"]
 }

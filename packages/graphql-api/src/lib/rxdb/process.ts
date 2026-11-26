@@ -2,6 +2,7 @@ import { Context, Data, Effect, Layer } from "effect"
 import {
   ProcessCollectionQueries,
   type ProcessCollectionRow,
+  type ProcessMetadataRow,
 } from "@pf/graphql-db-operations"
 import type {
   Process,
@@ -48,17 +49,14 @@ export const formatDurationRange = (
   const min = formatValue(minMs)
   const max = formatValue(maxMs)
 
-  // If same unit and values, show single value
   if (min.unit === max.unit && min.value === max.value) {
     return `Typically ${min.value} ${min.unit}${min.value > 1 ? "s" : ""}`
   }
 
-  // If same unit, show range
   if (min.unit === max.unit) {
     return `Typically ${min.value} - ${max.value} ${min.unit}s`
   }
 
-  // Different units - show both
   return `Typically ${min.value} ${min.unit}${min.value > 1 ? "s" : ""} - ${max.value} ${max.unit}${max.value > 1 ? "s" : ""}`
 }
 
@@ -66,9 +64,20 @@ export const formatDurationRange = (
  * Maps a ProcessCollectionRow from the database to a Process GraphQL type.
  * Form field count is now read directly from the database.
  */
-const mapRowToGraphql = (
+const mapProcessRowToGraphql = (
   row: ProcessCollectionRow,
 ): Effect.Effect<Process, never, never> =>
+  mapProcessMetadataToGraphql(row).pipe(
+    Effect.map((metadata) => ({
+      ...metadata,
+      activeInstances: row.activeInstances,
+      duration: formatDurationRange(row.minDurationMs, row.maxDurationMs),
+    })),
+  )
+
+export const mapProcessMetadataToGraphql = (
+  row: ProcessMetadataRow,
+): Effect.Effect<Omit<Process, "activeInstances" | "duration">> =>
   Effect.succeed({
     id: row.id,
     name: row.name,
@@ -77,10 +86,8 @@ const mapRowToGraphql = (
     category: row.orgUnit.name,
     updatedAt: row.updatedAt,
     deleted: row.deleted,
-    activeInstances: row.activeInstances,
-    duration: formatDurationRange(row.minDurationMs, row.maxDurationMs),
     formFieldCount: row.formFieldCount,
-    isFavorite: Math.random() > 0.7,
+    isFavorite: row.deleted ? false : Math.random() > 0.7,
     orgUnit: {
       id: row.orgUnit.id,
       name: row.orgUnit.name,
@@ -95,16 +102,14 @@ const mapRowToGraphql = (
  * This service adapts Process database queries to the generic
  * RxDbCollectionOps interface, enabling use with the generic resolvers.
  */
-export class ProcessCollectionOps extends Context.Tag(
-  "@pf/graphql-api/ProcessCollectionOps",
-)<
+export class ProcessCollectionOps extends Context.Service<
   ProcessCollectionOps,
   RxDbCollectionOps<
     ProcessCollectionRow,
     Process,
     ProcessInputPushRowT0NewDocumentStateT0
   >
->() {}
+>()("@pf/graphql-api/ProcessCollectionOps") {}
 
 /**
  * Live implementation that delegates to ProcessCollectionQueries.
@@ -129,7 +134,7 @@ export const ProcessCollectionOpsLive = Layer.effect(
 
       getByIds: queries.getProcesses,
 
-      mapToGraphql: mapRowToGraphql,
+      mapToGraphql: mapProcessRowToGraphql,
     }
   }),
 )

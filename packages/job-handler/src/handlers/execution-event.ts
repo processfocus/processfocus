@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 import type { Job } from "@processfocus/runtime"
 import { Effect, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   CompletedJobOperations,
   EXECUTION_EVENT_QUEUE,

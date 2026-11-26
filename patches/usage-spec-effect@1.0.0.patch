@@ -1,0 +1,21 @@
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -188,6 +188,17 @@ function parameterShape(param, kind, path, report) {
+             min = p.min?.value;
+             max = p.max?.value;
+         }
++        // Effect 4.1.3+ exposes defaults as Transform fallback metadata.
++        // Drop this patch when both CLI reference suites pass on stock usage-spec-effect.
++        if (p._tag === "Transform" && p.fallback?._tag === "Default") {
++            const v = p.fallback.value;
++            if (typeof v === "string" ||
++                typeof v === "number" ||
++                typeof v === "boolean")
++                dflt = String(v);
++            else if (v !== undefined)
++                report.note(where, "default value is not a string, number or boolean");
++        }
+         if (p._tag === "Map" && p.param?._tag === "Optional" && p.f) {
+             // withDefault wraps the optional in a map that supplies the value.
+             try {

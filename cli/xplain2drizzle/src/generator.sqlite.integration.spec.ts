@@ -54,7 +54,7 @@ describe("generateDrizzleSchema (SQLite) - Live Integration", () => {
       const db = yield* TypedSqliteDrizzle
       yield* db.run(sql`INSERT INTO pf_org_unit (id, name, org_unit_level, path)
         VALUES ('ou-history', 'History', 'root', '/history')`)
-      yield* db.run(sql`INSERT INTO pf_user (id, provider, sub, last_logged_in)
+      yield* db.run(sql`INSERT INTO pf_user (id, provider, sub, created_at)
         VALUES ('usr-history', 'test', 'history', julianday('now'))`)
       yield* db.run(sql`INSERT INTO pf_provider_user
         (id, user_id, email, name, first_name, last_name, picture, locale, org_unit_id)
@@ -115,31 +115,14 @@ describe("generateDrizzleSchema (SQLite) - Live Integration", () => {
     await Effect.runPromise(
       testProgram.pipe(
         Effect.provide(DatabaseTest),
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([["MIGRATIONS_FOLDER", migrationsFolder]]),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown(
+            Object.fromEntries(
+              new Map([["MIGRATIONS_FOLDER", migrationsFolder]]),
+            ),
           ),
         ),
-      ),
-    )
-  })
-
-  it("should successfully generate and apply migrations for real schema", async () => {
-    const testProgram = Effect.gen(function* () {
-      const db = yield* TypedSqliteDrizzle
-
-      // If we get here, migrations applied successfully
-      expect(db).toBeDefined()
-    })
-
-    const configProvider = ConfigProvider.fromMap(
-      new Map([["MIGRATIONS_FOLDER", migrationsFolder]]),
-    )
-
-    await Effect.runPromise(
-      testProgram.pipe(
-        Effect.provide(DatabaseTest),
-        Effect.withConfigProvider(configProvider),
       ),
     )
   })
@@ -166,14 +149,14 @@ describe("generateDrizzleSchema (SQLite) - Live Integration", () => {
       expect(tableNames).toContain("pf_to_do")
     })
 
-    const configProvider = ConfigProvider.fromMap(
-      new Map([["MIGRATIONS_FOLDER", migrationsFolder]]),
+    const configProvider = ConfigProvider.fromUnknown(
+      Object.fromEntries(new Map([["MIGRATIONS_FOLDER", migrationsFolder]])),
     )
 
     await Effect.runPromise(
       testProgram.pipe(
         Effect.provide(DatabaseTest),
-        Effect.withConfigProvider(configProvider),
+        Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
       ),
     )
   })
@@ -201,14 +184,14 @@ describe("generateDrizzleSchema (SQLite) - Live Integration", () => {
       expect(viewNames).toContain("pf_process_state_its_is_draft")
     })
 
-    const configProvider = ConfigProvider.fromMap(
-      new Map([["MIGRATIONS_FOLDER", migrationsFolder]]),
+    const configProvider = ConfigProvider.fromUnknown(
+      Object.fromEntries(new Map([["MIGRATIONS_FOLDER", migrationsFolder]])),
     )
 
     await Effect.runPromise(
       testProgram.pipe(
         Effect.provide(DatabaseTest),
-        Effect.withConfigProvider(configProvider),
+        Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
       ),
     )
   })

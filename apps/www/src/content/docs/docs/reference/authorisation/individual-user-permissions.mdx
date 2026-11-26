@@ -1,0 +1,38 @@
+---
+title: Assigning permissions to individual users
+---
+
+To grant a permission to an individual user, name their `PF::ProviderUser`
+identity in a [Cedar policy](/docs/reference/authorisation/cedar-policies/).
+Use their stable login email as the entity ID. For example, this policy
+permits Alice to administer users without requiring an Administrator role:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"alice@example.com",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
+);
+```
+
+To permit Alice to administer users only outside production, add a condition
+using your production environment name:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"alice@example.com",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
+)
+unless {
+    context.environment == "prod"
+};
+```
+
+Replace `"prod"` with your production environment name. Remove the unconditional
+permit above rather than keeping both: either that permit or another matching
+permit can still grant Alice permission in production.
+
+Deploy this same policy to both staging and production. It grants Alice
+permission in staging, but not in production. Using environment conditions
+means you can maintain one set of policies for all deployments.

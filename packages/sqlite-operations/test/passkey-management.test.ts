@@ -1,5 +1,8 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { and, eq } from "drizzle-orm"
-import { DateTime, Effect, Either, Layer, Option, Schema } from "effect"
+import { Clock, DateTime, Effect, Layer, Option, Result, Schema } from "effect"
 import { SignJWT } from "jose"
 import {
   AuthenticationDatabase,
@@ -99,7 +102,7 @@ const setup = (
     })
     const server = createTestApp(app, { runtime })
     const key = yield* (yield* KeyManagementService).signingKey
-    const clock = yield* Effect.clock
+    const clock = yield* Clock.Clock
     const sign = (
       properties: Record<string, unknown>,
       extra: { type?: string } = {},
@@ -113,9 +116,9 @@ const setup = (
         .setIssuer("https://auth.example.com")
         .setAudience("frontend")
         .setSubject(`providerUser:${owner.id}`)
-        .setIssuedAt(Math.floor(clock.unsafeCurrentTimeMillis() / 1000))
+        .setIssuedAt(Math.floor(clock.currentTimeMillisUnsafe() / 1000))
         .setExpirationTime(
-          Math.floor(clock.unsafeCurrentTimeMillis() / 1000) + 3600,
+          Math.floor(clock.currentTimeMillisUnsafe() / 1000) + 3600,
         )
         .sign(key.private)
     const properties = {
@@ -154,10 +157,138 @@ const setup = (
       sign,
       token,
       request,
+      server,
     }
   })
 
 describe("Passkey management HTTP + SQLite", () => {
+  it("pforg lists only its authenticated user's metadata, including empty accounts, through HTTP", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { server: app, authDb, properties, token, sign } = yield* setup()
+        const other = yield* authDb.createProviderUser({
+          email: "empty@example.com",
+          name: "Empty",
+          firstName: "Empty",
+          lastName: "",
+          picture: "",
+          locale: "en",
+          provider: "google",
+          sub: "empty",
+          orgUnitId: properties.orgUnitId,
+        })
+        const otherToken = yield* Effect.promise(() =>
+          sign({ ...properties, userId: other.id, email: other.email }),
+        )
+        const deniedToken = yield* Effect.promise(() =>
+          sign({ ...properties, humanSession: undefined }),
+        )
+        const ownCredentials = yield* authDb.listPasskeyCredentialsForUser(
+          properties.userId,
+        )
+        const credential = ownCredentials[0]!
+        yield* authDb.renamePasskeyCredential({
+          userId: properties.userId,
+          id: credential.id,
+          name: "Laptop",
+        })
+        yield* Effect.promise(async () => {
+          const directory = await mkdtemp(join(tmpdir(), "pforg-passkeys-"))
+          const server = Bun.serve({
+            hostname: "localhost",
+            port: 0,
+            fetch: (request) =>
+              app.request(
+                `https://auth.example.com${new URL(request.url).pathname}`,
+                {
+                  method: request.method,
+                  headers: {
+                    authorization: request.headers.get("authorization") ?? "",
+                  },
+                },
+              ),
+          })
+          const credentialsPath = join(directory, "credentials.json")
+          const run = async (
+            accessToken: string | null,
+            expiresAt = "2999-01-01T00:00:00.000Z",
+          ) => {
+            if (accessToken === null) await rm(credentialsPath, { force: true })
+            else
+              await writeFile(
+                credentialsPath,
+                JSON.stringify({
+                  version: 1,
+                  baseUrl: "http://localhost:3000",
+                  accessToken,
+                  expiresAt,
+                  loginAt: "2026-01-01T00:00:00.000Z",
+                }),
+              )
+            const child = Bun.spawn(
+              [
+                process.execPath,
+                resolve(import.meta.dir, "../../../cli/pforg/src/main.ts"),
+                "passkeys",
+                "list",
+              ],
+              {
+                env: {
+                  ...process.env,
+                  PFORG_CREDENTIALS_PATH: credentialsPath,
+                  PF_RUNTIME_ROOT: directory,
+                },
+                stdout: "pipe",
+                stderr: "pipe",
+              },
+            )
+            const [stdout, stderr, exitCode] = await Promise.all([
+              new Response(child.stdout).text(),
+              new Response(child.stderr).text(),
+              child.exited,
+            ])
+            expect(stdout).not.toContain(token)
+            expect(stderr).not.toContain(token)
+            return { stdout, stderr, exitCode }
+          }
+          try {
+            await writeFile(
+              join(directory, ".auth-port.json"),
+              JSON.stringify({ port: server.port }),
+            )
+            const populated = await run(token)
+            expect(populated.exitCode).toBe(0)
+            expect(populated.stderr).toBe("")
+            expect(JSON.parse(populated.stdout)).toEqual([
+              {
+                id: credential.id,
+                name: "Laptop",
+                createdAt: DateTime.formatIso(credential.createdAt),
+                lastUsedAt: null,
+              },
+            ])
+            const empty = await run(otherToken)
+            expect(empty).toEqual({ stdout: "[]\n", stderr: "", exitCode: 0 })
+            for (const [bearer, expiry, message] of [
+              [null, undefined, "pforg auth login"],
+              [token, "2000-01-01T00:00:00.000Z", "pforg auth login"],
+              ["invalid-token", undefined, "pforg auth login"],
+              [deniedToken, undefined, "human login"],
+            ] as const) {
+              const failed = await run(bearer, expiry)
+              expect(failed.exitCode).toBe(1)
+              expect(failed.stdout).toBe("")
+              expect(JSON.parse(failed.stderr).error.message).toContain(message)
+            }
+          } finally {
+            server.stop(true)
+            await rm(directory, { recursive: true, force: true })
+          }
+        })
+      }).pipe(Effect.provide(layer)),
+    )
+  }, 30_000)
+
   it("rejects every management operation for hostile principals and cross-owner Administrators", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -169,7 +300,9 @@ describe("Passkey management HTTP + SQLite", () => {
         )
         const options = yield* Effect.promise(() => started.json()).pipe(
           Effect.flatMap(
-            Schema.decodeUnknown(Schema.Struct({ challengeId: Schema.String })),
+            Schema.decodeUnknownEffect(
+              Schema.Struct({ challengeId: Schema.String }),
+            ),
           ),
         )
         const completion = {
@@ -199,7 +332,7 @@ describe("Passkey management HTTP + SQLite", () => {
             { type: "user" },
           ),
         )
-        const impersonation = yield* Effect.promise(() => sign(untrusted))
+        const legacy = yield* Effect.promise(() => sign(untrusted))
         const delegated = yield* Effect.promise(() =>
           sign({
             ...untrusted,
@@ -214,7 +347,7 @@ describe("Passkey management HTTP + SQLite", () => {
         for (const principal of [
           { token: "", status: 401 },
           { token: machine, status: 401 },
-          { token: impersonation, status: 403 },
+          { token: legacy, status: 403 },
           { token: delegated, status: 403 },
         ]) {
           for (const operation of operations) {
@@ -246,7 +379,7 @@ describe("Passkey management HTTP + SQLite", () => {
             (await request("POST", undefined, { name: "Owner spare" })).json(),
           ).pipe(
             Effect.flatMap(
-              Schema.decodeUnknown(
+              Schema.decodeUnknownEffect(
                 Schema.Struct({ challengeId: Schema.String }),
               ),
             ),
@@ -443,17 +576,17 @@ describe("Passkey management HTTP + SQLite", () => {
     )
   })
 
-  it("denies accounts with no Passkey", async () => {
+  it("lists an empty array for accounts with no Passkey", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const withoutCredential = yield* setup({ withPasskey: false })
         const missing = yield* Effect.promise(() =>
           withoutCredential.request("GET"),
         )
-        expect(missing.status).toBe(403)
-        expect(yield* Effect.promise(() => missing.json())).toEqual({
-          error: "management_denied",
-        })
+        expect(missing.status).toBe(200)
+        expect(
+          listed(yield* Effect.promise(() => missing.json())).credentials,
+        ).toEqual([])
       }).pipe(Effect.provide(layer)),
     )
   })
@@ -502,7 +635,7 @@ describe("Passkey management HTTP + SQLite", () => {
     )
   })
 
-  it("rejects unauthenticated, machine, delegated, impersonation, and cross-owner requests", async () => {
+  it("rejects unauthenticated, machine, delegated, legacy non-human, and cross-owner requests", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const { request, sign, properties, owner, authDb, db } = yield* setup()
@@ -549,7 +682,7 @@ describe("Passkey management HTTP + SQLite", () => {
           )).status,
         ).toBe(403)
 
-        const impersonated = yield* Effect.promise(() =>
+        const legacy = yield* Effect.promise(() =>
           sign({
             userId: owner.id,
             email: owner.email,
@@ -559,11 +692,11 @@ describe("Passkey management HTTP + SQLite", () => {
           }),
         )
         expect(
-          (yield* Effect.promise(() => request("GET", impersonated))).status,
+          (yield* Effect.promise(() => request("GET", legacy))).status,
         ).toBe(403)
         expect(
           (yield* Effect.promise(() =>
-            request("DELETE", impersonated, { id: "pkc-1" }),
+            request("DELETE", legacy, { id: "pkc-1" }),
           )).status,
         ).toBe(403)
 
@@ -675,8 +808,8 @@ describe("Passkey management HTTP + SQLite", () => {
           credentialId: "credential-two",
           previousCounter: 0,
           newCounter: 0,
-        }).pipe(Effect.either)
-        expect(failed._tag).toBe("Left")
+        }).pipe(Effect.result)
+        expect(failed._tag).toBe("Failure")
 
         const last = yield* Effect.promise(() =>
           request("DELETE", undefined, { id: after.credentials[0]?.id }),
@@ -857,7 +990,14 @@ describe("Passkey management HTTP + SQLite", () => {
           null,
         ])
 
-        yield* authDb.updateLastLoggedIn(owner.id, yield* DateTime.now)
+        yield* (yield* TypedSqliteDrizzle).insert(schema.auditEvent).values({
+          auditKind: "login",
+          occurredAt: yield* DateTime.now,
+          auditDetails: {
+            actorUserId: owner.id,
+            authenticationMethod: "oauth",
+          },
+        })
         const afterAccountLogin = listed(
           yield* Effect.promise(() => request("GET").then((r) => r.json())),
         )
@@ -925,8 +1065,8 @@ describe("Passkey management HTTP + SQLite", () => {
           credentialId: "credential-two",
           previousCounter: 3,
           newCounter: 3,
-        }).pipe(Effect.either)
-        expect(failed._tag).toBe("Left")
+        }).pipe(Effect.result)
+        expect(failed._tag).toBe("Failure")
         const afterFailure = listed(
           yield* Effect.promise(() => request("GET").then((r) => r.json())),
         )
@@ -1146,10 +1286,10 @@ describe("Passkey management HTTP + SQLite", () => {
             publicKey: "other-key",
             counter: 0,
           },
-        }).pipe(Effect.either)
-        expect(Either.isLeft(duplicate)).toBe(true)
-        if (Either.isLeft(duplicate)) {
-          expect(duplicate.left._tag).toBe(
+        }).pipe(Effect.result)
+        expect(Result.isFailure(duplicate)).toBe(true)
+        if (Result.isFailure(duplicate)) {
+          expect(duplicate.failure._tag).toBe(
             "@pf/PasskeyCredentialAlreadyOwnedError",
           )
         }
@@ -1238,8 +1378,8 @@ describe("Passkey management HTTP + SQLite", () => {
             publicKey: "public-key-first",
             counter: 0,
           },
-        }).pipe(Effect.either)
-        expect(Either.isLeft(denied)).toBe(true)
+        }).pipe(Effect.result)
+        expect(Result.isFailure(denied)).toBe(true)
       }).pipe(Effect.provide(layer)),
     )
   })

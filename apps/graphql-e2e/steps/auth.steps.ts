@@ -10,6 +10,7 @@ import {
   runAuthenticateAsProviderUser,
   runAuthenticateWithRole,
 } from "../support/auth-helpers"
+import { readerCredentials } from "../support/provider-user"
 import type { TestWorld } from "../support/world"
 
 const getAuthUrl = getEffectiveAuthUrl
@@ -70,16 +71,25 @@ Given(
   },
 )
 
+// The deployed planner (planProviderUsers) recognizes these two provider-user Givens.
 Given(
   "I am authenticated as provider user {string}",
-  { timeout: 30_000 },
+  { timeout: 120_000 },
   async function (this: TestWorld, email: string) {
-    // Use two-step flow: requestProviderUserPermissions mutation then authenticate with email scope
+    // Registration, logout and normal Passkey login are owned by the shared fixture.
     const result = await runAuthenticateAsProviderUser(email)
     if (!result.access_token) {
       throw new Error(`Authentication failed: ${result.error}`)
     }
     this.accessToken = result.access_token
+  },
+)
+
+Given(
+  "I read as provider user {string}",
+  { timeout: 120_000 },
+  async function (this: TestWorld, persona: string) {
+    this.accessToken = await readerCredentials(persona)
   },
 )
 
@@ -233,9 +243,9 @@ When(
 
 // WebSocket authentication step definitions
 
-When("I try to subscribe to todo updates", function (this: TestWorld) {
+When("I try to subscribe to todo updates", async function (this: TestWorld) {
   // Use trySubscribe which handles connection errors gracefully
-  this.trySubscribe(`
+  await this.trySubscribe(`
     subscription StreamTodo {
       streamTodo {
         documents {

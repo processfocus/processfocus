@@ -10,16 +10,17 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/mdx": "^7.0.8",
-    "@astrojs/starlight": "0.42.0",
-    "@tailwindcss/vite": "4.3.3",
-    "astro": "^7.3.2",
-    "tailwindcss": "4.3.3",
-    "vite": "^8.2.2"
+    "@astrojs/mdx": "^8.1.6",
+    "@astrojs/starlight": "0.43.1",
+    "@tailwindcss/vite": "4.3.5",
+    "astro": "^7.4.12",
+    "astro-mermaid": "^2.2.0",
+    "mermaid": "^12.3.0",
+    "tailwindcss": "4.3.5",
+    "vite": "^8.3.8"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.10",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

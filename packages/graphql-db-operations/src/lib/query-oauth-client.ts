@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect, type Option } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Database row type for OAuth client (simplified for queries)
@@ -12,9 +12,7 @@ export interface OAuthClientRow {
 /**
  * Service providing OAuth client query operations for GraphQL resolvers
  */
-export class OAuthClientQueries extends Context.Tag(
-  "@pf/graphql-db-operations/OAuthClientQueries",
-)<
+export class OAuthClientQueries extends Context.Service<
   OAuthClientQueries,
   {
     /**
@@ -32,14 +30,5 @@ export class OAuthClientQueries extends Context.Tag(
       oauthClientId: string,
       roleId: string,
     ) => Effect.Effect<void, SqlError>
-
-    /**
-     * Set a permitted provider user email for an OAuth client (for impersonation)
-     * Upserts to the permitted_client_email table
-     */
-    readonly addPermittedClientEmail: (
-      oauthClientId: string,
-      email: string,
-    ) => Effect.Effect<void, SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/OAuthClientQueries") {}

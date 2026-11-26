@@ -1,0 +1,36 @@
+---
+title: Document Store
+description: Store files used by an organisation's processes.
+---
+
+A **Document Store** holds files used by an organisation. For example, a
+process can collect an attachment through a [form](/docs/concepts/forms/) or
+store a PDF generated from a Google Drive document. The process can then use a
+reference to the stored file rather than carrying its contents in form data.
+
+## Files and processes
+
+A form's file field can be associated with a document store. When a person
+uploads a file, the runtime provides a time-limited upload URL and the file is
+sent to storage. The form value identifies the uploaded file, so a later step
+can refer to it.
+
+The runtime can also read files for server-side work, such as adding an
+attachment to an email. A download URL gives access to a file for a limited
+time; it is not a permanent link.
+
+## Storage and access
+
+Document stores are part of the authored [organisation](/docs/concepts/organisation/).
+The runtime supplies the storage: the local runtime uses the local filesystem,
+while the AWS runtime uses Amazon S3.
+
+Access to file operations is controlled by [authorisation](/docs/concepts/authorisation/).
+For a step upload, the user must be allowed to complete the step, and the step
+must reference the document store. Treat a signed file URL as sensitive: anyone
+holding it can use it while it remains valid.
+
+An organisation can configure a store with accepted file types, a maximum file
+size, and an expiration period. The default maximum is 100 MiB, and no
+expiration period is set by default. In the AWS runtime, configured expiration
+periods are applied through S3 lifecycle rules.

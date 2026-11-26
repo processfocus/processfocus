@@ -1,6 +1,6 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import type { DateTime } from "effect"
 import { Context, Data, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { RequestTime } from "@pf/request-time"
 import type { ProcessState } from "./process-execution"
 import type { TodoRow } from "./todo-queries"
@@ -30,6 +30,9 @@ export class InvalidProcessStateError extends Data.TaggedError(
  * Represents a todo with its target step information
  */
 export interface TodoWithStepInfo {
+  readonly externalWriteAttemptId?: string | null
+  readonly failureReason?: string | null
+  readonly restartAttemptId?: string | null
   readonly createdBy?: string
   readonly id: string
   readonly processExecutionId: string
@@ -157,6 +160,7 @@ export interface TodoCompletionInput {
   readonly businessDurationMs: number | null
   readonly externalParticipantId: string | null
   readonly completedByRoleId: string | null
+  readonly completionFingerprint?: string
 }
 
 export type TodoCompletionResult =
@@ -204,11 +208,9 @@ export interface CompletedStepData {
  * Service providing step completion database operations.
  *
  * These are simple database operations without business logic.
- * Business logic belongs in the resolver.
+ * Business orchestration and transaction boundaries belong to the caller.
  */
-export class StepCompletionOperations extends Context.Tag(
-  "@pf/graphql-db-operations/StepCompletionOperations",
-)<
+export class StepCompletionOperations extends Context.Service<
   StepCompletionOperations,
   {
     /**
@@ -406,6 +408,15 @@ export class StepCompletionOperations extends Context.Tag(
       failureReason: string,
     ) => Effect.Effect<void, SqlError, RequestTime | UserDetails>
 
+    /** Fail only an active Todo still belonging to the observed write attempt. */
+    readonly failSystemStepAttempt: (input: {
+      readonly todoId: string
+      readonly expectedWriteAttemptId: string | null
+      readonly expectedRestartAttemptId: string | null
+      readonly failureReason: string
+      readonly nextWriteAttemptId?: string
+    }) => Effect.Effect<boolean, SqlError, RequestTime | UserDetails>
+
     /**
      * Atomically fail an async todo only if it is not already completed.
      *
@@ -469,6 +480,15 @@ export class StepCompletionOperations extends Context.Tag(
     >
 
     /**
+     * Batch fetch start-step attribution and completed Todos, grouped by execution.
+     * Each requested id has an entry (an empty array when no steps exist).
+     * Start-step attribution precedes completed Todos. Empty input performs no reads.
+     */
+    readonly getCompletedStepsForExecutions: (
+      processExecutionIds: readonly string[],
+    ) => Effect.Effect<Map<string, CompletedStepData[]>, SqlError>
+
+    /**
      * Get completed steps for a process execution with user/provider user info.
      * Used for building FlowContext to pass to summary/condition callbacks.
      *
@@ -497,6 +517,7 @@ export class StepCompletionOperations extends Context.Tag(
      */
     readonly clearTodoFailures: (
       todoIds: string[],
+      restartAttemptId: string,
     ) => Effect.Effect<void, SqlError, RequestTime | UserDetails>
 
     /**
@@ -522,6 +543,7 @@ export class StepCompletionOperations extends Context.Tag(
      */
     readonly reopenFailedSystemStartExecution: (
       executionId: string,
+      restartAttemptId: string,
     ) => Effect.Effect<boolean, SqlError, RequestTime | UserDetails>
 
     /**
@@ -561,4 +583,4 @@ export class StepCompletionOperations extends Context.Tag(
       executionId: string,
     ) => Effect.Effect<string[], SqlError, RequestTime | UserDetails>
   }
->() {}
+>()("@pf/graphql-db-operations/StepCompletionOperations") {}

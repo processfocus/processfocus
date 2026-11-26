@@ -1,0 +1,74 @@
+---
+title: Form components
+description: Choose fields and organise them in a process step form.
+---
+
+Use components from `@pf/form-schema` inside `Schema.Struct` to define a
+[Form step](/docs/reference/process-steps/forms/). Input fields collect
+values; presentation components help people understand and fill in the form
+without adding values to the submission.
+
+## Common input fields
+
+| Component | Use it to collect |
+| --- | --- |
+| `TextField` | A short, single-line value, such as a SKU. |
+| `TextArea` | Multi-line text, such as delivery instructions. |
+| `NumberField` | A number, such as an order quantity. |
+| `DateField` | A date. |
+| `BooleanField` | A yes-or-no value. |
+| `RadioField` | One choice from a set of options. |
+| `CheckboxGroupField` | Multiple choices from a set of options. |
+
+## Group fields and add instructions
+
+Use `Wrapper` to group related fields under a heading without nesting their
+submitted values. Use `TextBlock` for instructions, `Divider` to separate
+sections, and `Link` to point people to supporting information.
+
+```typescript
+import { NumberField, TextBlock, TextField, Wrapper } from "@pf/form-schema"
+import { Schema } from "effect"
+
+const orderForm = Schema.Struct({
+  instructions: TextBlock("Enter the SKU and quantity from the order."),
+  orderDetails: Wrapper(
+    {
+      sku: TextField({ label: "SKU" }),
+      quantity: NumberField({ label: "Quantity" }),
+    },
+    { label: "Order details" },
+  ),
+})
+```
+
+The submission contains `sku` and `quantity` at the top level. It does not
+contain `instructions` or an `orderDetails` object. If you want nested data
+instead, use a regular `Schema.Struct` in place of `Wrapper`.
+
+## Lookup and suggestion fields
+
+Use `LookupField` when the person must select an existing record. For
+example, let them search for a customer by name and select the matching
+record. The form submits the customer's ID, not the name they typed.
+Editing the text after selecting a result clears the selection.
+
+Use `SuggestionField` when the person can enter a value that isn't in the
+list. For example, suggest common delivery instructions but let the person
+write their own. The form submits the selected suggestion's value or the
+text they entered.
+
+### Choose a lookup mode
+
+- **Local lookup:** Use `mode: "local"` with `maxItems` for a small set of
+  eligible records. The browser loads the full set and filters it as the
+  person types. If the set exceeds `maxItems`, the lookup fails to load
+  rather than showing a partial list.
+- **Server lookup:** Use server search for larger sets. The server searches
+  as the person types. If there are too many matches to show, the person
+  can narrow the search.
+
+Keep datasource queries and eligibility checks on the server. For a
+server lookup, resolve an existing selection by ID separately from the
+search query: the selected record might not appear in the current search
+results. The server validates that the submitted lookup ID is still eligible.

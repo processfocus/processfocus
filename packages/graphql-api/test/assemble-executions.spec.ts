@@ -142,7 +142,7 @@ const createPublicCompletionOrg = (
     role,
     publicCompletion: {
       recipient,
-      expiresAt: () => DateTime.unsafeMake("2024-01-15T00:00:00Z"),
+      expiresAt: () => DateTime.makeUnsafe("2024-01-15T00:00:00Z"),
     },
     form: () => ({}),
   })
@@ -279,6 +279,18 @@ const makeTodo = (overrides: Partial<TodoStepRow> = {}): TodoStepRow => ({
 })
 
 describe("assembleSteps", () => {
+  it("shows deadline retirement without a successful completion timestamp", () => {
+    const { org } = createLinearOrg()
+    const { steps } = assembleSteps(
+      makeExecution({ status: "Completed" }),
+      [makeTodo({ completed: true, interrupted: true, providerUserId: null })],
+      org,
+    )
+    const retired = steps.find((step) => step.id === "todo-1")
+    expect(retired?.status).toBe("Interrupted")
+    expect(retired?.completedAt).toBeNull()
+    expect(retired?.providerUserId).toBeNull()
+  })
   it("distinguishes delegated start and completion without changing owner identities", () => {
     const { org } = createLinearOrg()
     const by =
@@ -288,16 +300,31 @@ describe("assembleSteps", () => {
     const { steps } = assembleSteps(execution, [todo], org)
     expect(steps[0]?.providerUserId).toBe(execution.startedById)
     expect(steps[0]?.providerUserFirstName).toBe(
-      "owner@example.com via invoice-agent",
+      "owner@example.com/invoice-agent",
     )
     expect(steps[0]?.providerUserLastName).toBeNull()
     const completed = steps.find((step) => step.id === todo.todoId)
     expect(completed?.providerUserId).toBe(todo.providerUserId)
     expect(completed?.providerUserFirstName).toBe(
-      "owner@example.com via invoice-agent",
+      "owner@example.com/invoice-agent",
     )
     expect(completed?.providerUserLastName).toBeNull()
   })
+  it.each(["pf:delegation:invalid", 'pf:delegation:{"version":2}'])(
+    "uses empty actor names for unsupported attribution %s",
+    (by) => {
+      const { org } = createLinearOrg()
+      const { steps } = assembleSteps(
+        makeExecution({ createdBy: by }),
+        [makeTodo({ completed: true, updatedBy: by })],
+        org,
+      )
+      for (const step of steps.filter((step) => step.status === "Completed")) {
+        expect(step.providerUserFirstName).toBe("")
+        expect(step.providerUserLastName).toBeNull()
+      }
+    },
+  )
   it.each([null, "emp-owner"])(
     "distinguishes delegated failed work with provider user %s",
     (providerUserId) => {
@@ -317,7 +344,7 @@ describe("assembleSteps", () => {
         status: "Failed",
         failureReason: "Worker failed",
         providerUserId,
-        providerUserFirstName: "owner@example.com via invoice-agent",
+        providerUserFirstName: "owner@example.com/invoice-agent",
         providerUserLastName: null,
       })
 

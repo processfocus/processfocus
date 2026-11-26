@@ -1,0 +1,1 @@
+CREATE INDEX "pf_process_execution_processstateidx_idx" ON "pf_process_execution" ("process_state_id") WHERE _deleted = false;

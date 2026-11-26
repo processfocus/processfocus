@@ -1,1 +1,1 @@
-export { org } from "./organisation.js"
+export { Configuration, org } from "./organisation.js"

@@ -1,6 +1,35 @@
 import { type Request, expect } from "@playwright/test"
 import { Then, When, appDialog } from "./fixtures"
 
+When("I inspect the authenticated sidebar HTML", async ({ page, browser }) => {
+  const response = await page.request.get("/processes")
+  expect(response.ok()).toBe(true)
+  // Inspect the actual server response without hydration replacing its fallbacks.
+  const htmlContext = await browser.newContext({ javaScriptEnabled: false })
+  try {
+    const htmlPage = await htmlContext.newPage()
+    await htmlPage.setContent(await response.text())
+    const sidebar = htmlPage.locator("aside")
+    await expect(sidebar.locator('a[href="/processes"]')).toBeAttached()
+    // React bailout/error templates in this shell are the mechanism that blocks
+    // dev instant validation, even when client hydration later recovers.
+    await expect(htmlPage.locator("template[data-dgst]")).toHaveCount(0)
+    await expect(sidebar.locator('[role="status"]')).toHaveText(
+      "Loading navigation…",
+    )
+  } finally {
+    await htmlContext.close()
+  }
+})
+
+Then("the deferred sidebar navigation becomes available", async ({ page }) => {
+  await page.goto("/processes")
+  await expect(
+    page.locator('aside a[href="/lists/process-catalog-browsing"]'),
+  ).toBeVisible()
+  await expect(page.locator('aside [role="status"]')).toHaveCount(0)
+})
+
 When(
   "I inspect instant sidebar process navigation",
   async ({ page, instantUI }) => {
@@ -84,17 +113,10 @@ When("I inspect instant List navigation", async ({ page, instantUI }) => {
 })
 
 Then(
-  "the unsaved process form survives back, forward and full-page reopening",
+  "the process form values survive back, forward and full-page reopening",
   async ({ page }) => {
     const destination = page.url()
     await expect(appDialog(page)).toBeVisible()
-    const draftKey = `process-start-draft-${decodeURIComponent(
-      new URL(destination).pathname.replace("/processes/start", ""),
-    )}`
-    // The existing form persistence listener debounces local writes.
-    await expect
-      .poll(() => page.evaluate((key) => localStorage.getItem(key), draftKey))
-      .toContain('"item":"Navigation draft"')
     await page.goBack()
     await expect(page).toHaveURL(/\/processes$/)
     await expect(appDialog(page)).toBeHidden()
@@ -107,7 +129,7 @@ Then(
         .getByRole("textbox")
         .filter({ visible: true }),
     ).toHaveValue("Navigation draft")
-    // A document navigation opens the non-intercepted form using its local draft.
+    // A document navigation also restores the values without the intercepted modal.
     await page.goto(destination)
     await expect(appDialog(page)).toHaveCount(0)
     await expect(

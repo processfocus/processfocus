@@ -1,3 +1,8 @@
+import {
+  type ConfigurationContract,
+  configurationField,
+} from "@processfocus/runtime"
+import { Config, Effect } from "effect"
 import { AuthenticationConfig } from "@pf/auth-config"
 import { Invitation, Organisation, Role } from "@pf/process"
 import { OnBoarding } from "./on-boarding"
@@ -11,29 +16,51 @@ export const employee = new Role(org, "Employee", { name: "Employee" })
 
 new OnBoarding(org, "on-boarding")
 
-// Placeholders keep pfcli build/typecheck working without secrets (pre-commit
-// and CI). Deploy and local auth need real GOOGLE_CLIENT_ID / SECRET set.
-const googleClientId =
-  process.env["GOOGLE_CLIENT_ID"] ??
-  "on-boarding-build-placeholder-google-client-id"
-const googleClientSecret =
-  process.env["GOOGLE_CLIENT_SECRET"] ??
-  "on-boarding-build-placeholder-google-client-secret"
-
-// Configure OAuth authentication
-new AuthenticationConfig(org, "auth", {
-  inviteOnly: true,
-  identityProviders: {
-    google: {
-      clientID: googleClientId,
-      clientSecret: googleClientSecret,
-      scopes: ["openid", "email", "profile"],
-    },
+const onBoardingConfiguration = {
+  owner: "On-boarding",
+  target: "authentication",
+  fields: {
+    googleClientId: configurationField(
+      "GOOGLE_CLIENT_ID",
+      Config.String("GOOGLE_CLIENT_ID"),
+    ),
+    googleClientSecret: configurationField(
+      "GOOGLE_CLIENT_SECRET",
+      Config.String("GOOGLE_CLIENT_SECRET"),
+      { secret: true },
+    ),
+    email: configurationField(
+      "MY_EMAIL",
+      Config.String("MY_EMAIL").pipe(
+        Config.withDefault("employee@example.com"),
+      ),
+    ),
   },
-})
+  rules: [],
+}
 
-new Invitation(org, "berend", {
-  // Set MY_EMAIL for your own invitation; the placeholder keeps CI builds portable.
-  email: process.env["MY_EMAIL"] ?? "employee@example.com",
-  roles: [employee],
-})
+export const Configuration = {
+  version: 1,
+  groups: [onBoardingConfiguration],
+} satisfies ConfigurationContract
+
+export const configureOrg: Effect.Effect<Organisation, Config.ConfigError> =
+  Effect.gen(function* () {
+    const googleClientId =
+      yield* onBoardingConfiguration.fields.googleClientId.config
+    const googleClientSecret =
+      yield* onBoardingConfiguration.fields.googleClientSecret.config
+    const email = yield* onBoardingConfiguration.fields.email.config
+    new AuthenticationConfig(org, "auth", {
+      inviteOnly: true,
+      identityProviders: {
+        google: {
+          clientID: googleClientId,
+          clientSecret: googleClientSecret,
+          scopes: ["openid", "email", "profile"],
+        },
+      },
+    })
+    new Invitation(org, "berend", { email, roles: [employee] })
+    return org
+  })

@@ -72,7 +72,6 @@ Then(
   async function (this: TestWorld, count: number) {
     assert.ok(this.todoDocuments, "No query result available")
 
-    // If count matches, we're done
     if (this.todoDocuments.length === count) {
       return
     }
@@ -132,8 +131,8 @@ Then(
     // SQS/Lambda/DB propagation and cross-service visibility delays.
     const externalRuntime = Boolean(process.env["BASE_URL"])
     const maxRetries = externalRuntime ? 20 : 5
-    const retrySchedule = Schedule.spaced("2 seconds").pipe(
-      Schedule.intersect(Schedule.recurs(maxRetries)),
+    const retrySchedule = Schedule.spaced("2 seconds").pipe((schedule) =>
+      Schedule.max([schedule, Schedule.recurs(maxRetries)]),
     )
 
     const effect = queryTodos.pipe(
@@ -147,7 +146,6 @@ Then(
       // Update this.todoDocuments with the last result for better error messages
       this.todoDocuments = todoDocumentsRef.value
 
-      // Provide detailed error info for debugging
       assert.fail(
         `Expected ${count} todo(s) but got ${todoDocumentsRef.value.length} after retries.\n` +
           `External runtime: ${externalRuntime}\n` +
@@ -179,6 +177,7 @@ Then(
 Then(
   "the todo summary should contain {string} with value {string}",
   function (this: TestWorld, label: string, expectedValue: string) {
+    expectedValue = this.purchaseItem(expectedValue)
     assert.ok(this.todoDocuments, "No query result available")
     assert.ok(this.todoDocuments.length > 0, "No todos available")
     // biome-ignore lint/style/noNonNullAssertion: length check above guarantees this exists
@@ -244,11 +243,9 @@ When(
       )
 
       if (!result.hasPendingScheduledFlows) {
-        // No pending flows - job worker has completed
         return
       }
 
-      // Wait before next poll
       await new Promise((resolve) => setTimeout(resolve, pollInterval))
     }
 

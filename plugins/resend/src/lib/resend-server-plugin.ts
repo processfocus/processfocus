@@ -1,15 +1,23 @@
 import {
+  type ConfigurationGroup,
   SERVER_PLUGIN_HOST_INTERFACE_VERSION,
   type ServerPluginJobLayer,
   type ServerPluginRegistration,
   WebhookCallbackHost,
+  readConfiguration,
 } from "@processfocus/runtime"
-import { Config, Data, Effect, Either, Layer, Option, Redacted } from "effect"
+import { Data, Effect, Layer, Option, Redacted, Result } from "effect"
 import {
   ResendClientConfigFromEnv,
   ResendClientLive,
   ResendDeferredDelivery,
 } from "./resend-client"
+import {
+  ResendConfiguration,
+  ResendDeferredDeliveryConfiguration,
+  ResendWebhookConfiguration,
+  makeResendWebhookConfiguration,
+} from "./resend-configuration"
 import {
   decodeResendWebhookPayload,
   getSvixHeaderValues,
@@ -82,18 +90,14 @@ const getStoredResendMetadata = (
   return { emailId, primaryTo, environment }
 }
 
-const getWebhookConfig = Effect.gen(function* () {
-  const secret = yield* Config.option(Config.redacted("RESEND_WEBHOOK_SECRET"))
-  const environment = yield* Config.string("PF_ENV").pipe(
-    Config.withDefault("local"),
-  )
-  return {
-    webhookSecret: Option.map(secret, Redacted.value).pipe(
+const getWebhookConfig = readConfiguration(ResendWebhookConfiguration).pipe(
+  Effect.map(({ webhookSecret, environment }) => ({
+    webhookSecret: Option.map(webhookSecret, Redacted.value).pipe(
       Option.getOrUndefined,
     ),
     environment,
-  }
-})
+  })),
+)
 
 /** Provider-owned Resend callback behavior behind generic host callbacks. */
 export const handleResendWebhookRequest = (
@@ -105,7 +109,11 @@ export const handleResendWebhookRequest = (
     }
 
     const callbacks = yield* WebhookCallbackHost
-    const config = yield* getWebhookConfig
+    const config = yield* getWebhookConfig.pipe(
+      Effect.catchTag("ConfigurationError", () =>
+        Effect.succeed({ webhookSecret: undefined, environment: "local" }),
+      ),
+    )
     if (!config.webhookSecret) {
       yield* Effect.logError("RESEND_WEBHOOK_SECRET is not configured")
       return textResponse(503, "Resend webhook secret is not configured")
@@ -116,19 +124,19 @@ export const handleResendWebhookRequest = (
       return textResponse(400, "Missing webhook signature headers")
     }
 
-    const rawBodyResult = yield* Effect.either(
+    const rawBodyResult = yield* Effect.result(
       Effect.tryPromise({
         try: () => request.text(),
         catch: (cause) => new InvalidRequestBodyError({ cause }),
       }),
     )
-    if (Either.isLeft(rawBodyResult)) {
+    if (Result.isFailure(rawBodyResult)) {
       yield* Effect.logError("Failed to read Resend webhook request body", {
-        error: String(rawBodyResult.left),
+        error: String(rawBodyResult.failure),
       })
       return textResponse(400, "Invalid request body")
     }
-    const rawBody = rawBodyResult.right
+    const rawBody = rawBodyResult.success
 
     if (
       !verifyResendWebhookSignature({
@@ -141,19 +149,19 @@ export const handleResendWebhookRequest = (
     }
 
     const deliveryId = svixHeaders.id
-    const payloadResult = yield* Effect.either(
+    const payloadResult = yield* Effect.result(
       decodeResendWebhookPayload(rawBody),
     )
-    if (Either.isLeft(payloadResult)) {
+    if (Result.isFailure(payloadResult)) {
       yield* Effect.logError("Failed to parse Resend webhook payload", {
-        error: String(payloadResult.left),
+        error: String(payloadResult.failure),
       })
       return textResponse(400, "Invalid JSON payload")
     }
 
     const event = parseResendWebhookEvent({
       deliveryId,
-      payload: payloadResult.right,
+      payload: payloadResult.success,
     })
     const webhookEnvironment =
       event.publicCompletion?.environment ?? event.deferredTodo?.environment
@@ -361,20 +369,28 @@ export const handleResendWebhookRequest = (
 
     return okResponse()
   }).pipe(
-    Effect.catchAllCause((cause) =>
+    Effect.catchCause((cause) =>
       Effect.logError("Failed to process Resend webhook", { cause }).pipe(
         Effect.as(textResponse(500, "Failed to process webhook")),
       ),
     ),
   )
 
-export const ResendDeferredDeliveryFromEnv = Layer.effect(
-  ResendDeferredDelivery,
-  Config.string("PF_ENV").pipe(
-    Config.withDefault("local"),
-    Effect.map((environment) => ({ environment })),
-  ),
-)
+/** The same executable configuration is used by worker wiring and preflight. */
+export const makeResendDeferredDeliveryFromEnv = (
+  configuration = ResendDeferredDeliveryConfiguration,
+) =>
+  Layer.unwrap(
+    readConfiguration(configuration).pipe(
+      Effect.map(({ waitForDelivery, environment }) =>
+        waitForDelivery
+          ? Layer.succeed(ResendDeferredDelivery, { environment })
+          : Layer.empty,
+      ),
+    ),
+  )
+
+export const ResendDeferredDeliveryFromEnv = makeResendDeferredDeliveryFromEnv()
 
 export const ResendServerPluginJobLayer = Layer.merge(
   Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
@@ -383,10 +399,26 @@ export const ResendServerPluginJobLayer = Layer.merge(
 
 export const makeResendServerPlugin = (options?: {
   readonly jobLayer?: ServerPluginJobLayer
-}): ServerPluginRegistration => ({
+  readonly configuration?: readonly ConfigurationGroup[]
+  readonly deliveryConfiguration?: typeof ResendDeferredDeliveryConfiguration
+}): ServerPluginRegistration & {
+  readonly configuration: readonly ConfigurationGroup[]
+} => ({
   identity: "email.resend",
   hostInterfaceVersion: SERVER_PLUGIN_HOST_INTERFACE_VERSION,
-  jobLayer: options?.jobLayer ?? ResendServerPluginJobLayer,
+  jobLayer:
+    options?.jobLayer ??
+    (options?.deliveryConfiguration === undefined
+      ? ResendServerPluginJobLayer
+      : Layer.merge(
+          Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
+          makeResendDeferredDeliveryFromEnv(options.deliveryConfiguration),
+        )),
+  configuration: [
+    ...(options?.configuration ?? [ResendConfiguration]),
+    options?.deliveryConfiguration ?? ResendDeferredDeliveryConfiguration,
+    makeResendWebhookConfiguration(options?.deliveryConfiguration),
+  ],
   webhooks: [
     {
       path: RESEND_WEBHOOK_PATH,

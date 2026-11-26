@@ -1,13 +1,16 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs as utilParseArgs } from "node:util"
-import * as Otel from "@effect/opentelemetry"
-import { FetchHttpClient } from "@effect/platform"
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
 import { NodeFileSystem } from "@effect/platform-node"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http"
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base"
+import type {
+  EmailSender,
+  NotificationDeliveryConfig,
+} from "@processfocus/runtime"
 import { makeServerPluginJobLayer } from "@processfocus/runtime"
 import {
   Context,
@@ -15,12 +18,13 @@ import {
   DateTime,
   Effect,
   Exit,
-  FiberRef,
   Layer,
-  LogLevel,
   Logger,
+  References,
   Schema,
+  Semaphore,
 } from "effect"
+import { FetchHttpClient } from "effect/http"
 import {
   CedarPoliciesProvider,
   OrgCedarPoliciesProvider,
@@ -39,8 +43,10 @@ import {
   SlaCalculationServiceLive,
   TodoCollectionOpsLive,
 } from "@pf/graphql-api"
-import { UserDetails, type UserDetailsValue } from "@pf/graphql-db-operations"
-import type { EmailSender, NotificationDeliveryConfig } from "@pf/job-handler"
+import {
+  PROCESS_IMPORT_OUTBOX_QUEUE,
+  UserDetails,
+} from "@pf/graphql-db-operations"
 import {
   EXECUTION_EVENT_QUEUE,
   FLOW_EXECUTION_QUEUE,
@@ -80,7 +86,6 @@ import {
   SqliteGraphqlDbOperationsLive,
   SqliteScheduledFlowOperationsLive,
 } from "@pf/sqlite-operations"
-import { SqliteQueueServiceLive } from "@pf/sqlite-queue-service"
 import { TodoSummaryComputationLive } from "@pf/todo-summary"
 import { warnIgnoredCronDeclarations } from "../cron-warnings"
 import { LocalFileResolutionHostLive } from "../services/docker-file-resolver"
@@ -92,10 +97,15 @@ import {
   LocalDocumentStoreConfig,
   LocalDocumentStoreServiceLive,
 } from "../services/local-document-store"
+import { LocalQueueServiceLive } from "../services/local-queue-service"
 import { makeLocalSqlClientLayer } from "../services/local-sql-client-layer"
 import { GRAPHQL_PORT_FILE } from "../services/port-file"
 import { createSingleQueuePoller } from "./queue-poller"
 import { jobHandler } from "./types"
+import { startWorkerHeartbeat } from "./worker-protocol"
+
+// This entrypoint also runs directly, without the local runtime supervisor.
+process.env["PF_RUNTIME_MODE"] = "local"
 
 /**
  * Create the authorization layer based on CedarPoliciesProvider configuration.
@@ -160,7 +170,7 @@ const parseArgs = (
       return yield* new InvalidUsageError({ _: undefined })
     }
 
-    return yield* Schema.decodeUnknown(ParsedArgsSchema)({
+    return yield* Schema.decodeUnknownEffect(ParsedArgsSchema)({
       org,
       check: parseResult.values.check,
     }).pipe(Effect.mapError(() => new InvalidUsageError({ _: undefined })))
@@ -174,7 +184,7 @@ interface CliConfig {
   readonly check: boolean
 }
 
-const CliConfig = Context.GenericTag<CliConfig>(
+const CliConfig = Context.Service<CliConfig>(
   "@pf/runtime-local/JobWorkerCliConfig",
 )
 
@@ -188,7 +198,7 @@ const CliConfigLive = Layer.effect(
       org: args.org,
       check: args.check,
     })),
-    Effect.catchAll((error) => {
+    Effect.catch((error) => {
       console.error(
         "Invalid arguments. Usage: bun run job-worker.ts [--org ORG | -o ORG] [--check]",
       )
@@ -204,7 +214,7 @@ const CliConfigLive = Layer.effect(
  * Exports traces to the default OTLP endpoint at http://127.0.0.1:4318/v1/traces
  * Exports metrics to the default OTLP endpoint at http://127.0.0.1:4318/v1/metrics
  */
-const NodeSdkLive = Otel.NodeSdk.layer(() => ({
+const NodeSdkLive = NodeSdk.layer(() => ({
   resource: { serviceName: "job-worker" },
   metricReader: new PeriodicExportingMetricReader({
     exporter: new OTLPMetricExporter({
@@ -219,40 +229,34 @@ const NodeSdkLive = Otel.NodeSdk.layer(() => ({
 }))
 
 /**
- * Layer providing the RequestTime FiberRef for database operations.
+ * Layer providing the RequestTime for database operations.
  *
- * The FiberRef is initialized with a default value. Unlike the GraphQL server,
+ * The is initialized with a default value. Unlike the GraphQL server,
  * the job worker uses the current time for each job processing.
  */
-const RequestTimeLive = Layer.succeed(
-  RequestTime,
-  FiberRef.unsafeMake(DateTime.unsafeMake(0)),
-)
+const RequestTimeLive = Layer.succeed(RequestTime, DateTime.makeUnsafe(0))
 
 /**
- * Layer providing the CurrentPrincipal FiberRef for authorization checks.
+ * Layer providing the CurrentPrincipal for authorization checks.
  *
- * The FiberRef is initialized with null since job workers have no user context.
+ * The is initialized with null since job workers have no user context.
  * Custom layers (e.g., OrgAuthorizationServiceLive) need this at construction time.
  */
 const CurrentPrincipalLive = Layer.succeed(
   CurrentPrincipal,
-  FiberRef.unsafeMake(null as ProviderUserPrincipal | null),
+  null as ProviderUserPrincipal | null,
 )
 
 /**
- * Layer providing the UserDetails FiberRef for database operations.
+ * Layer providing the UserDetails for database operations.
  *
- * The FiberRef is initialized with SYSTEM as the user since job workers
+ * The is initialized with SYSTEM as the user since job workers
  * operate without user context.
  */
-const UserDetailsLive = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "SYSTEM",
-    id: null,
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsLive = Layer.succeed(UserDetails, {
+  by: "SYSTEM",
+  id: null,
+})
 
 const DefaultNotificationDeliveryConfigLive = makeNotificationDeliveryConfig(
   () => getEffectiveFrontendBaseUrl(),
@@ -269,7 +273,6 @@ const createAppLayer = <E, R>(
   schemaPaths: readonly string[],
   orgPath: string,
 ) => {
-  // Create ConditionEvaluator, ScheduleEvaluator, and SystemStepExecutor layers from the loaded organisation
   const ConditionEvaluatorLive = Layer.succeed(
     ConditionEvaluator,
     makeConditionEvaluator(org),
@@ -287,7 +290,6 @@ const createAppLayer = <E, R>(
     makeForEachItemsResolver(org),
   )
 
-  // Create authorization layer using cedar policy paths and custom schema paths
   const AuthorizationLive = makeAuthorizationLayer(policyPaths, schemaPaths)
 
   // Document store for server-side file resolution and attachment delivery.
@@ -304,23 +306,6 @@ const createAppLayer = <E, R>(
   )
   const ExecutorHostLive = makeLocalExecutorHostLayer(orgPath)
 
-  /**
-   * Application layer providing all dependencies for the job worker.
-   *
-   * Includes:
-   * - SqliteQueueServiceLive: Queue operations against SQLite
-   * - SqliteFlowExecutionOperationsLive: Flow execution operations
-   * - SqliteGraphqlDbOperationsLive: GraphQL database operations (includes TodoQueries)
-   * - TodoCollectionOpsLive: RxDB collection operations for todos
-   * - TodoEventClientLive: HTTP client to notify GraphQL server about todo creation
-   * - ConditionEvaluatorLive: Evaluates flow conditions from organisation code
-   * - RequestTimeLive: Current time for database operations
-   * - UserDetailsLive: System user context for database operations
-   * - CurrentPrincipalLive: Null principal for background authorization checks
-   * - TypedSqliteDrizzleLayer: Drizzle ORM typed for our schema
-   * - local Turso SQL layer: multi-process local SQLite driver
-   */
-  // Build collection ops layers with their dependencies
   const TodoCollectionOpsWithDeps = Layer.provide(
     TodoCollectionOpsLive,
     SqliteGraphqlDbOperationsLive,
@@ -345,7 +330,7 @@ const createAppLayer = <E, R>(
     Layer.provide(orgProviderLayer),
   )
 
-  const SqliteQueueWithRequestContext = SqliteQueueServiceLive.pipe(
+  const SqliteQueueWithRequestContext = LocalQueueServiceLive.pipe(
     Layer.provide(Layer.merge(RequestTimeLive, UserDetailsLive)),
   )
 
@@ -395,12 +380,6 @@ const createAppLayer = <E, R>(
 }
 
 /**
- * Worker layer that starts queue pollers as forked fibers.
- *
- * Polls the flow-execution, todo-event, process-event, and execution-event queues.
- */
-
-/**
  * Global concurrency limit for job processing across all queues
  *
  * For SQLite a value larger than 1 is highly problematic due to process-wide
@@ -440,36 +419,32 @@ const queueHandlers = {
   [FLOW_EXECUTION_QUEUE]: jobHandler(flowExecutionHandler),
   [TODO_EVENT_QUEUE]: jobHandler(todoEventHandler),
   [PROCESS_EVENT_QUEUE]: jobHandler(processEventHandler),
+  [PROCESS_IMPORT_OUTBOX_QUEUE]: jobHandler(processEventHandler),
   [EXECUTION_EVENT_QUEUE]: jobHandler(executionEventHandler),
   [SYSTEM_STEP_EXECUTION_QUEUE]: jobHandler(systemStepExecutionHandler),
   [NOTIFICATION_DELIVERY_QUEUE]: jobHandler(notificationDeliveryHandler),
 }
 
-const WorkerLive = Layer.scopedDiscard(
+const WorkerLive = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* Effect.log("Starting job worker...")
 
     // Create a global semaphore shared by all queue pollers
     // This ensures only GLOBAL_MAX_CONCURRENT jobs run at once across all queues
-    const globalSemaphore = yield* Effect.makeSemaphore(GLOBAL_MAX_CONCURRENT)
+    const globalSemaphore = yield* Semaphore.make(GLOBAL_MAX_CONCURRENT)
 
     const queueNames = Object.keys(queueHandlers).join(", ")
-
-    // Start a single queue poller that claims across all local queues.
-    yield* Effect.fork(createSingleQueuePoller(queueHandlers, globalSemaphore))
 
     yield* Effect.log(
       `Job worker started, polling ${queueNames} queues with a single dispatcher`,
     )
 
-    // Keep running until interrupted
-    return yield* Effect.never
+    // Run the dispatcher inline so initialization/policy failures end the layer
+    // and reach supervision instead of leaving a healthy-looking idle worker.
+    return yield* createSingleQueuePoller(queueHandlers, globalSemaphore)
   }),
 )
 
-/**
- * Main program that loads the organisation and launches the worker.
- */
 /**
  * Build the full application layer with FileSystem provided.
  * Uses Dev variant which provides empty org on load failure (for bun --watch).
@@ -486,19 +461,16 @@ const main = Effect.gen(function* () {
     process.env["FRONTEND_BASE_URL"] = getEffectiveFrontendBaseUrl()
   }
 
-  // Create OrganisationProvider layer from CLI path (with FileSystem dependency satisfied)
   const OrgProviderLayer = cliConfig.check
     ? OrganisationProviderFromPath(cliConfig.org).pipe(
         Layer.provide(NodeFileSystem.layer),
       )
     : buildOrgProviderLayer(cliConfig.org)
 
-  // Create CedarPoliciesProvider layer that depends on OrganisationProvider
   const CedarPoliciesLayer = OrgCedarPoliciesProvider.pipe(
     Layer.provide(OrgProviderLayer),
   )
 
-  // Get organisation provider service to create ConditionEvaluator
   const orgProvider = yield* OrganisationProvider.pipe(
     Effect.provide(OrgProviderLayer),
   )
@@ -510,7 +482,6 @@ const main = Effect.gen(function* () {
 
   yield* Effect.log(`✅ Loaded organisation: ${orgProvider.organisation.name}`)
 
-  // Get cedar policies provider to get policy paths
   const cedarPolicies = yield* CedarPoliciesProvider.pipe(
     Effect.provide(CedarPoliciesLayer),
   )
@@ -519,7 +490,6 @@ const main = Effect.gen(function* () {
     `📜 Loaded ${cedarPolicies.policyPaths.length} Cedar policy files`,
   )
 
-  // Create the app layer with the loaded organisation and provider layer
   const AppLayer = createAppLayer(
     orgProvider.organisation,
     OrgProviderLayer,
@@ -528,8 +498,7 @@ const main = Effect.gen(function* () {
     orgProvider.orgPath,
   )
 
-  // Get custom database layer from organisation (if exported)
-  type AppServices = Layer.Layer.Success<typeof AppLayer>
+  type AppServices = Layer.Success<typeof AppLayer>
   const customJobLayer = orgProvider.customJobLayer as
     | Layer.Layer<
         EmailSender | NotificationDeliveryConfig,
@@ -582,7 +551,7 @@ const main = Effect.gen(function* () {
     Layer.provideMerge(TypedSqliteDrizzleLayer),
     Layer.provideMerge(LocalSqlClientLive),
   )
-  type CustomDbLayerDependencies = Layer.Layer.Success<typeof customDbLayerDeps>
+  type CustomDbLayerDependencies = Layer.Success<typeof customDbLayerDeps>
   const customDbLayer = orgProvider.customDbLayer as
     | Layer.Layer<unknown, unknown, CustomDbLayerDependencies>
     | undefined
@@ -605,26 +574,25 @@ const main = Effect.gen(function* () {
     return
   }
 
-  // Compose final layer with all dependencies
   const AppLive = WorkerLive.pipe(
     Layer.provide(AppLayerWithCustom),
   ) as Layer.Layer<never, unknown, never>
 
-  // Launch the worker
   return yield* Layer.launch(AppLive).pipe(Effect.provide(NodeSdkLive))
 })
 
-// Run the main program with CLI config
+startWorkerHeartbeat()
+
 const exit = await Effect.runPromiseExit(
   main.pipe(
     Effect.provide(CliConfigLive),
-    Effect.tapErrorCause((cause) =>
+    Effect.tapCause((cause) =>
       Effect.logError(
         `Local runtime startup blocked: job worker initialization failed.\n${cause}\nFix the configuration above and restart the local runtime. Automatic process steps are unavailable.`,
       ),
     ),
-    Logger.withMinimumLogLevel(LogLevel.Debug),
-    Effect.provide(Logger.pretty),
+    Effect.provideService(References.MinimumLogLevel, "Debug"),
+    Effect.provide(Logger.layer([Logger.consolePretty()])),
   ),
 )
 if (Exit.isFailure(exit)) process.exitCode = 1

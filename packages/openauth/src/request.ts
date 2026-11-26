@@ -4,8 +4,8 @@
  * @packageDocumentation
  */
 
-import type { HttpServerRequest } from "@effect/platform"
 import { Effect } from "effect"
+import type { HttpServerRequest } from "effect/http"
 import { MissingHostError, OAuthEndpointError } from "./endpoints/errors"
 
 /**

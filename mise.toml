@@ -1,3 +1,20 @@
 [tools]
-bun = "1.4.2"
+bun = "1.4.5"
 node = "26.8.2"
+jactionlint = "2.1.0"
+usage = "7.1.0"
+
+# Turso's local-file SQL shell. The Rust build tracks the
+# `@tursodatabase/database` version the local runtime uses and can open a
+# local runtime database with `--experimental-multiprocess-wal`. The older
+# `turso` CLI (tursodatabase/turso-cli) is a cgo-disabled Go build whose
+# local-file support is a stub.
+[tools."http:tursodb"]
+version = "0.8.3"
+strip_components = 1
+
+[tools."http:tursodb".platforms]
+linux-x64 = { url = "https://github.com/tursodatabase/turso/releases/download/v0.8.3/turso_cli-x86_64-unknown-linux-gnu.tar.xz", checksum = "sha256:4475c4df29f744fb3b2fdeef622d9297bbb80698039eec57d1b3ba7e048b5e31" }
+linux-arm64 = { url = "https://github.com/tursodatabase/turso/releases/download/v0.8.3/turso_cli-aarch64-unknown-linux-gnu.tar.xz", checksum = "sha256:4a832c5125ea9137b020843c61731644666db90c450b027f5d5cffe455c4c3fb" }
+macos-x64 = { url = "https://github.com/tursodatabase/turso/releases/download/v0.8.3/turso_cli-x86_64-apple-darwin.tar.xz", checksum = "sha256:7db0a635e5f59771f78cbb298bf8c28c2f523ad9d814c3c332b251667034f66e" }
+macos-arm64 = { url = "https://github.com/tursodatabase/turso/releases/download/v0.8.3/turso_cli-aarch64-apple-darwin.tar.xz", checksum = "sha256:9990ea61d065a9f229ad81bda0156ee92081229b2ccf986c258c03e9ea705a75" }

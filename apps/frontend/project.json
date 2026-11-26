@@ -25,6 +25,7 @@
         "!{projectRoot}/.next/**/*",
         "!{projectRoot}/.open-next/**/*",
         "{projectRoot}/lib/generated/frontend-manifest.json",
+        "{projectRoot}/lib/generated/deployment-id",
         "{projectRoot}/lib/generated/organisation-plugin-loaders.tsx",
         "{projectRoot}/lib/generated/organisation-plugin-preparation.ts",
         "{projectRoot}/lib/generated/organisation-plugin-composition.json",
@@ -69,6 +70,7 @@
       ],
       "outputs": [
         "{projectRoot}/lib/generated/frontend-manifest.json",
+        "{projectRoot}/lib/generated/deployment-id",
         "{projectRoot}/lib/generated/organisation-plugin-loaders.tsx",
         "{projectRoot}/lib/generated/organisation-plugin-preparation.ts",
         "{projectRoot}/lib/generated/organisation-plugin-composition.json",

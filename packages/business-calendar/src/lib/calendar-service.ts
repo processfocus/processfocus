@@ -198,14 +198,16 @@ export interface BusinessCalendarServiceShape {
 /**
  * Business Calendar Service tag.
  */
-export class BusinessCalendarService extends Context.Tag(
-  "@pf/business-calendar/BusinessCalendarService",
-)<BusinessCalendarService, BusinessCalendarServiceShape>() {}
+export class BusinessCalendarService extends Context.Service<
+  BusinessCalendarService,
+  BusinessCalendarServiceShape
+>()("@pf/business-calendar/BusinessCalendarService") {}
 
 /**
  * Business Calendar Config Service tag.
  * Used to provide the configuration to the service implementation.
  */
-export class BusinessCalendarConfigService extends Context.Tag(
-  "@pf/business-calendar/BusinessCalendarConfigService",
-)<BusinessCalendarConfigService, BusinessCalendarConfig>() {}
+export class BusinessCalendarConfigService extends Context.Service<
+  BusinessCalendarConfigService,
+  BusinessCalendarConfig
+>()("@pf/business-calendar/BusinessCalendarConfigService") {}

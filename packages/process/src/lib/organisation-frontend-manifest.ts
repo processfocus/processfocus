@@ -1,5 +1,5 @@
 import { Data, Effect } from "effect"
-import type * as AST from "effect/SchemaAST"
+import * as AST from "effect/SchemaAST"
 import {
   FormComponentPluginType,
   type FormComponentPluginTypeDeclaration,
@@ -85,59 +85,59 @@ const parseFormComponentPluginDeclaration = (
 
 const collectPluginDeclarationsFromAst = (
   ast: AST.AST,
-  annotations: AST.Annotations = ast.annotations,
+  annotations: Record<PropertyKey, unknown> = {
+    ...ast.annotations,
+    ...AST.resolve(ast),
+  },
 ): ReadonlyArray<FormComponentPluginTypeDeclaration> => {
   const declarations: FormComponentPluginTypeDeclaration[] = []
-  const mergedAnnotations = { ...ast.annotations, ...annotations }
+  const mergedAnnotations: Record<PropertyKey, unknown> = {
+    ...ast.annotations,
+    ...AST.resolve(ast),
+    ...annotations,
+  }
   const declaration = mergedAnnotations[FormComponentPluginType]
 
   if (declaration !== undefined) {
     declarations.push(parseFormComponentPluginDeclaration(declaration))
   }
 
+  if (ast.encoding) {
+    for (const link of ast.encoding)
+      declarations.push(
+        ...collectPluginDeclarationsFromAst(link.to, mergedAnnotations),
+      )
+    return declarations
+  }
   switch (ast._tag) {
-    case "TypeLiteral": {
+    case "Objects": {
       for (const prop of ast.propertySignatures) {
         declarations.push(
-          ...collectPluginDeclarationsFromAst(prop.type, prop.annotations),
+          ...collectPluginDeclarationsFromAst(prop.type, {
+            ...prop.type.context?.annotations,
+          }),
         )
       }
 
       return declarations
     }
-    case "TupleType": {
+    case "Arrays": {
       const restType = ast.rest[0]
 
       if (!restType) {
         return declarations
       }
 
-      declarations.push(...collectPluginDeclarationsFromAst(restType.type))
+      declarations.push(...collectPluginDeclarationsFromAst(restType))
       return declarations
     }
-    case "Refinement":
-      declarations.push(
-        ...collectPluginDeclarationsFromAst(ast.from, {
-          ...ast.annotations,
-          ...annotations,
-        }),
-      )
-      return declarations
-    case "Transformation":
-      declarations.push(
-        ...collectPluginDeclarationsFromAst(ast.from, {
-          ...ast.annotations,
-          ...annotations,
-        }),
-      )
-      return declarations
     case "Union": {
       for (const type of ast.types) {
-        if (type._tag === "Literal" && type.literal === null) {
+        if (type._tag === "Null") {
           continue
         }
 
-        if (type._tag === "UndefinedKeyword") {
+        if (type._tag === "Undefined") {
           continue
         }
 

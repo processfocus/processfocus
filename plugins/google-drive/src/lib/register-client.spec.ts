@@ -1,9 +1,9 @@
-import type React from "react"
 import {
   cleanupAllPlugins,
   getMatchingPlugin,
   unregisterWalkerPlugin,
-} from "@pf/form-client-representation"
+} from "@processfocus/runtime/walker-plugin"
+import type React from "react"
 import type {
   FormRendererRegistration,
   FrontendPluginField,
@@ -106,13 +106,15 @@ describe("trusted Google Drive browser entrypoint", () => {
       children,
     }: {
       children: (field: {
-        readonly state: { readonly value: string }
-        readonly handleChange: (value: string) => void
+        readonly state: { readonly value: unknown }
+        readonly handleChange: (value: unknown) => void
+        readonly handleBlur: () => void
       }) => React.JSX.Element
     }) =>
       children({
         state: { value: "" },
         handleChange: () => undefined,
+        handleBlur: () => undefined,
       })
     const component = {
       _tag: "plugin",
@@ -180,13 +182,15 @@ describe("trusted Google Drive browser entrypoint", () => {
       children,
     }: {
       children: (field: {
-        readonly state: { readonly value: string }
-        readonly handleChange: (value: string) => void
+        readonly state: { readonly value: unknown }
+        readonly handleChange: (value: unknown) => void
+        readonly handleBlur: () => void
       }) => React.JSX.Element
     }) =>
       children({
         state: { value: "" },
         handleChange: () => undefined,
+        handleBlur: () => undefined,
       })
     const component = {
       _tag: "plugin",

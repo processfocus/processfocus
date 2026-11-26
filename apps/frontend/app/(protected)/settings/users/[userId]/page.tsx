@@ -1,6 +1,8 @@
 import { Suspense } from "react"
 import { UserEditClient } from "./client"
 
+export const instant = false
+
 interface UserEditPageProps {
   params: Promise<{
     userId: string

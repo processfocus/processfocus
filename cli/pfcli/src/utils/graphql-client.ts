@@ -1,5 +1,6 @@
 import { negotiateHostingContract } from "@processfocus/hosting-contract"
 import { Duration, Effect, Schema } from "effect"
+import type { ProjectWorkloadPermission } from "@pf/auth-config/runtime"
 import {
   getWsEndpointFromPortFile,
   readGraphqlPort,
@@ -7,8 +8,10 @@ import {
 import { CliError } from "../errors"
 import {
   type Credentials,
+  acquireAccessToken,
   credentialsExpired,
   readCredentials,
+  readWorkloadCredentials,
 } from "./credentials"
 
 /**
@@ -30,7 +33,7 @@ const AUTH_LOGIN_HINT = 'Authentication required. Run "pfcli auth login".'
 
 const LOCALHOST_HOSTS = new Set(["localhost", "127.0.0.1"])
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 const formatGraphqlTimeoutMessage = (timeoutMs: number) => {
   const seconds = timeoutMs / 1000
@@ -49,12 +52,14 @@ const withGraphqlTimeout = <A>(
   timeoutMs === undefined
     ? effect
     : effect.pipe(
-        Effect.timeoutFail({
+        Effect.timeoutOrElse({
           duration: Duration.millis(timeoutMs),
-          onTimeout: () =>
-            new CliError({
-              message: formatGraphqlTimeoutMessage(timeoutMs),
-            }),
+          orElse: () =>
+            Effect.fail(
+              new CliError({
+                message: formatGraphqlTimeoutMessage(timeoutMs),
+              }),
+            ),
         }),
       )
 
@@ -78,10 +83,6 @@ export const resolveGraphqlEndpoint = (baseUrl: string): string => {
   return `${normalizedBaseUrl}/graphql`
 }
 
-/**
- * Execute a GraphQL query/mutation.
- * Uses native fetch for simplicity and reliability.
- */
 export const resolveGraphqlWsEndpoint = (baseUrl: string): string => {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "")
 
@@ -99,13 +100,15 @@ export const resolveGraphqlWsEndpoint = (baseUrl: string): string => {
 
 export const graphqlRequest = <TData>(
   endpoint: string,
-  accessToken: string,
+  accessToken: string | Effect.Effect<string, CliError>,
   query: string,
   variables: Record<string, unknown>,
   options: GraphqlRequestOptions = {},
 ): Effect.Effect<TData, CliError> =>
   Effect.gen(function* () {
-    const requestBody = yield* Schema.encode(JsonValue)({
+    const token =
+      typeof accessToken === "string" ? accessToken : yield* accessToken
+    const requestBody = yield* Schema.encodeEffect(JsonValue)({
       query,
       variables,
     }).pipe(
@@ -125,7 +128,7 @@ export const graphqlRequest = <TData>(
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${accessToken}`,
+              Authorization: `Bearer ${token}`,
             },
             body: requestBody,
             signal,
@@ -172,7 +175,7 @@ export const graphqlRequest = <TData>(
         }),
     })
 
-    const result = yield* Schema.decodeUnknown(JsonValue)(body).pipe(
+    const result = yield* Schema.decodeUnknownEffect(JsonValue)(body).pipe(
       Effect.map((value) => value as GraphqlResponse<TData>),
       Effect.mapError(
         (cause) =>
@@ -214,10 +217,6 @@ export const graphqlRequest = <TData>(
     return result.data
   })
 
-/**
- * Execute a GraphQL query/mutation using credentials.
- * Automatically resolves the endpoint from credentials.baseUrl.
- */
 const HOSTING_CONTRACT_QUERY = `
   query HostingContract {
     hostingContract {
@@ -260,7 +259,7 @@ export const ensureHostingContractCompatible = (
       HOSTING_CONTRACT_QUERY,
       {},
       { timeoutMs: HOSTING_CONTRACT_PROBE_TIMEOUT_MS },
-    ).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+    ).pipe(Effect.catch(() => Effect.succeed(undefined)))
 
     if (probe === undefined) {
       return
@@ -287,9 +286,12 @@ export const ensureHostingContractCompatible = (
     )
   })
 
-export const readCredentialsOrFail = (): Effect.Effect<Credentials, CliError> =>
+export const readCredentialsOrFail = (
+  purpose?: ProjectWorkloadPermission,
+): Effect.Effect<Credentials, CliError> =>
   Effect.gen(function* () {
-    const credentials = readCredentials()
+    const credentials =
+      (yield* readWorkloadCredentials(purpose)) ?? readCredentials()
     if (!credentials || credentialsExpired(credentials)) {
       return yield* new CliError({ message: AUTH_LOGIN_HINT })
     }
@@ -303,14 +305,15 @@ export const graphqlRequestWithCredentials = <TData>(
   query: string,
   variables: Record<string, unknown> = {},
   options: GraphqlRequestOptions = {},
+  purpose?: ProjectWorkloadPermission,
 ): Effect.Effect<TData, CliError> =>
   Effect.gen(function* () {
-    const credentials = yield* readCredentialsOrFail()
+    const credentials = yield* readCredentialsOrFail(purpose)
     const endpoint = resolveGraphqlEndpoint(credentials.baseUrl)
 
     return yield* graphqlRequest<TData>(
       endpoint,
-      credentials.accessToken,
+      acquireAccessToken(credentials),
       query,
       variables,
       options,

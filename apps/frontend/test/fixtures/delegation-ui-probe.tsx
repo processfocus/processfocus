@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client"
+import { DateTimeDisplayProvider } from "@pf/shadcn-components/date-time-display"
 import { SecretLoginForm } from "../../app/login/secret-login-form"
 import { DelegationExpiry } from "../../components/delegation-expiry"
 
@@ -10,6 +11,8 @@ createRoot(root).render(
     <p>Isolated UI only. Authentication is deliberately unavailable.</p>
     <SecretLoginForm enabled />
     <h2>Profile expiry</h2>
-    <DelegationExpiry expiresAt={Date.UTC(2030, 0, 1, 12)} />
+    <DateTimeDisplayProvider initialNow={Date.now()}>
+      <DelegationExpiry expiresAt={Date.UTC(2030, 0, 1, 12)} />
+    </DateTimeDisplayProvider>
   </main>,
 )

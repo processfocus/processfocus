@@ -1,5 +1,22 @@
-import { DateTime, Schema as ES } from "effect"
+import { DateTime } from "effect"
 import { Form, type OrgUnit, Phase, Process, Role, Schedule } from "@pf/process"
+import {
+  assignDeskForm,
+  assignIDBadgeForm,
+  backgroundCheckForm,
+  complianceTrainingForm,
+  createAccountForm,
+  day30CheckInForm,
+  formalPerformanceReviewForm,
+  onboardingChecklistForm,
+  orientationSessionForm,
+  passedForm,
+  probationFailedForm,
+  provideLaptopAndBadgeForm,
+  provisionLaptopForm,
+  review306090DayPlanForm,
+  sendWelcomePackForm,
+} from "./on-boarding-forms"
 
 export class OnBoarding extends Process {
   constructor(scope: OrgUnit, id: string, it: Role, facilities: Role) {
@@ -62,11 +79,11 @@ export class OnBoarding extends Process {
     const send_welcome_pack = new Form(this, "Send welcome pack", {
       name: "Send welcome packet",
       purpose: "Timeline, policies, onboarding portal access",
-      form: () => ({
-        first_name: ES.String,
-        last_name: ES.String,
-        start_date: ES.DateTimeUtc,
-      }),
+      form: sendWelcomePackForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "sendWelcomePackForm",
+      },
       role: hr,
       phase: preBoarding,
     })
@@ -75,41 +92,65 @@ export class OnBoarding extends Process {
     const background_check = new Form(this, "Background check", {
       name: "Initiate a background check",
       purpose: "Identity + employment verification",
-      form: () => ({}),
+      form: backgroundCheckForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "backgroundCheckForm",
+      },
       role: hr,
       phase: preBoarding,
     })
 
     const create_account = new Form(this, "Create account", {
       name: "create accounts (email, system access)",
-      form: () => ({}),
+      form: createAccountForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "createAccountForm",
+      },
       role: it,
       phase: preBoarding,
     })
 
     const provision_laptop = new Form(this, "Provision laptop", {
       purpose: "Image device and install apps",
-      form: () => ({}),
+      form: provisionLaptopForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "provisionLaptopForm",
+      },
       role: it,
       phase: preBoarding,
     })
 
     const assign_desk = new Form(this, "Assign desk", {
       name: "Assign a desk/office",
-      form: () => ({}),
+      form: assignDeskForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "assignDeskForm",
+      },
       role: facilities,
       phase: day1,
     })
 
     const provision_badge = new Form(this, "Assign ID badge", {
-      form: () => ({}),
+      form: assignIDBadgeForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "assignIDBadgeForm",
+      },
       role: facilities,
       phase: day1,
     })
 
     const prepare_onboarding = new Form(this, "Onboarding checklist", {
       name: "Receives a notification with an on-boarding checklist (e.g., prepare a 30-60-90 day plan, assign a buddy)",
-      form: () => ({}),
+      form: onboardingChecklistForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "onboardingChecklistForm",
+      },
       role: hiring_manager,
       phase: preBoarding,
     })
@@ -119,7 +160,11 @@ export class OnBoarding extends Process {
     const orientation_session = new Form(this, "Orientation session", {
       purpose:
         "HR conducts an orientation session covering company culture, policies, and benefits",
-      form: () => ({}),
+      form: orientationSessionForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "orientationSessionForm",
+      },
       role: hiring_manager,
       phase: day1,
     })
@@ -127,7 +172,11 @@ export class OnBoarding extends Process {
     const provide_laptop = new Form(this, "Provide laptop and badge", {
       name: "Provide laptop",
       purpose: "Provide employee with hardware and login credentials",
-      form: () => ({}),
+      form: provideLaptopAndBadgeForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "provideLaptopAndBadgeForm",
+      },
       role: it,
       phase: day1,
     })
@@ -135,7 +184,11 @@ export class OnBoarding extends Process {
     const plan_review = new Form(this, "Review 30-60-90 day plan", {
       purpose:
         "Hiring Manager welcomes the employee, introduces them to the team, and reviews the 30-60-90 day plan",
-      form: () => ({}),
+      form: review306090DayPlanForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "review306090DayPlanForm",
+      },
       role: hiring_manager,
       phase: day1,
     })
@@ -145,7 +198,11 @@ export class OnBoarding extends Process {
     const compliance_training = new Form(this, "Compliance training", {
       purpose:
         "The employee completes mandatory compliance training (e.g., security awareness, code of conduct)",
-      form: () => ({}),
+      form: complianceTrainingForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "complianceTrainingForm",
+      },
       role: new_employee,
       phase: week1,
     })
@@ -159,7 +216,11 @@ export class OnBoarding extends Process {
     const day_30_check_in = new Form(this, "Day 30 check-in", {
       purpose:
         "Meet with the employee to discuss their experience, answer questions, and provide feedback",
-      form: () => ({}),
+      form: day30CheckInForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "day30CheckInForm",
+      },
       role: hiring_manager,
       phase: day30,
     })
@@ -174,15 +235,21 @@ export class OnBoarding extends Process {
           "A formal performance review is conducted by the Hiring Manager",
         role: hiring_manager,
         phase: day90,
-        form: () => ({
-          passed: ES.Boolean,
-        }),
+        form: formalPerformanceReviewForm,
+        browser: {
+          entrypoint: "src/on-boarding-forms.ts",
+          exportName: "formalPerformanceReviewForm",
+        },
       },
     )
 
     const permanent = new Form(this, "Passed", {
       purpose: "The employee's status is changed to permanent.",
-      form: () => ({}),
+      form: passedForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "passedForm",
+      },
       role: hiring_manager,
       phase: day90,
     })
@@ -191,11 +258,11 @@ export class OnBoarding extends Process {
       purpose: "A formal performance review is conducted by the Hiring Manager",
       role: hiring_manager,
       phase: day90,
-      form: () => ({
-        // TODO: needs to become one selection, starts separate process
-        start_offboarding: ES.Boolean,
-        start_improvement_process: ES.Boolean,
-      }),
+      form: probationFailedForm,
+      browser: {
+        entrypoint: "src/on-boarding-forms.ts",
+        exportName: "probationFailedForm",
+      },
     })
 
     // **Close Onboarding Process**: HR confirms all checklist items are complete and closes the onboarding record.

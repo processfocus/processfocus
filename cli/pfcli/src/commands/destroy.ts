@@ -1,10 +1,12 @@
 import { Console, Effect } from "effect"
 import { CliError } from "../errors"
+import { acquireAccessToken } from "../utils/credentials"
 import {
   buildExecutionEventSource,
   closeExecutionEventSource,
 } from "../utils/execution-event-source"
 import { formatExecutionLogMessage } from "../utils/execution-log-format"
+import { workloadExecutionPoll } from "../utils/execution-snapshot"
 import { createExecutionEventSource } from "../utils/execution-subscription"
 import {
   extractExecutionFailureMessage,
@@ -16,6 +18,7 @@ import {
   resolveGraphqlEndpoint,
 } from "../utils/graphql-client"
 import { ensureKnownEnvironmentName } from "../utils/remote-name-validation"
+import { writeStartReceipt } from "../utils/start-receipt"
 import { formatStructuredLogLine } from "../utils/structured-log"
 import {
   SUBSCRIPTION_TRANSPORT_QUERY,
@@ -23,8 +26,8 @@ import {
 } from "../utils/subscription-transport"
 
 const START_DESTROY_ENVIRONMENT_MUTATION = `
-  mutation StartDestroyEnvironment($projectId: String!, $environmentId: String!) {
-    startOperationsDestroyEnvironment(input: { projectId: $projectId, environmentId: $environmentId }) {
+  mutation StartDestroyEnvironment($projectId: String!, $environmentId: String!, $executionId: ID) {
+    startOperationsDestroyEnvironment(input: { projectId: $projectId, environmentId: $environmentId }, executionId: $executionId) {
       executionId
       processPath
     }
@@ -40,6 +43,7 @@ interface StartDestroyEnvironmentResponse {
 
 interface RunDestroyOptions {
   readonly waitForCompletion?: boolean
+  readonly executionId?: string | undefined
 }
 
 interface RunDestroyDependencies {
@@ -60,19 +64,24 @@ export const runDestroy = (
   const waitForCompletion = options.waitForCompletion ?? true
 
   return Effect.gen(function* () {
-    yield* ensureKnownEnvironmentName(projectId, environmentId)
+    yield* ensureKnownEnvironmentName(
+      projectId,
+      environmentId,
+      "destroy-environment",
+    )
 
-    const credentials = yield* readCredentialsOrFail()
+    const credentials = yield* readCredentialsOrFail("destroy-environment")
     const endpoint = resolveGraphqlEndpoint(credentials.baseUrl)
 
     const startDestroy = () =>
       Effect.gen(function* () {
+        yield* writeStartReceipt(options.executionId)
         const destroyResult =
           yield* graphqlRequest<StartDestroyEnvironmentResponse>(
             endpoint,
-            credentials.accessToken,
+            acquireAccessToken(credentials),
             START_DESTROY_ENVIRONMENT_MUTATION,
-            { projectId, environmentId },
+            { projectId, environmentId, executionId: options.executionId },
           )
 
         yield* Console.log(
@@ -93,7 +102,7 @@ export const runDestroy = (
     const subscriptionTransport =
       yield* graphqlRequest<SubscriptionTransportResponse>(
         endpoint,
-        credentials.accessToken,
+        acquireAccessToken(credentials),
         SUBSCRIPTION_TRANSPORT_QUERY,
         {},
       )
@@ -127,6 +136,11 @@ export const runDestroy = (
         executionEventSource,
         destroyStart.executionId,
         {
+          ...workloadExecutionPoll(
+            endpoint,
+            credentials,
+            destroyStart.executionId,
+          ),
           executionLabel: "environment destruction",
           timeoutMs: DESTROY_WAIT_TIMEOUT_MS,
           heartbeatMs: DESTROY_WAIT_HEARTBEAT_MS,

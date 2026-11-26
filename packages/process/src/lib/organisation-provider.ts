@@ -1,6 +1,4 @@
 import * as path from "node:path"
-import { FileSystem } from "@effect/platform"
-import type { PlatformError } from "@effect/platform/Error"
 import {
   RUNTIME_ARTIFACT_FORMAT,
   RUNTIME_ARTIFACT_VERSION,
@@ -8,7 +6,16 @@ import {
   type ServerPluginRegistration,
   parseServerPluginRegistrations,
 } from "@processfocus/runtime"
-import { Config, Context, Data, Effect, Either, Layer } from "effect"
+import {
+  Config,
+  Context,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Result,
+} from "effect"
+import type { PlatformError } from "effect/PlatformError"
 import type { Organisation } from "./organisation"
 import { Organisation as OrganisationClass } from "./organisation"
 
@@ -68,9 +75,10 @@ export interface OrganisationProviderService {
 /**
  * Context tag for the OrganisationProvider service.
  */
-export class OrganisationProvider extends Context.Tag(
-  "@pf/process/OrganisationProvider",
-)<OrganisationProvider, OrganisationProviderService>() {}
+export class OrganisationProvider extends Context.Service<
+  OrganisationProvider,
+  OrganisationProviderService
+>()("@pf/process/OrganisationProvider") {}
 
 /**
  * Dynamically load an organisation from a path.
@@ -136,6 +144,7 @@ const loadOrganisationFromPathMechanics = (
         format: RUNTIME_ARTIFACT_FORMAT,
         version: RUNTIME_ARTIFACT_VERSION,
         organisation: module.org,
+        configuration: module.Configuration,
       }),
     ).pipe(
       Effect.mapError(
@@ -318,7 +327,7 @@ export const OrganisationProviderFromEnv: Layer.Layer<
 > = Layer.effect(
   OrganisationProvider,
   Effect.gen(function* () {
-    const orgPath = yield* Config.string("PF_ORG").pipe(
+    const orgPath = yield* Config.String("PF_ORG").pipe(
       Effect.mapError(
         () =>
           new OrganisationLoadError({
@@ -475,10 +484,10 @@ export const OrganisationProviderFromPathDev = (
     Effect.gen(function* () {
       yield* Effect.log(`Loading organisation from: ${orgPath}`)
 
-      const result = yield* Effect.either(loadOrganisationFromPath(orgPath))
+      const result = yield* Effect.result(loadOrganisationFromPath(orgPath))
 
-      return yield* Either.match(result, {
-        onLeft: (error) =>
+      return yield* Result.match(result, {
+        onFailure: (error) =>
           Effect.gen(function* () {
             // In production, fail immediately - don't swallow errors
             if (!isDevMode()) {
@@ -517,7 +526,7 @@ export const OrganisationProviderFromPathDev = (
               orgPath: absoluteOrgPath,
             })
           }),
-        onRight: ({
+        onSuccess: ({
           org,
           resolvedPath,
           customDbLayer,

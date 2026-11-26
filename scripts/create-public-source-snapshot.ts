@@ -30,9 +30,18 @@ export const SNAPSHOT_EXCLUSIONS = [
   "runtime/local/src/graphql-api/delegation-roundtrip.db.spec.ts",
   "packages/auth-local-cedar/test/delegation.spec.ts",
   "packages/sqlite-operations/test/delegation-management.test.ts",
-  "apps/graphql-e2e/steps/cloud-org.steps.ts",
   "apps/frontend-e2e/src/steps/school-enquiry.steps.ts",
   "apps/frontend-e2e/src/steps/school-terms.steps.ts",
+  // The standalone demo uses local fixtures, not hosted CI identities.
+  "examples/demo/OIDC-PILOT.md",
+  "examples/demo/cedar/github-e2e.cedar",
+  "examples/demo/cedar/hosted-ci.cedar",
+  "examples/demo/github-e2e-personas.json",
+  "examples/demo/github-pilot.json",
+  "examples/demo/src/github-e2e.ts",
+  "examples/demo/src/github-pilot.ts",
+  "examples/demo/test/fresh-canary-authorization.spec.ts",
+  "runtime/local/src/graphql-api/workload-roundtrip.db.spec.ts",
 ] as const
 
 const excludedPath = (path: string): boolean =>

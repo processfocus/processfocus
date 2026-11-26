@@ -206,6 +206,20 @@ export function RegisterPasskeyClient({
       // Application home only — never a caller-controlled target.
       window.location.href = verifyData.redirectUrl || "/"
     } catch (err) {
+      if (
+        err instanceof Error &&
+        (err.name === "InvalidStateError" ||
+          ("code" in err &&
+            err.code === "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED"))
+      ) {
+        setState({
+          kind: "error",
+          email,
+          message:
+            "This passkey is already registered to your account. Sign in with it, or try a different passkey.",
+        })
+        return
+      }
       if (err instanceof Error && err.name === "NotAllowedError") {
         setState({
           kind: "error",
@@ -286,6 +300,9 @@ export function RegisterPasskeyClient({
         disabled={state.kind === "registering"}
       >
         {state.kind === "registering" ? "Creating passkey…" : "Create passkey"}
+      </Button>
+      <Button asChild variant="outline" className="w-full">
+        <a href="/login">Back to sign in</a>
       </Button>
     </div>
   )

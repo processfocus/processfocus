@@ -1,196 +1,86 @@
-import { SqlClient } from "@effect/sql"
 import {
-  QueueService,
   WebhookCallbackError,
   WebhookCallbackHost,
   type WebhookCallbackResult,
   dispatchServerPluginWebhook,
 } from "@processfocus/runtime"
-import { DateTime, Effect, FiberRef, Layer, Option } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import {
-  BusinessCalendarQueries,
-  FlowExecutionOperations,
-  ScheduledFlowOperations,
   StepCompletionOperations,
   UserDetails,
-  decodeDelegationAudit,
 } from "@pf/graphql-db-operations"
 import { OrganisationProvider } from "@pf/process"
-import { RequestTime } from "@pf/request-time"
 import {
+  applyPublicCompletionDeliveryCallback,
   completeAsyncSystemStep,
   failAsyncSystemStep,
-} from "./complete-system-step"
-import { applyPublicCompletionDeliveryCallback } from "./public-completion-delivery"
+} from "@pf/process-execution/worker"
+import { RequestTime } from "@pf/request-time"
 
-const applied = (): WebhookCallbackResult => ({ _tag: "Applied" })
-const ignored = (): WebhookCallbackResult => ({ _tag: "Ignored" })
+type ExecutionRequirements = Effect.Services<
+  | ReturnType<typeof completeAsyncSystemStep>
+  | ReturnType<typeof failAsyncSystemStep>
+  | ReturnType<typeof applyPublicCompletionDeliveryCallback>
+>
 
-const mapCallbackError = <Result, Failure, Requirements>(
-  message: string,
-  effect: Effect.Effect<Result, Failure, Requirements>,
-): Effect.Effect<Result, WebhookCallbackError, Requirements> =>
-  effect.pipe(
-    Effect.mapError((cause) => new WebhookCallbackError({ message, cause })),
-  )
-
-/** Shared local/AWS implementation of provider-neutral webhook callbacks. */
+/** Runtime composition closes execution requirements and translates callback results. */
 export const makeWebhookCallbackHost = Effect.gen(function* () {
+  const services = yield* Effect.context<ExecutionRequirements>()
   const stepCompletionOps = yield* StepCompletionOperations
-  const scheduledFlowOps = yield* ScheduledFlowOperations
-  const flowExecutionOps = yield* FlowExecutionOperations
-  const calendarQueries = yield* BusinessCalendarQueries
-  const queueService = yield* QueueService
-  const sqlClient = yield* SqlClient.SqlClient
-  const requestTimeRef = yield* RequestTime
-  const userDetailsRef = yield* UserDetails
-
-  const setSystemRequestContext = Effect.gen(function* () {
-    const now = yield* DateTime.now
-    yield* FiberRef.set(requestTimeRef, now)
-    yield* FiberRef.set(userDetailsRef, { by: "SYSTEM", id: null })
-  })
-
+  const run = <A, E>(
+    message: string,
+    effect: Effect.Effect<A, E, ExecutionRequirements>,
+  ) =>
+    Effect.flatMap(DateTime.now, (now) =>
+      effect.pipe(
+        Effect.provideService(RequestTime, now),
+        Effect.provideService(UserDetails, { by: "SYSTEM", id: null }),
+        Effect.provide(services),
+        Effect.mapError(
+          (cause) => new WebhookCallbackError({ message, cause }),
+        ),
+      ),
+    )
+  const outcome = (applied: boolean): WebhookCallbackResult =>
+    applied ? { _tag: "Applied" } : { _tag: "Ignored" }
   return {
     lookupDeferredTodo: (todoId: string) =>
-      mapCallbackError(
+      run(
         `Failed to look up deferred Todo ${todoId}`,
         Effect.gen(function* () {
           const todo = yield* stepCompletionOps.queryTodoById(todoId)
           if (!todo) return null
-          const processState =
-            yield* stepCompletionOps.getProcessStateByTodoId(todoId)
-          return processState ? { state: processState.state } : null
+          const state = yield* stepCompletionOps.getProcessStateByTodoId(todoId)
+          return state ? { state: state.state } : null
         }),
       ),
-
     completeDeferredTodo: (
-      input: Parameters<WebhookCallbackHost["Type"]["completeDeferredTodo"]>[0],
-    ) =>
-      mapCallbackError(
-        `Failed to complete deferred Todo ${input.todoId}`,
-        Effect.gen(function* () {
-          yield* setSystemRequestContext
-          const todo = yield* stepCompletionOps.queryTodoById(input.todoId)
-          if (!todo) return ignored()
-          if (
-            todo.createdBy &&
-            Option.isSome(decodeDelegationAudit(todo.createdBy))
-          ) {
-            yield* FiberRef.set(userDetailsRef, {
-              by: todo.createdBy,
-              id: null,
-            })
-          }
-
-          const didComplete = yield* completeAsyncSystemStep({
-            todoId: todo.id,
-            stepPath: todo.targetStepPath,
-            output: input.output,
-            todoInfo: {
-              createdAtMs: todo.createdAtMs,
-              orgUnitId: todo.orgUnitId,
-              processExecutionId: todo.processExecutionId,
-              processStateId: todo.processStateId,
-              barrierScheduledFlowId: todo.barrierScheduledFlowId,
-              targetStepId: todo.targetStepId,
-            },
-            isForEach: todo.hasForEach,
-            queueService,
-            stepCompletionOps,
-            scheduledFlowOps,
-            flowExecutionOps,
-            calendarQueries,
-            sqlClient,
-          })
-
-          yield* Effect.log(
-            didComplete
-              ? "Webhook callback completed deferred Todo"
-              : "Webhook callback ignored already-resolved deferred Todo",
-            {
-              todoId: todo.id,
-              processExecutionId: todo.processExecutionId,
-              stepPath: todo.targetStepPath,
-              callbackId: input.callbackId,
-            },
-          )
-          return didComplete ? applied() : ignored()
-        }).pipe(
-          Effect.provideService(RequestTime, requestTimeRef),
-          Effect.provideService(UserDetails, userDetailsRef),
-        ),
-      ),
-
-    failDeferredTodo: (
-      input: Parameters<WebhookCallbackHost["Type"]["failDeferredTodo"]>[0],
-    ) =>
-      mapCallbackError(
-        `Failed to fail deferred Todo ${input.todoId}`,
-        Effect.gen(function* () {
-          yield* setSystemRequestContext
-          const todo = yield* stepCompletionOps.queryTodoById(input.todoId)
-          if (!todo) return ignored()
-          if (
-            todo.createdBy &&
-            Option.isSome(decodeDelegationAudit(todo.createdBy))
-          ) {
-            yield* FiberRef.set(userDetailsRef, {
-              by: todo.createdBy,
-              id: null,
-            })
-          }
-
-          const result = yield* failAsyncSystemStep({
-            todoId: todo.id,
-            processExecutionId: todo.processExecutionId,
-            failureReason: input.failureReason,
-            ...(input.errorTag !== undefined && {
-              errorTag: input.errorTag,
-            }),
-            queueService,
-            stepCompletionOps,
-            scheduledFlowOps,
-            flowExecutionOps,
-            sqlClient,
-          })
-
-          yield* Effect.log(
-            result.didFail
-              ? "Webhook callback failed deferred Todo"
-              : "Webhook callback ignored already-resolved deferred Todo",
-            {
-              todoId: todo.id,
-              processExecutionId: todo.processExecutionId,
-              stepPath: todo.targetStepPath,
-              callbackId: input.callbackId,
-            },
-          )
-          return result.didFail ? applied() : ignored()
-        }).pipe(
-          Effect.provideService(RequestTime, requestTimeRef),
-          Effect.provideService(UserDetails, userDetailsRef),
-        ),
-      ),
-
-    applyPublicCompletionCallback: (
-      callback: Parameters<
-        WebhookCallbackHost["Type"]["applyPublicCompletionCallback"]
+      input: Parameters<
+        WebhookCallbackHost["Service"]["completeDeferredTodo"]
       >[0],
     ) =>
-      mapCallbackError(
+      run(
+        `Failed to complete deferred Todo ${input.todoId}`,
+        completeAsyncSystemStep(input).pipe(Effect.map(outcome)),
+      ),
+    failDeferredTodo: (
+      input: Parameters<WebhookCallbackHost["Service"]["failDeferredTodo"]>[0],
+    ) =>
+      run(
+        `Failed to fail deferred Todo ${input.todoId}`,
+        failAsyncSystemStep(input).pipe(
+          Effect.map((result) => outcome(result.didFail)),
+        ),
+      ),
+    applyPublicCompletionCallback: (
+      callback: Parameters<
+        WebhookCallbackHost["Service"]["applyPublicCompletionCallback"]
+      >[0],
+    ) =>
+      run(
         `Failed to apply public-completion callback ${callback.deliveryId}`,
-        Effect.gen(function* () {
-          yield* setSystemRequestContext
-          const result = yield* applyPublicCompletionDeliveryCallback(callback)
-          return result._tag === "Ignored" ? ignored() : applied()
-        }).pipe(
-          Effect.provideService(StepCompletionOperations, stepCompletionOps),
-          Effect.provideService(FlowExecutionOperations, flowExecutionOps),
-          Effect.provideService(QueueService, queueService),
-          Effect.provideService(SqlClient.SqlClient, sqlClient),
-          Effect.provideService(RequestTime, requestTimeRef),
-          Effect.provideService(UserDetails, userDetailsRef),
+        applyPublicCompletionDeliveryCallback(callback).pipe(
+          Effect.map((result) => outcome(result._tag !== "Ignored")),
         ),
       ),
   }
@@ -200,12 +90,9 @@ export const makeWebhookCallbackHost = Effect.gen(function* () {
 export const makeServerPluginWebhookRouter = Effect.gen(function* () {
   const organisationProvider = yield* OrganisationProvider
   const callbackHost = yield* makeWebhookCallbackHost
-
   return (request: Request): Effect.Effect<Response> | undefined => {
-    if (!new URL(request.url).pathname.startsWith("/webhooks/")) {
+    if (!new URL(request.url).pathname.startsWith("/webhooks/"))
       return undefined
-    }
-
     return dispatchServerPluginWebhook({
       request,
       registrations: organisationProvider.serverPlugins ?? [],

@@ -59,7 +59,9 @@ export const SqliteExecutionDurationQueriesLive = Layer.effect(
               .where(
                 and(
                   isNotNull(schema.processExecution.finishedAt),
-                  eq(schema.processExecution._deleted, false),
+                  // Literal SQL 0 lets Turso use the process-state partial index.
+                  // A parameter containing zero does not: https://github.com/tursodatabase/turso/issues/9345
+                  eq(schema.processExecution._deleted, sql`0`),
                   eq(schema.processState._deleted, false),
                   eq(schema.process._deleted, false),
                   inArray(schema.processState.processId, processIds),

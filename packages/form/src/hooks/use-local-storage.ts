@@ -9,13 +9,13 @@ import { useEffect, useState } from "react"
  * @returns [value, setValue, clearValue] tuple
  */
 export const useLocalStorage = <T>(
-  key: string,
+  key: string | undefined,
   initialValue: T,
 ): [T, (value: T | ((val: T) => T)) => void, () => void] => {
   // State to store our value
   // Pass initial state function to useState so logic is only executed once
   const [storedValue, setStoredValue] = useState<T>(() => {
-    if (typeof window === "undefined") {
+    if (key === undefined || typeof window === "undefined") {
       return initialValue
     }
 
@@ -31,6 +31,7 @@ export const useLocalStorage = <T>(
   // Return a wrapped version of useState's setter function that
   // persists the new value to localStorage
   const setValue = (value: T | ((val: T) => T)) => {
+    if (key === undefined) return
     try {
       // Allow value to be a function so we have same API as useState
       const valueToStore =
@@ -48,6 +49,7 @@ export const useLocalStorage = <T>(
 
   // Function to clear the value from both state and localStorage
   const clearValue = () => {
+    if (key === undefined) return
     try {
       setStoredValue(initialValue)
       if (typeof window !== "undefined") {
@@ -60,7 +62,7 @@ export const useLocalStorage = <T>(
 
   // Sync with localStorage when key changes
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (key === undefined || typeof window === "undefined") {
       return
     }
 

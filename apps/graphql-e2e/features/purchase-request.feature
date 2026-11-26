@@ -12,7 +12,8 @@ Feature: Purchase Request
     Then I should receive a list of todos
     And each todo should have required fields
 
-  Scenario: Purchase cheap item
+  # Repeat against retained purchase orders to catch cross-scenario collisions.
+  Scenario Outline: Purchase cheap item (<run>)
     # Query purchase order list before purchase to establish baseline
     Given I am authenticated with the "/Employee" role
     When I query the purchase order list
@@ -24,7 +25,7 @@ Feature: Purchase Request
 
     # Employee starts a purchase request
     Given I am authenticated with the "/Employee" role
-    When I start a purchase request for item "Chair" with value "150"
+    When I start a purchase request for item "Chair {purchase}" with value "150"
     And I wait for flow to advance
 
     # Employee should have no todos (manager approval pending)
@@ -36,7 +37,7 @@ Feature: Purchase Request
     When I query for todos with limit 100
     Then I should have 1 todo
     And the todo should be for step "Approve purchase request"
-    And the todo summary should contain "What" with value "Chair for 150"
+    And the todo summary should contain "What" with value "Chair {purchase} for 150"
 
     # Manager completes the approval
     When I complete the first todo with manager approval
@@ -60,10 +61,15 @@ Feature: Purchase Request
     Given I am authenticated with the "/Employee" role
     Then the purchase order list should have 1 more item than before
 
+    Examples:
+      | run    |
+      | first  |
+      | repeat |
+
   Scenario: Purchase expensive item
     # Employee starts a purchase request for expensive item (>= 1000)
     Given I am authenticated with the "/Employee" role
-    When I start a purchase request for item "Table" with value "2500"
+    When I start a purchase request for item "Table {purchase}" with value "2500"
 
     # Finance Manager should have 1 todo for initial approval
     Given I am authenticated with the "/finance/Manager" role
@@ -116,7 +122,7 @@ Feature: Purchase Request
 
     # Employee starts expensive purchase
     Given I switch to user "employee"
-    When I start a purchase request for item "Laptop" with value "2500"
+    When I start a purchase request for item "Laptop {purchase}" with value "2500"
     And I wait for flow to advance
 
     # Employee should see process update with activeInstances = 1
@@ -133,7 +139,7 @@ Feature: Purchase Request
     And "employee" should see a new execution for "Purchase Request"
 
     # Finance Manager should see todo via websocket with summary
-    Then "finance_manager" should see a todo for step "Approve purchase request" with summary "What" containing "Laptop for 2500"
+    Then "finance_manager" should see a todo for step "Approve purchase request" with summary "What" containing "Laptop {purchase} for 2500"
     And "employee" should not see any todos
     And "procurement_manager" should not see any todos
     Given I clear all subscription events
@@ -145,7 +151,7 @@ Feature: Purchase Request
     And I wait for flow to advance
 
     # Procurement Manager should now see todo via websocket with summary (includes approver name)
-    Then "procurement_manager" should see a todo for step "Approve expensive purchase request" with summary "What" containing "Laptop for 2500"
+    Then "procurement_manager" should see a todo for step "Approve expensive purchase request" with summary "What" containing "Laptop {purchase} for 2500"
     And "employee" should not see any todos
     And "finance_manager" should not see any todos
 

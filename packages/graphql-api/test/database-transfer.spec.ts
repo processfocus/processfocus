@@ -1,6 +1,7 @@
-import { DateTime, Effect, Either, FiberRef, Layer } from "effect"
+import { DocumentStoreService } from "@processfocus/runtime"
+import type { Context } from "effect"
+import { DateTime, Effect, Layer, Result } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
-import { DocumentStoreService } from "@pf/document-store-service"
 import { FileOperations } from "@pf/graphql-db-operations"
 import { InputValidationError, NotAuthorized } from "@pf/graphql-schema"
 import { RequestTime } from "@pf/request-time"
@@ -10,7 +11,7 @@ import { describe, expect, it } from "bun:test"
 
 const TEST_USER_EMAIL = "operator@example.com"
 const DATABASE_TRANSFER_STORE_PATH = "/database-transfer"
-const FIXED_REQUEST_TIME = DateTime.unsafeMake("2026-04-06T10:00:00.000Z")
+const FIXED_REQUEST_TIME = DateTime.makeUnsafe("2026-04-06T10:00:00.000Z")
 
 const makeContext = (): UserContext => ({
   _requestTime: FIXED_REQUEST_TIME,
@@ -73,7 +74,7 @@ const makeFileOperations = (state: DatabaseTransferState) =>
     isStepLinkedToDocumentStore: () => Effect.succeed(false),
     getFileOwnerInfo: () => Effect.succeed(null),
     deleteFile: () => Effect.succeed(false),
-  }) satisfies FileOperations["Type"]
+  }) satisfies Context.Service.Shape<typeof FileOperations>
 
 const makeDocumentStoreService = (state: DatabaseTransferState) =>
   ({
@@ -91,13 +92,12 @@ const makeDocumentStoreService = (state: DatabaseTransferState) =>
       })
     },
     requestDownloadUrl: () =>
-      Effect.dieMessage("requestDownloadUrl not used in tests"),
-    storeFile: () => Effect.dieMessage("storeFile not used in tests"),
-    getFileContent: () => Effect.dieMessage("getFileContent not used in tests"),
-    getFileMetadata: () =>
-      Effect.dieMessage("getFileMetadata not used in tests"),
-    deleteFile: () => Effect.dieMessage("deleteFile not used in tests"),
-  }) satisfies DocumentStoreService["Type"]
+      Effect.die("requestDownloadUrl not used in tests"),
+    storeFile: () => Effect.die("storeFile not used in tests"),
+    getFileContent: () => Effect.die("getFileContent not used in tests"),
+    getFileMetadata: () => Effect.die("getFileMetadata not used in tests"),
+    deleteFile: () => Effect.die("deleteFile not used in tests"),
+  }) satisfies Context.Service.Shape<typeof DocumentStoreService>
 
 const makeAuthorizationService = () =>
   ({
@@ -105,12 +105,11 @@ const makeAuthorizationService = () =>
     canListDelegationTokens: () => Effect.succeed(false),
     canManageDelegation: () => Effect.succeed(false),
     canLogin: () => Effect.succeed(false),
+    policyVersion: Effect.succeed("test-policy"),
     canCompleteStep: () => Effect.succeed(false),
-    canCompleteTodo: () => Effect.succeed(false),
+    canViewEmbeddedForm: () => Effect.succeed(false),
     canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-    canCompletePublicTodo: () => Effect.succeed(false),
     canRequestRole: () => Effect.succeed(false),
-    canRequestProviderUserPermissions: () => Effect.succeed(false),
     canActOnBehalfOf: () => Effect.succeed(false),
     canViewExecution: () => Effect.succeed(false),
     canRestartExecution: () => Effect.succeed(false),
@@ -126,13 +125,13 @@ const makeAuthorizationService = () =>
     canDownloadFile: () => Effect.succeed(false),
     canDeleteFile: () => Effect.succeed(false),
     canPerformAction: () => Effect.succeed(false),
-  }) satisfies AuthorizationService["Type"]
+  }) satisfies Context.Service.Shape<typeof AuthorizationService>
 
 const makeAuthorizationDeniedService = () =>
   ({
     ...makeAuthorizationService(),
     canAccessFeature: () => Effect.succeed(false),
-  }) satisfies AuthorizationService["Type"]
+  }) satisfies Context.Service.Shape<typeof AuthorizationService>
 
 const makeLayer = (
   state: DatabaseTransferState,
@@ -147,10 +146,67 @@ const makeLayer = (
         ? makeAuthorizationDeniedService()
         : makeAuthorizationService(),
     ),
-    Layer.succeed(RequestTime, FiberRef.unsafeMake(FIXED_REQUEST_TIME)),
+    Layer.succeed(RequestTime, FIXED_REQUEST_TIME),
   )
 
 describe("database transfer GraphQL coordination", () => {
+  it("passes the earlier workload/JWT deadline to storage and rejects an overlong capability", async () => {
+    const context = makeContext()
+    const deadline = Math.floor(Date.now() / 1000) * 1000 + 60_000
+    context.jwt!.exp = deadline / 1000
+    context.jwt!.properties = {
+      ...context.jwt!.properties,
+      workload: {
+        clientId: "ci",
+        machineUserId: "machine",
+        bindingId: "binding",
+        repositoryId: "123",
+        repositoryOwnerId: "456",
+        workflowRef: "workflow",
+        ref: "refs/heads/trunk",
+        event: "push",
+        environment: "test",
+        sha: "abc",
+        runId: "789",
+        runAttempt: "1",
+        expiresAt: deadline + 60_000,
+      },
+    }
+    for (const overlong of [false, true]) {
+      const state = makeState()
+      const store = {
+        ...makeDocumentStoreService(state),
+        requestUploadUrl: (
+          opts: Parameters<
+            Context.Service.Shape<
+              typeof DocumentStoreService
+            >["requestUploadUrl"]
+          >[0],
+        ) => {
+          expect(opts.expiresAt).toBe(deadline)
+          return Effect.succeed({
+            fileId: opts.fileId,
+            uploadUrl: "https://example.com/upload",
+            expiresAt: new Date(deadline + (overlong ? 1000 : 0)).toISOString(),
+          })
+        },
+      }
+      const request = Effect.runPromise(
+        requestDatabaseUploadUrl(
+          { project: "project", env: "dev" },
+          context,
+        ).pipe(
+          Effect.provideService(DocumentStoreService, store),
+          Effect.provide(makeLayer(state)),
+        ),
+      )
+      if (overlong)
+        await expect(request).rejects.toThrow("exceeds workload deadline")
+      else
+        expect((await request).expiresAt).toBe(new Date(deadline).toISOString())
+    }
+  })
+
   it("requests upload URLs from the dedicated database transfer store", async () => {
     const state = makeState()
     const result = await Effect.runPromise(
@@ -187,7 +243,7 @@ describe("database transfer GraphQL coordination", () => {
   it("rejects upload URL requests without database transfer authorization", async () => {
     const state = makeState()
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         requestDatabaseUploadUrl(
           { project: "0000-0000-0001", env: "dev" },
           makeContext(),
@@ -195,9 +251,9 @@ describe("database transfer GraphQL coordination", () => {
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(NotAuthorized)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(NotAuthorized)
     }
     expect(state.createdFile).toBeNull()
     expect(state.uploadRequest).toBeNull()
@@ -220,7 +276,7 @@ describe("database transfer GraphQL coordination", () => {
   it("rejects unsupported database transfer upload content types", async () => {
     const state = makeState()
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         requestDatabaseUploadUrl(
           {
             project: "0000-0000-0001",
@@ -232,9 +288,9 @@ describe("database transfer GraphQL coordination", () => {
       ),
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(InputValidationError)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(InputValidationError)
     }
     expect(state.createdFile).toBeNull()
     expect(state.uploadRequest).toBeNull()

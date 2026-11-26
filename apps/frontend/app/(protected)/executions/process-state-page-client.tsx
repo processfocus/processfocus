@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useCallback } from "react"
-import { ExecutionsPageContent } from "./page"
+import { ExecutionsPageContent } from "./executions-client"
 import { ProcessStateDialog } from "./process-state-dialog"
 
 interface ProcessStatePageClientProps {

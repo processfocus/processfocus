@@ -31,13 +31,11 @@ export const PostgresCleanupOperationsLive = Layer.effect(
 
           yield* db.delete(schema.publicCompletionInvitationAttempt)
 
-          // Delete all todos
           const todosResult = yield* db.delete(schema.toDo).returning({
             id: schema.toDo.id,
           })
           const todosDeleted = todosResult.length
 
-          // Delete all scheduled flows
           const scheduledFlowsResult = yield* db
             .delete(schema.scheduledFlow)
             .returning({ id: schema.scheduledFlow.id })
@@ -49,16 +47,13 @@ export const PostgresCleanupOperationsLive = Layer.effect(
           })
           const jobsDeleted = jobsResult.length
 
-          // Delete all completed job records
           yield* db.delete(schema.completedJob)
 
-          // Delete all process executions
           const executionsResult = yield* db
             .delete(schema.processExecution)
             .returning({ id: schema.processExecution.id })
           const executionsDeleted = executionsResult.length
 
-          // Delete all process states
           const statesResult = yield* db.delete(schema.processState).returning({
             id: schema.processState.id,
           })

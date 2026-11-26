@@ -7,13 +7,8 @@
  * @packageDocumentation
  */
 
-import {
-  Cookies,
-  HttpMiddleware,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import { Context, Duration, Effect, Ref } from "effect"
+import { Cookies, HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/http"
 
 /**
  * Cookie options for setting cookies.
@@ -66,7 +61,7 @@ export interface CookieService {
   readonly getPending: () => Effect.Effect<readonly PendingCookie[]>
 }
 
-export const CookieService = Context.GenericTag<CookieService>(
+export const CookieService = Context.Service<CookieService>(
   "@pf/openauth/CookieService",
 )
 
@@ -110,7 +105,7 @@ export const serializeCookie = (
   value: string,
   options: CookieOptions = {},
 ): string => {
-  const platformOptions: Parameters<typeof Cookies.unsafeMakeCookie>[2] = {
+  const platformOptions: Parameters<typeof Cookies.makeCookieUnsafe>[2] = {
     maxAge:
       options.maxAge !== undefined
         ? Duration.seconds(options.maxAge)
@@ -123,7 +118,7 @@ export const serializeCookie = (
     sameSite: options.sameSite,
   }
 
-  const cookie = Cookies.unsafeMakeCookie(name, value, platformOptions)
+  const cookie = Cookies.makeCookieUnsafe(name, value, platformOptions)
   return Cookies.serializeCookie(cookie)
 }
 

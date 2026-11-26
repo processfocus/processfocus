@@ -1,0 +1,14 @@
+{
+  "name": "@pf/public-completion",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./credentials": "./src/credentials.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "effect": "4.1.4"
+  },
+  "license": "SEE LICENSE IN LICENSE.md"
+}

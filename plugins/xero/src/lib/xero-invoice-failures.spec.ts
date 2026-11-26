@@ -1,4 +1,4 @@
-import { Effect, Either, Logger, Schema } from "effect"
+import { Effect, Logger, Result, Schema } from "effect"
 import { CurrentStepJobContext } from "@pf/process"
 import { IssueAuthorisedSalesInvoiceInput } from "./identities"
 import { XeroInvoice } from "./xero-invoice"
@@ -21,8 +21,7 @@ const sampleInput = Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInput)({
     postalCode: "6011",
     country: "New Zealand",
   },
-  productSku: "TBS-100",
-  agreedPrice: "100.00",
+  lines: [{ productSku: "TBS-100", quantity: 1, unitAmount: "100.00" }],
   currency: "NZD",
   reference: "ORD-1001",
   date: "2026-03-15",
@@ -34,7 +33,7 @@ const issue = (layer: ReturnType<typeof makeXeroInvoiceTestPlugin>["layer"]) =>
     const xero = yield* XeroInvoice
     return yield* xero.issueAuthorisedSalesInvoice(sampleInput)
   }).pipe(
-    Effect.either,
+    Effect.result,
     Effect.provide(layer),
     Effect.provideService(CurrentStepJobContext, INVOICE_TODO),
   )
@@ -45,6 +44,7 @@ const seedCatalogItem = (
   plugin.controller.seedItem({
     itemCode: "TBS-100",
     name: "TBS Product",
+    description: "TBS Product",
     taxType: "NONE",
     taxPercent: 0,
   })
@@ -59,21 +59,21 @@ const expectFailure = async (
   },
 ) => {
   const result = await Effect.runPromise(issue(plugin.layer))
-  expect(Either.isLeft(result)).toBe(true)
-  if (Either.isRight(result)) {
+  expect(Result.isFailure(result)).toBe(true)
+  if (Result.isSuccess(result)) {
     throw new Error("expected XeroInvoiceError")
   }
-  expect(result.left._tag).toBe("XeroInvoiceError")
-  expect(result.left.retryable).toBe(expected.retryable)
-  expect(result.left.code).toBe(expected.code)
+  expect(result.failure._tag).toBe("XeroInvoiceError")
+  expect(result.failure.retryable).toBe(expected.retryable)
+  expect(result.failure.code).toBe(expected.code)
   if (expected.fields !== undefined) {
-    expect(result.left.fields).toEqual(expected.fields)
+    expect(result.failure.fields).toEqual(expected.fields)
   }
-  expect(String(result.left)).not.toContain("Customhouse")
-  expect(String(result.left)).not.toContain("Bearer ")
-  expect(String(result.left)).not.toContain("xero-access-token")
-  expect(String(result.left)).not.toContain("client_secret")
-  return result.left
+  expect(String(result.failure)).not.toContain("Customhouse")
+  expect(String(result.failure)).not.toContain("Bearer ")
+  expect(String(result.failure)).not.toContain("xero-access-token")
+  expect(String(result.failure)).not.toContain("client_secret")
+  return result.failure
 }
 
 describe("Xero invoice failure classification", () => {
@@ -283,16 +283,13 @@ describe("Xero invoice failure classification", () => {
     seedCatalogItem(plugin)
     plugin.controller.scriptFailure({ kind: "auth" })
     const logs: string[] = []
-    const capturingLogger = Logger.make(({ message, annotations }) => {
-      logs.push(
-        `${String(message)} ${JSON.stringify(Object.fromEntries(annotations))}`,
-      )
+    const capturingLogger = Logger.make((options) => {
+      const { message, annotations } = Logger.formatStructured.log(options)
+      logs.push(`${String(message)} ${JSON.stringify(annotations)}`)
     })
 
     await Effect.runPromise(
-      issue(plugin.layer).pipe(
-        Effect.provide(Logger.replace(Logger.defaultLogger, capturingLogger)),
-      ),
+      issue(plugin.layer).pipe(Effect.provide(Logger.layer([capturingLogger]))),
     )
 
     const combined = logs.join("\n")

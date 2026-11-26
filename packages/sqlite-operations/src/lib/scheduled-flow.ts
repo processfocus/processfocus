@@ -23,6 +23,157 @@ export const SqliteScheduledFlowOperationsLive = Layer.effect(
     const targetStep = aliasedTable(schema.step, "target_step")
 
     return {
+      queryPendingTaskDeadlines: (processExecutionId: string) =>
+        db
+          .select({
+            id: schema.taskDeadline.id,
+            scheduledAt: schema.taskDeadline.scheduledAt,
+            withoutWaiting: schema.processExecution.withoutWaiting,
+          })
+          .from(schema.taskDeadline)
+          .innerJoin(
+            schema.toDo,
+            eq(schema.taskDeadline.ownerToDoId, schema.toDo.id),
+          )
+          .innerJoin(
+            schema.processExecution,
+            eq(schema.toDo.processExecutionId, schema.processExecution.id),
+          )
+          .innerJoin(
+            schema.scheduledFlow,
+            eq(schema.taskDeadline.id, schema.scheduledFlow.id),
+          )
+          .where(
+            and(
+              eq(schema.toDo.processExecutionId, processExecutionId),
+              eq(schema.toDo._deleted, false),
+              isNull(schema.taskDeadline.triggeredAt),
+              isNull(schema.taskDeadline.disarmedAt),
+            ),
+          ),
+
+      hasTaskDeadlines: (processExecutionId: string) =>
+        Effect.gen(function* () {
+          const rows = yield* db
+            .select({ id: schema.taskDeadline.id })
+            .from(schema.taskDeadline)
+            .innerJoin(
+              schema.toDo,
+              eq(schema.taskDeadline.ownerToDoId, schema.toDo.id),
+            )
+            .where(eq(schema.toDo.processExecutionId, processExecutionId))
+            .limit(1)
+          return rows.length > 0
+        }),
+
+      insertTaskDeadline: (input) =>
+        Effect.gen(function* () {
+          const now = yield* getRequestTime()
+          const user = yield* getUserDetails()
+          const rows = yield* db
+            .insert(schema.taskDeadline)
+            .values({
+              ownerToDoId: input.ownerTodoId,
+              flowId: input.flowId,
+              deadlineName: input.name,
+              scheduledAt: input.dueAt,
+              interrupting: input.interrupting,
+              createdAt: now,
+              updatedAt: now,
+              createdBy: user.by,
+              updatedBy: user.by,
+            })
+            .returning({ id: schema.taskDeadline.id })
+          return (yield* returnedRow(rows)).id
+        }),
+
+      getTaskDeadline: (id) =>
+        Effect.gen(function* () {
+          const rows = yield* db
+            .select({
+              ownerTodoId: schema.taskDeadline.ownerToDoId,
+              flowId: schema.taskDeadline.flowId,
+              dueAt: schema.taskDeadline.scheduledAt,
+              interrupting: schema.taskDeadline.interrupting,
+              triggeredAt: schema.taskDeadline.triggeredAt,
+              disarmedAt: schema.taskDeadline.disarmedAt,
+            })
+            .from(schema.taskDeadline)
+            .where(eq(schema.taskDeadline.id, id))
+          return rows[0] ?? null
+        }),
+
+      claimTaskDeadline: (id, ownerTodoId) =>
+        Effect.gen(function* () {
+          // Lock the same owner row completion writes before deciding the deadline.
+          const owners = yield* db
+            .update(schema.toDo)
+            .set({ updatedAt: schema.toDo.updatedAt })
+            .where(
+              and(
+                eq(schema.toDo.id, ownerTodoId),
+                eq(schema.toDo._deleted, false),
+                isNull(schema.toDo.failureReason),
+              ),
+            )
+            .returning({ id: schema.toDo.id })
+          if (owners.length === 0) return false
+          const now = yield* getRequestTime()
+          const user = yield* getUserDetails()
+          const rows = yield* db
+            .update(schema.taskDeadline)
+            .set({ triggeredAt: now, updatedAt: now, updatedBy: user.by })
+            .where(
+              and(
+                eq(schema.taskDeadline.id, id),
+                isNull(schema.taskDeadline.triggeredAt),
+                isNull(schema.taskDeadline.disarmedAt),
+              ),
+            )
+            .returning({ id: schema.taskDeadline.id })
+          return rows.length === 1
+        }),
+
+      interruptTask: (ownerTodoId) =>
+        Effect.gen(function* () {
+          const now = yield* getRequestTime()
+          const user = yield* getUserDetails()
+          yield* db
+            .update(schema.toDo)
+            .set({
+              _deleted: true,
+              interruptedAt: now,
+              correctionRequiredAt: null,
+              correctionFailureReason: null,
+              correctionInvitationAttemptId: null,
+              updatedAt: now,
+              updatedBy: user.by,
+            })
+            .where(eq(schema.toDo.id, ownerTodoId))
+        }),
+
+      disarmTaskDeadlines: (ownerTodoId) =>
+        Effect.gen(function* () {
+          const now = yield* getRequestTime()
+          const user = yield* getUserDetails()
+          const rows = yield* db
+            .update(schema.taskDeadline)
+            .set({ disarmedAt: now, updatedAt: now, updatedBy: user.by })
+            .where(
+              and(
+                eq(schema.taskDeadline.ownerToDoId, ownerTodoId),
+                isNull(schema.taskDeadline.triggeredAt),
+                isNull(schema.taskDeadline.disarmedAt),
+              ),
+            )
+            .returning({ id: schema.taskDeadline.id })
+          for (const row of rows) {
+            yield* db
+              .delete(schema.scheduledFlow)
+              .where(eq(schema.scheduledFlow.id, row.id))
+          }
+        }),
+
       insertScheduledFlow: (
         processExecutionId: string,
         sourceStepId: string,

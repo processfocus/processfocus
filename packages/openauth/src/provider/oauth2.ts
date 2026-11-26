@@ -1,3 +1,7 @@
+import type { Scope } from "effect"
+import { makeRouter } from "../router"
+import { formValues } from "../util"
+
 /**
  * Use this to connect authentication providers that support OAuth 2.0.
  *
@@ -22,13 +26,10 @@
  * @packageDocumentation
  */
 
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import { Effect } from "effect"
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { createRemoteJWKSet, jwtVerify } from "jose"
+import type { AuthorizationState } from "../endpoints/types"
 import { OauthError } from "../error"
 import { generatePKCE } from "../pkce"
 import { getRelativeUrl } from "../request"
@@ -159,6 +160,10 @@ export interface Oauth2Config {
   issuer?: string | string[]
   /** Validate providers whose discovery issuer contains a tenant placeholder. */
   validateIssuer?: (issuer: unknown) => boolean
+  /** Additional restrictions on a signature-verified ID token (e.g. Workspace). */
+  validateIdTokenClaims?: (payload: Record<string, unknown>) => boolean
+  /** Opt in to a non-interactive, same-subject OIDC authorization. */
+  configureRevalidation?: (url: URL, subject: string) => void
   /** Build a verified identity from a protocol-verified OIDC ID token. */
   mapVerifiedHumanIdentity?:
     | ((
@@ -169,6 +174,8 @@ export interface Oauth2Config {
   resolveHumanIdentity?:
     | ((tokenset: Oauth2Token) => Promise<HumanIdentityResolution>)
     | undefined
+  /** The provider API can supply verified email evidence, not just a subject. */
+  supportsVerifiedHumanIdentity?: boolean
   /**
    * A list of OAuth scopes that you want to request.
    *
@@ -210,8 +217,11 @@ export type Oauth2WrappedConfig = Omit<
   | "name"
   | "issuer"
   | "validateIssuer"
+  | "validateIdTokenClaims"
+  | "configureRevalidation"
   | "mapVerifiedHumanIdentity"
   | "resolveHumanIdentity"
+  | "supportsVerifiedHumanIdentity"
 >
 
 /**
@@ -230,6 +240,12 @@ interface ProviderState {
   redirect: string
   codeVerifier?: string
   nonce?: string
+  revalidation?: {
+    subject: string
+    // Previously validated by /oauth/authorize. For error recovery only;
+    // successful callbacks still require matching issuer authorization state.
+    clientCallback: Pick<AuthorizationState, "redirect_uri"> & { state: string }
+  }
 }
 
 export interface Oauth2Properties {
@@ -312,6 +328,22 @@ export function Oauth2Provider(
   )
   const providerName = config.type || "oauth2"
 
+  const revalidationFailure = (
+    options: ProviderOptions<Oauth2Result | Oauth2Properties>,
+    clientCallback: Pick<AuthorizationState, "redirect_uri" | "state">,
+    error: string,
+    cookieToClear: "authorization" | "provider" = "authorization",
+  ) =>
+    Effect.gen(function* () {
+      const target = new URL(clientCallback.redirect_uri)
+      target.searchParams.set("error", error)
+      if (clientCallback.state) target.searchParams.set("state", clientCallback.state)
+      const unsetCookie = yield* options.deleteCookie(cookieToClear)
+      return HttpServerResponse.redirect(target.toString(), { status: 302 }).pipe(
+        HttpServerResponse.setHeader("Set-Cookie", unsetCookie),
+      )
+    })
+
   /**
    * Helper function to handle token exchange and response building.
    */
@@ -319,10 +351,11 @@ export function Oauth2Provider(
     options: ProviderOptions<Oauth2Result | Oauth2Properties>,
     provider: ProviderState,
     code: string,
+    revalidation: AuthorizationState | undefined,
   ): Effect.Effect<
     HttpServerResponse.HttpServerResponse,
     never,
-    HttpServerRequest.HttpServerRequest | StorageService | KeyManagementService
+    HttpServerRequest.HttpServerRequest | StorageService | KeyManagementService | Scope.Scope
   > =>
     Effect.gen(function* () {
       const body = new URLSearchParams({
@@ -345,6 +378,7 @@ export function Oauth2Provider(
               Accept: "application/json",
             },
             body: body.toString(),
+            ...(revalidation ? { signal: AbortSignal.timeout(10_000) } : {}),
           })
           const value: unknown = await response.json()
           if (
@@ -381,6 +415,7 @@ export function Oauth2Provider(
           try: () =>
             jwtVerify(json["id_token"] as string, jwks, {
               audience: config.clientID,
+              ...(humanIdentityConfigured ? { requiredClaims: ["exp", "sub", "iss", "aud"] } : {}),
               ...(config.issuer && !config.validateIssuer
                 ? { issuer: config.issuer }
                 : {}),
@@ -403,6 +438,18 @@ export function Oauth2Provider(
           )
         }
         idTokenPayload = payload as Record<string, unknown>
+      }
+
+      if (config.validateIdTokenClaims &&
+        (!idTokenPayload || !config.validateIdTokenClaims(idTokenPayload))) {
+        return yield* Effect.fail(new OauthError("access_denied", "Unable to complete sign-in"))
+      }
+
+      // Callback state binds the two requests; the signed ID token proves
+      // which Google account actually authorized.
+      if (provider.revalidation &&
+        claimsSubject(idTokenPayload) !== provider.revalidation.subject) {
+        return yield* Effect.fail(new OauthError("access_denied", "Unable to complete sign-in"))
       }
 
       const tokenset: Oauth2Token = {
@@ -473,13 +520,22 @@ export function Oauth2Provider(
         ),
       )
     }).pipe(
-      Effect.catchAll((error) =>
-        oauthCallbackFailureResponse("OAuth2 callback logic", error),
+      Effect.catch((error) =>
+        revalidation
+          ? revalidationFailure(
+              options,
+              revalidation,
+              error instanceof OauthError ? error.error : "server_error",
+            )
+          : oauthCallbackFailureResponse("OAuth2 callback logic", error),
       ),
     )
 
   return {
     type: providerName,
+    supportsVerifiedHumanIdentity:
+      Boolean(config.mapVerifiedHumanIdentity) ||
+      (Boolean(config.resolveHumanIdentity) && config.supportsVerifiedHumanIdentity === true),
     init(options: ProviderOptions<Oauth2Result | Oauth2Properties>) {
       // GET /authorize - Start OAuth flow
       const authorizeHandler = Effect.gen(function* () {
@@ -488,6 +544,19 @@ export function Oauth2Provider(
         const nonce = config.issuer ? crypto.randomUUID() : undefined
         const pkce = config.pkce ? yield* Effect.promise(() => generatePKCE()) : undefined
         const callbackUrl = yield* getRelativeUrl(request, "./callback")
+        const authorizationState = config.configureRevalidation
+          ? yield* options.getCookie<AuthorizationState>("authorization")
+          : undefined
+        const revalidation = authorizationState?.googleRevalidationSubject &&
+          authorizationState.state
+          ? {
+              subject: authorizationState.googleRevalidationSubject,
+              clientCallback: {
+                redirect_uri: authorizationState.redirect_uri,
+                state: authorizationState.state,
+              },
+            }
+          : undefined
 
         // Set provider state cookie
         const cookieValue = yield* options.setCookie("provider", 60 * 10, {
@@ -495,7 +564,8 @@ export function Oauth2Provider(
           redirect: callbackUrl,
           ...(pkce?.verifier && { codeVerifier: pkce.verifier }),
           ...(nonce ? { nonce } : {}),
-        } as ProviderState)
+          ...(revalidation ? { revalidation } : {}),
+        } satisfies ProviderState)
 
         // Build authorization URL
         const authorization = new URL(config.endpoint.authorization)
@@ -512,6 +582,9 @@ export function Oauth2Provider(
         for (const [key, value] of Object.entries(query)) {
           authorization.searchParams.set(key, value)
         }
+        if (revalidation) {
+          config.configureRevalidation?.(authorization, revalidation.subject)
+        }
 
         return HttpServerResponse.redirect(authorization.toString(), { status: 302 }).pipe(
           HttpServerResponse.setHeader("Set-Cookie", cookieValue),
@@ -522,29 +595,64 @@ export function Oauth2Provider(
         ),
       )
 
-      // GET /callback - Handle OAuth callback via query params
-      const callbackGetHandler = Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const url = new URL(request.url)
+      const callback = (params: { get(key: string): string | null | undefined }) => Effect.gen(function* () {
         const provider = yield* options.getCookie<ProviderState>("provider")
-        const code = url.searchParams.get("code")
-        const state = url.searchParams.get("state")
-        const error = url.searchParams.get("error")
-        const errorDescription = url.searchParams.get("error_description")
+        const code = params.get("code")
+        const state = params.get("state")
+        const error = params.get("error")
+        const errorDescription = params.get("error_description")
+        const authorization = config.configureRevalidation
+          ? yield* options.getCookie<AuthorizationState>("authorization")
+          : undefined
+        const revalidation = authorization?.googleRevalidationSubject
+          ? authorization
+          : undefined
+
+        if (revalidation) {
+          if (!provider?.revalidation || !provider.nonce ||
+            provider.state !== state ||
+            provider.revalidation.clientCallback.state !== revalidation.state ||
+            provider.revalidation.subject !== revalidation.googleRevalidationSubject) {
+            return yield* revalidationFailure(options, revalidation, "invalid_request")
+          }
+          if (error) {
+            const needsInteraction =
+              error === "interaction_required" || error === "login_required" ||
+              error === "consent_required" || error === "account_selection_required"
+            return yield* revalidationFailure(
+              options, revalidation, needsInteraction ? "interaction_required" : toOauthErrorCode(error),
+            )
+          }
+          if (!code) return yield* revalidationFailure(options, revalidation, "invalid_request")
+          return yield* handleCallbackLogic(options, provider, code, revalidation)
+        }
+
+        // A revalidation response cannot complete a different PF authorization.
+        if (provider?.revalidation) {
+          return yield* revalidationFailure(
+            options,
+            provider.revalidation.clientCallback,
+            "invalid_request",
+            "provider",
+          )
+        }
 
         if (error) {
           return yield* Effect.fail(new OauthError(toOauthErrorCode(error), errorDescription ?? ""))
         }
 
         if (!provider || !code || (provider.state && state !== provider.state)) {
-          return HttpServerResponse.redirect(yield* getRelativeUrl(request, "./authorize"), {
-            status: 302,
-          })
+          return yield* errorJson("invalid_request", "Invalid authorization response", 400)
         }
 
-        return yield* handleCallbackLogic(options, provider, code)
+        return yield* handleCallbackLogic(options, provider, code, undefined)
+      })
+
+      const callbackGetHandler = Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        return yield* callback(new URL(request.url).searchParams)
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           oauthCallbackFailureResponse("OAuth2 callback GET", error),
         ),
       )
@@ -552,40 +660,19 @@ export function Oauth2Provider(
       // POST /callback - Handle OAuth callback via form data
       const callbackPostHandler = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        const provider = yield* options.getCookie<ProviderState>("provider")
-
         const urlParams = yield* request.urlParamsBody
-        const formData = new Map<string, string>()
-        for (const [key, value] of urlParams) {
-          formData.set(key, value)
-        }
-        const code = formData.get("code") ?? null
-        const state = formData.get("state") ?? null
-        const error = formData.get("error") ?? null
-        const errorDescription = formData.get("error_description") ?? null
-
-        if (error) {
-          return yield* Effect.fail(new OauthError(toOauthErrorCode(error), errorDescription ?? ""))
-        }
-
-        if (!provider || !code || (provider.state && state !== provider.state)) {
-          return HttpServerResponse.redirect(yield* getRelativeUrl(request, "./authorize"), {
-            status: 302,
-          })
-        }
-
-        return yield* handleCallbackLogic(options, provider, code)
+        return yield* callback(formValues(urlParams))
       }).pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           oauthCallbackFailureResponse("OAuth2 callback POST", error),
         ),
       )
 
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", authorizeHandler),
-        HttpRouter.get("/callback", callbackGetHandler),
-        HttpRouter.post("/callback", callbackPostHandler),
-      )
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", authorizeHandler),
+        HttpRouter.route("GET", "/callback", callbackGetHandler),
+        HttpRouter.route("POST", "/callback", callbackPostHandler),
+      ])
     },
   }
 }

@@ -1,8 +1,8 @@
-# About
+# @pf/org-to-graphql-schema
 
-Create the graphql schema for an organisation.
+Generates the organisation-specific GraphQL schema from the authored model,
+including form submission types.
 
-# Effect
-
-The `OrganisationProvider` service from `@pf/process` is used to expose
-the current organisation to any service which needs this access.
+[`@pf/graphql-api`](../graphql-api/README.md) combines the result with the
+shared [`@pf/graphql-schema`](../graphql-schema/README.md). This lets the API
+reflect each organisation's processes without hand-maintained duplicate schemas.

@@ -11,11 +11,7 @@ for (const entry of await readdir(declarations)) {
 
 const packageEntries = {
   "@pf/business-calendar": "business-calendar/src/index.js",
-  "@pf/form-client-representation": "form-client-representation/src/index.js",
-  "@pf/form-client-representation/types":
-    "form-client-representation/src/lib/types.js",
   "@pf/frontend-plugin-host": "frontend-plugin-host/src/index.js",
-  "@pf/form-rule": "form-rule/src/index.js",
   "@pf/form-schema": "form-schema/src/index.js",
   "@pf/form-submission-schema": "form-submission-schema/src/index.js",
   "@pf/frontend-manifest": "frontend-manifest/src/index.js",

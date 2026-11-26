@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server"
 import type { ProviderUserSession } from "@pf/auth-session"
+import { DateTimeDisplayProvider } from "@pf/shadcn-components/date-time-display"
 import { DelegationExpiry } from "../components/delegation-expiry"
 import { canOpenActOnBehalfMenu } from "../lib/auth/act-on-behalf-menu"
 import { toClientSession } from "../lib/auth/client-session"
@@ -80,11 +81,13 @@ describe("delegated browser session", () => {
 
   test("profile renders the effective deadline as a readable date with timezone", () => {
     const html = renderToStaticMarkup(
-      <DelegationExpiry expiresAt={delegation.expiresAt} />,
+      <DateTimeDisplayProvider initialNow={Date.UTC(2029, 0, 1)}>
+        <DelegationExpiry expiresAt={delegation.expiresAt} />
+      </DateTimeDisplayProvider>,
     )
     expect(html).toContain('dateTime="2030-01-01T00:00:00.000Z"')
-    expect(html).toContain("1 Jan 2030, 00:00 UTC")
-    expect(html).not.toContain("2030-01-01 00:00:00 UTC")
+    expect(html).toContain("Jan 1, 2030")
+    expect(html).toContain("UTC")
   })
 
   test("profile Act on behalf follows listing authorization only", () => {

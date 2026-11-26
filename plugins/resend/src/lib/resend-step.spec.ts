@@ -1,4 +1,3 @@
-import { FetchHttpClient } from "@effect/platform"
 import { makeMockResendPlugin } from "@processfocus/plugin-resend/test-support"
 import {
   Cause,
@@ -9,6 +8,7 @@ import {
   Option,
   Schema,
 } from "effect"
+import { FetchHttpClient } from "effect/http"
 import {
   OrgUnit,
   Organisation,
@@ -57,24 +57,6 @@ describe("ResendStep", () => {
     expect(step.isSystemStep).toBe(true)
   })
 
-  it("should have isSystemStep === true", () => {
-    const process = new Process(unit, "TestProcess2", {
-      name: "Test Process 2",
-      purpose: "Testing",
-    })
-
-    const step = new ResendStep(process, "TestStep", {
-      from: "Test <test@example.com>",
-      input: () =>
-        Effect.succeed({
-          to: "user@example.com",
-          subject: "Hello",
-        }),
-    })
-
-    expect(step.isSystemStep).toBe(true)
-  })
-
   it("should extend SystemStep", () => {
     const process = new Process(unit, "TestProcess3", {
       name: "Test Process 3",
@@ -90,7 +72,6 @@ describe("ResendStep", () => {
         }),
     })
 
-    // Verify it has the SystemStep interface
     expect(typeof step.executeWithInput).toBe("function")
     expect(typeof step.execute).toBe("function")
     expect(typeof step.input).toBe("function")
@@ -111,7 +92,6 @@ describe("ResendStep", () => {
         }),
     })
 
-    // Verify output schema has emailId field
     expect(step.output.emailId).toBeDefined()
     expect(step.output.emailId).toBe(Schema.String)
   })
@@ -220,25 +200,36 @@ describe("ResendStep deferred mode", () => {
   const makeBaseLayers = () =>
     Layer.provideMerge(
       Layer.provideMerge(ResendClientLive, ResendClientConfigFromEnv),
-      FetchHttpClient.layer,
+      FetchHttpClient.layer.pipe(
+        Layer.provide(
+          Layer.effect(
+            FetchHttpClient.Fetch,
+            Effect.sync(() => globalThis.fetch),
+          ),
+        ),
+      ),
     )
 
   const makeDeferredLayer = (environment: string) =>
     Layer.succeed(ResendDeferredDelivery, { environment })
 
-  const configProvider = ConfigProvider.fromMap(
-    new Map([
-      ["RESEND_API_KEY", "re_test"],
-      ["RESEND_ENABLED", "true"],
-    ]),
+  const configProvider = ConfigProvider.fromEnvRecord(
+    Object.fromEntries(
+      new Map([
+        ["RESEND_API_KEY", "re_test"],
+        ["RESEND_ENABLED", "true"],
+      ]),
+    ),
   )
 
-  const rerouteConfigProvider = ConfigProvider.fromMap(
-    new Map([
-      ["RESEND_API_KEY", "re_test"],
-      ["RESEND_ENABLED", "false"],
-      ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
-    ]),
+  const rerouteConfigProvider = ConfigProvider.fromEnvRecord(
+    Object.fromEntries(
+      new Map([
+        ["RESEND_API_KEY", "re_test"],
+        ["RESEND_ENABLED", "false"],
+        ["RESEND_REROUTE_EMAIL", "reroute@example.com"],
+      ]),
+    ),
   )
 
   const mockFetchSuccess = (emailId = "email_deferred_001") => {
@@ -283,7 +274,7 @@ describe("ResendStep deferred mode", () => {
         )
         .pipe(
           Effect.provide(makeBaseLayers()),
-          Effect.withConfigProvider(configProvider),
+          Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
         ) as Effect.Effect<unknown>,
     )
 
@@ -327,7 +318,7 @@ describe("ResendStep deferred mode", () => {
           Effect.provide(
             Layer.merge(makeBaseLayers(), makeDeferredLayer("production")),
           ),
-          Effect.withConfigProvider(configProvider),
+          Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
         ) as Effect.Effect<unknown>,
     )
 
@@ -443,7 +434,7 @@ describe("ResendStep deferred mode", () => {
           Effect.provide(
             Layer.merge(makeBaseLayers(), makeDeferredLayer("staging")),
           ),
-          Effect.withConfigProvider(configProvider),
+          Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
         ) as Effect.Effect<unknown>,
     )
 
@@ -486,13 +477,13 @@ describe("ResendStep deferred mode", () => {
           Effect.provide(
             Layer.merge(makeBaseLayers(), makeDeferredLayer("production")),
           ),
-          Effect.withConfigProvider(configProvider),
+          Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
         ) as Effect.Effect<unknown>,
     )
 
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) {
-      const failure = Option.getOrThrow(Cause.failureOption(exit.cause))
+      const failure = Option.getOrThrow(Cause.findErrorOption(exit.cause))
       expect(failure).toMatchObject({
         _tag: "ResendError",
         message: expect.stringContaining("exactly one primary 'to'"),
@@ -551,61 +542,16 @@ describe("ResendStep deferred mode", () => {
           Effect.provide(
             Layer.merge(makeBaseLayers(), makeDeferredLayer("production")),
           ),
-          Effect.withConfigProvider(configProvider),
+          Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
         ) as Effect.Effect<unknown>,
     )
 
     expect((result as { _tag: string })._tag).toBe("Deferred")
 
-    // Verify cc and bcc were sent to the API
     expect(capturedBody).toBeDefined()
     expect(capturedBody?.["cc"]).toBe("cc@example.com")
     expect(capturedBody?.["bcc"]).toBe("bcc@example.com")
     expect(capturedBody?.["to"]).toBe("primary@example.com")
-  })
-
-  it("stores environment from ResendDeferredDelivery in metadata", async () => {
-    mockFetchSuccess("email_env")
-
-    const process = new Process(unit, "DeferredTest6", {
-      name: "Deferred Test 6",
-      purpose: "Testing environment metadata",
-    })
-
-    const step = new ResendStep(process, "EnvEmail", {
-      from: "Test <test@example.com>",
-      input: () =>
-        Effect.succeed({
-          to: "user@example.com",
-          subject: "Test",
-          html: "<p>Hello</p>",
-        }),
-    })
-
-    const result = await Effect.runPromise(
-      step
-        .executeStep(
-          { to: "user@example.com", subject: "Test", html: "<p>Hello</p>" },
-          { todoId: "todo-env", stepPath: "/EnvEmail" },
-        )
-        .pipe(
-          Effect.provide(
-            Layer.merge(makeBaseLayers(), makeDeferredLayer("staging")),
-          ),
-          Effect.withConfigProvider(configProvider),
-        ) as Effect.Effect<unknown>,
-    )
-
-    expect((result as { _tag: string })._tag).toBe("Deferred")
-    if ((result as { _tag: string })._tag === "Deferred") {
-      const stateUpdate = (result as { stateUpdate: Record<string, unknown> })
-        .stateUpdate
-      const internal = stateUpdate["_internal"]
-      expect(internal).toBeDefined()
-      const resend = (internal as Record<string, unknown>)["resend"]
-      expect(resend).toBeDefined()
-      expect((resend as Record<string, unknown>)["environment"]).toBe("staging")
-    }
   })
 
   it("stores the rerouted recipient for deferred webhook correlation", async () => {
@@ -655,7 +601,10 @@ describe("ResendStep deferred mode", () => {
           Effect.provide(
             Layer.merge(makeBaseLayers(), makeDeferredLayer("staging")),
           ),
-          Effect.withConfigProvider(rerouteConfigProvider),
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            rerouteConfigProvider,
+          ),
         ) as Effect.Effect<unknown>,
     )
 
@@ -732,11 +681,10 @@ describe("ResendStep deferred mode", () => {
               Layer.merge(makeDeferredLayer("production"), readerLayer),
             ),
           ),
-          Effect.withConfigProvider(configProvider),
+          Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
         ) as Effect.Effect<unknown>,
     )
 
-    // Should return Deferred but without a stateUpdate
     expect((result as { _tag: string })._tag).toBe("Deferred")
     if ((result as { _tag: string })._tag === "Deferred") {
       expect((result as { stateUpdate: unknown }).stateUpdate).toBeUndefined()

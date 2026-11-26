@@ -3,9 +3,9 @@ import {
   ExecutorHost,
   FileResolutionHost,
 } from "@processfocus/runtime"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer, Option } from "effect"
 import { AuthorizationService } from "@pf/auth-policy"
-import { UserDetails, type UserDetailsValue } from "@pf/graphql-db-operations"
+import { UserDetails } from "@pf/graphql-db-operations"
 import {
   ExecutionFromJobPublisher,
   ProcessFromJobPublisher,
@@ -39,22 +39,19 @@ import { SqliteQueueServiceLive } from "@pf/sqlite-queue-service"
  * RequestTime layer: initialized with a default value.
  * The drain loop sets the current time for each job.
  */
-const RequestTimeLive = Layer.effect(
-  RequestTime,
-  Effect.map(DateTime.now, (now) => FiberRef.unsafeMake(now)),
-)
+const RequestTimeLive = Layer.effect(RequestTime, DateTime.now)
 
 /**
  * UserDetails layer: SYSTEM user for test runner operations.
  * The id is null because no real user record exists in the test DB,
  * and the started_by_user FK column is nullable.
  */
-const UserDetailsLive = Layer.succeed(
+const UserDetailsLive = Layer.effect(
   UserDetails,
-  FiberRef.unsafeMake({
-    by: "SYSTEM",
-    id: null,
-  }) as FiberRef.FiberRef<UserDetailsValue>,
+  Effect.map(
+    Effect.serviceOption(UserDetails),
+    Option.getOrElse(() => ({ by: "SYSTEM", id: null })),
+  ),
 )
 
 const AllowAllAuthorizationLive = Layer.succeed(AuthorizationService, {
@@ -62,12 +59,11 @@ const AllowAllAuthorizationLive = Layer.succeed(AuthorizationService, {
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(true),
+  policyVersion: Effect.succeed("test-policy"),
   canCompleteStep: () => Effect.succeed(true),
-  canCompleteTodo: () => Effect.succeed(true),
+  canViewEmbeddedForm: () => Effect.succeed(true),
   canCorrectPublicCompletionTodo: () => Effect.succeed(true),
-  canCompletePublicTodo: () => Effect.succeed(true),
   canRequestRole: () => Effect.succeed(true),
-  canRequestProviderUserPermissions: () => Effect.succeed(true),
   canActOnBehalfOf: () => Effect.succeed(true),
   canViewExecution: () => Effect.succeed(true),
   canRestartExecution: () => Effect.succeed(true),

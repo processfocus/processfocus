@@ -1,8 +1,8 @@
-import { HttpServerRequest, HttpServerResponse } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
-import { Data, DateTime, Effect, Either, Option, Schema } from "effect"
+import { Data, DateTime, Effect, Option, Result, Schema } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
+import { SqlClient } from "effect/sql"
 import { jwtVerify } from "jose"
-import { PasskeyProviderConfigSchema } from "@pf/auth-config"
+import { PasskeyProviderConfigSchema } from "@pf/auth-config/runtime"
 import { subjects } from "@pf/auth-session"
 import {
   ClientRegistryService,
@@ -34,8 +34,11 @@ class PasskeyManagementRequestError extends Data.TaggedError(
   readonly error: string
 }> {}
 
-const PasskeyName = Schema.Trim.pipe(Schema.minLength(1), Schema.maxLength(128))
-const PasskeyId = Schema.String.pipe(Schema.minLength(1))
+const PasskeyName = Schema.Trim.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.check(Schema.isMaxLength(128)),
+)
+const PasskeyId = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
 const RenamePasskey = Schema.Struct({
   id: PasskeyId,
   name: PasskeyName,
@@ -47,7 +50,7 @@ const StartPasskeyEnrollment = Schema.Struct({
   name: PasskeyName,
 })
 const VerifyPasskeyEnrollment = Schema.Struct({
-  challengeId: Schema.String.pipe(Schema.minLength(1)),
+  challengeId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   response: PasskeyRegistrationResponseSchema,
 })
 const ManagementChallenge = Schema.Struct({
@@ -61,7 +64,7 @@ const ManagementChallenge = Schema.Struct({
 const CHALLENGE_TTL_SECONDS = 300
 
 const json = (body: unknown, status = 200) =>
-  HttpServerResponse.unsafeJson(body, {
+  HttpServerResponse.jsonUnsafe(body, {
     status,
     headers: {
       "cache-control": "no-store",
@@ -79,9 +82,11 @@ const isTrustedHuman = (session: {
       }
     | undefined
   readonly delegation?: unknown
+  readonly workload?: unknown
   readonly userId: string
 }): boolean =>
   session.delegation === undefined &&
+  session.workload === undefined &&
   (session.humanSession === true ||
     (session.humanAuthentication?.method === "passkey" &&
       session.humanAuthentication.providerUserId === session.userId))
@@ -222,7 +227,7 @@ export const makePasskeyManagementHandler: Effect.Effect<
     const credentials = yield* authDb.listPasskeyCredentialsForUser(
       session.userId,
     )
-    if (credentials.length === 0) {
+    if (credentials.length === 0 && request.method !== "GET") {
       return json({ error: "management_denied" }, 403)
     }
 
@@ -242,7 +247,9 @@ export const makePasskeyManagementHandler: Effect.Effect<
     if (request.method === "DELETE") {
       const body = yield* request.json.pipe(
         Effect.flatMap(
-          Schema.decodeUnknown(RemovePasskey, { onExcessProperty: "error" }),
+          Schema.decodeUnknownEffect(RemovePasskey, {
+            onExcessProperty: "error",
+          }),
         ),
         Effect.mapError(() => invalidRequest()),
       )
@@ -271,7 +278,9 @@ export const makePasskeyManagementHandler: Effect.Effect<
     if (request.method === "PATCH") {
       const body = yield* request.json.pipe(
         Effect.flatMap(
-          Schema.decodeUnknown(RenamePasskey, { onExcessProperty: "error" }),
+          Schema.decodeUnknownEffect(RenamePasskey, {
+            onExcessProperty: "error",
+          }),
         ),
         Effect.mapError(() => invalidRequest()),
       )
@@ -296,15 +305,15 @@ export const makePasskeyManagementHandler: Effect.Effect<
     const rawBody = yield* request.json.pipe(
       Effect.mapError(() => invalidRequest()),
     )
-    const start = Schema.decodeUnknownEither(StartPasskeyEnrollment, {
+    const start = Schema.decodeUnknownResult(StartPasskeyEnrollment, {
       onExcessProperty: "error",
     })(rawBody)
-    const verify = Schema.decodeUnknownEither(VerifyPasskeyEnrollment)(rawBody)
+    const verify = Schema.decodeUnknownResult(VerifyPasskeyEnrollment)(rawBody)
 
-    if (Either.isRight(start) && Either.isLeft(verify)) {
-      const rpConfig = yield* Schema.decodeUnknown(PasskeyProviderConfigSchema)(
-        passkeyProvider.value.config,
-      ).pipe(
+    if (Result.isSuccess(start) && Result.isFailure(verify)) {
+      const rpConfig = yield* Schema.decodeUnknownEffect(
+        PasskeyProviderConfigSchema,
+      )(passkeyProvider.value.config).pipe(
         Effect.mapError(
           () =>
             new PasskeyManagementRequestError({
@@ -319,6 +328,8 @@ export const makePasskeyManagementHandler: Effect.Effect<
       })
       const options = yield* createPasskeyRegistrationOptions({
         rpName: rpConfig.rpName,
+        accountLabel: rpConfig.accountLabel,
+        origin: rpConfig.origin,
         rpID: rpConfig.rpID,
         email: account.value.email,
         userHandle,
@@ -336,7 +347,7 @@ export const makePasskeyManagementHandler: Effect.Effect<
             challenge: options.challenge,
             userId: session.userId,
             userHandle,
-            name: start.right.name,
+            name: start.success.name,
           },
           CHALLENGE_TTL_SECONDS,
         ),
@@ -344,9 +355,9 @@ export const makePasskeyManagementHandler: Effect.Effect<
       return json({ challengeId, options })
     }
 
-    if (Either.isLeft(verify)) return json({ error: "invalid_request" }, 400)
+    if (Result.isFailure(verify)) return json({ error: "invalid_request" }, 400)
 
-    const enrollment = verify.right
+    const enrollment = verify.success
     const stored = yield* withStorage(
       Storage.take<unknown>(challengeKey(enrollment.challengeId)),
     )
@@ -355,9 +366,9 @@ export const makePasskeyManagementHandler: Effect.Effect<
       return json({ error: "invalid_request" }, 400)
     }
 
-    const rpConfig = yield* Schema.decodeUnknown(PasskeyProviderConfigSchema)(
-      passkeyProvider.value.config,
-    ).pipe(
+    const rpConfig = yield* Schema.decodeUnknownEffect(
+      PasskeyProviderConfigSchema,
+    )(passkeyProvider.value.config).pipe(
       Effect.mapError(
         () =>
           new PasskeyManagementRequestError({
@@ -423,7 +434,7 @@ export const makePasskeyManagementHandler: Effect.Effect<
     Effect.catchTag("PasskeyManagementRequestError", ({ status, error }) =>
       Effect.succeed(json({ error }, status)),
     ),
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.logError("Unexpected passkey management failure").pipe(
         Effect.as(json({ error: "internal_error" }, 500)),
       ),

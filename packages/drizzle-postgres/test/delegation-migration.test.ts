@@ -99,7 +99,7 @@ describe.skipIf(!available)("PostgreSQL delegation lineage concurrency", () => {
       .unsafe(`
       TRUNCATE pf_user, pf_org_unit CASCADE;
       INSERT INTO pf_org_unit (id, name, org_unit_level, path) VALUES ('org', 'Org', 'root', '/');
-      INSERT INTO pf_user (id, provider, sub, last_logged_in)
+      INSERT INTO pf_user (id, provider, sub, created_at)
         VALUES ('user', 'google', 'user', now()), ('disabled-user', 'google', 'disabled', now()),
                ('unassigned-disabled-user', 'google', 'unassigned-disabled', now());
       UPDATE pf_user SET _deleted = true WHERE id <> 'user';

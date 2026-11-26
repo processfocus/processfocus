@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import type { PullCheckpoint } from "./draft-process-execution"
 
 /**
@@ -56,9 +56,7 @@ export type TodoPullMode =
 /**
  * Service providing todo query operations for RxDB replication.
  */
-export class TodoQueries extends Context.Tag(
-  "@pf/graphql-db-operations/TodoQueries",
-)<
+export class TodoQueries extends Context.Service<
   TodoQueries,
   {
     /**
@@ -103,4 +101,4 @@ export class TodoQueries extends Context.Tag(
       query: TodoListQuery,
     ) => Effect.Effect<TodoRow[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/TodoQueries") {}

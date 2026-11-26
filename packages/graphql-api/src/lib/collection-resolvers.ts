@@ -27,7 +27,7 @@ interface AuthorizedPageOptions<
   AuthorizationRequirements,
 > {
   readonly pagination: PaginationWindow
-  readonly timeBudget?: Duration.DurationInput
+  readonly timeBudget?: Duration.Input
   readonly queryRows: (window: {
     readonly offset: number
     readonly limit: number
@@ -90,7 +90,7 @@ export const queryAuthorizedPage = <
       }
       exhausted = rows.length < MAX_PAGE_SIZE
       if (!exhausted && authorizedCount <= pageEnd) {
-        yield* Effect.yieldNow()
+        yield* Effect.yieldNow
       }
     }
 
@@ -101,15 +101,17 @@ export const queryAuthorizedPage = <
       hasNextPage: pageRows.length > options.pagination.limit,
     }
   }).pipe(
-    Effect.timeoutFail({
+    Effect.timeoutOrElse({
       duration: options.timeBudget ?? DEFAULT_AUTHORIZED_PAGE_TIME_BUDGET,
-      onTimeout: () =>
-        new AuthorizedPageTimeoutError({
-          message:
-            "Authorized collection paging exceeded its time budget; narrow the query with filters or request an earlier page",
-          page: options.pagination.page,
-          limit: options.pagination.limit,
-        }),
+      orElse: () =>
+        Effect.fail(
+          new AuthorizedPageTimeoutError({
+            message:
+              "Authorized collection paging exceeded its time budget; narrow the query with filters or request an earlier page",
+            page: options.pagination.page,
+            limit: options.pagination.limit,
+          }),
+        ),
     }),
   )
 

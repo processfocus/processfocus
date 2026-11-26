@@ -3,8 +3,9 @@
  * Handles JWT access token creation and refresh token storage.
  * @packageDocumentation
  */
-import { HttpServerRequest } from "@effect/platform"
+
 import { Clock, Effect } from "effect"
+import { HttpServerRequest } from "effect/http"
 import { SignJWT } from "jose"
 import { getIssuerUrl } from "../../request"
 import {

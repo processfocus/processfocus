@@ -2,7 +2,7 @@
 
 import { startRegistration } from "@simplewebauthn/browser"
 import { useState, useTransition } from "react"
-import { Button } from "@pf/shadcn-components"
+import { Button, DateTimeDisplay } from "@pf/shadcn-components"
 import {
   listPasskeys,
   removePasskey,
@@ -25,19 +25,6 @@ const confirmationCopy =
 function displayName(name: string | null): string {
   const trimmed = name?.trim() ?? ""
   return trimmed === "" ? unnamedLabel : trimmed
-}
-
-function AddedOn({ value }: { value: string }) {
-  return (
-    <time dateTime={value}>
-      {new Intl.DateTimeFormat("en", {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: "UTC",
-      }).format(new Date(value))}{" "}
-      UTC
-    </time>
-  )
 }
 
 const isAlreadyRegisteredError = (error: unknown): boolean => {
@@ -192,7 +179,8 @@ export function PasskeysClient({
               {displayName(credential.name)}
             </h3>
             <p className="text-sm text-muted-foreground">
-              Date added: <AddedOn value={credential.createdAt} />
+              Date added:{" "}
+              <DateTimeDisplay kind="timestamp" value={credential.createdAt} />
             </p>
             <p
               className="text-sm text-muted-foreground"
@@ -200,7 +188,10 @@ export function PasskeysClient({
             >
               Last used:{" "}
               {credential.lastUsedAt ? (
-                <AddedOn value={credential.lastUsedAt} />
+                <DateTimeDisplay
+                  kind="timestamp"
+                  value={credential.lastUsedAt}
+                />
               ) : (
                 "Unknown"
               )}

@@ -46,18 +46,25 @@ pfcli build <org-path> [--output dist]
 pfcli import <org-path>
 \`\`\`
 
-- Uses \`SQLITE_DATABASE_PATH\` or \`<org-path>/db/pf.db\`.
+- Use \`--database-path <path>\` for a custom database and \`--issuer-url <url>\` for the frontend JWT issuer; both also apply to \`--watch\`. Otherwise database and issuer environment fallbacks and port discovery remain available.
+- \`--database-path\` also applies to migrations, frontend JWT commands, invitation creation and local role grants. \`refresh-frontend-jwt\` also accepts \`--issuer-url\`.
 - Builds first when source is present, runs migrations, then imports the bundled model.
 
 ### Deploy a project environment
 
+Use \`--wait-timeout-ms <positive-integer>\` to override the deployment inactivity
+timeout (environment fallback: \`PFCLI_DEPLOY_WAIT_TIMEOUT_MS\`, default 900000).
+This option cannot be combined with \`--no-wait\`.
+
 \`\`\`bash
 pfcli deploy <org-path> --project <project-number> --env <environment-name>
 pfcli deploy <org-path> --project <project-number> --env <environment-name> --no-wait
+pfcli deploy status --project <project-number> --env <environment-name>
 \`\`\`
 
 - Requires \`pfcli auth login\` credentials.
 - Builds the org, uploads the dist artifact, starts the backend deploy process, and waits by default.
+- Ctrl-C stops waiting, not deployment. Check Backend execution status before retrying.
 - Project numbers and internal IDs are accepted. Prefer project numbers in user-facing examples.
 
 ### Mint a first-admin Registration Link
@@ -72,8 +79,9 @@ pfcli invitation registration-link --project <project-number> --env <environment
 pfcli invitation registration-link --project <project-number> --env <environment-name> --email <invited-email> --rotate
 \`\`\`
 
-- Local mode resolves its database from \`SQLITE_DATABASE_PATH\`, \`org-path\`, or \`PF_ORG\`; remote mode requires \`--project\` and \`--env\` together plus \`pfcli auth login\` against Console.
-- Local URLs use \`FRONTEND_BASE_URL\`, \`BASE_URL\`, or \`NEXT_PUBLIC_FRONTEND_URL\`. Local mode is a developer workflow, so it intentionally falls back to \`http://localhost:3000\` even when \`NODE_ENV\` is unset; configure an origin when the local frontend uses another address.
+- Local mode accepts \`--database-path <path>\`, then resolves its database from \`SQLITE_DATABASE_PATH\`, \`org-path\`, or \`PF_ORG\`; remote mode requires \`--project\` and \`--env\` together plus \`pfcli auth login\` against Console.
+- Use \`--frontend-url https://app.example.com\` to override local link origins, including rotation and recovery. Supply an HTTP(S) origin with optional port but no path, credentials, query, or fragment. Both this option and \`--database-path\` are rejected in remote mode.
+- Local URLs use \`FRONTEND_BASE_URL\`, \`BASE_URL\`, or \`NEXT_PUBLIC_FRONTEND_URL\` in that order, preserving explicit localhost ports. Otherwise they use \`http://localhost:<port>\` from \`.frontend-port.json\` in \`PF_RUNTIME_ROOT ?? NX_WORKSPACE_ROOT ?? cwd\`, falling back to port 3000 if the file is missing, unreadable, or malformed. This local fallback also applies when \`NODE_ENV\` is unset.
 - Prints the Registration Link URL once to stdout. Do not copy that URL into logs, skill examples, or summaries; use a placeholder such as \`https://<env>.<project-number>.app.processfocus.com/register/passkey#token=<token>\`.
 - A second generate without \`--rotate\` fails; pass \`--rotate\` to replace an active or expired pending link. Revoked pending links are refused.
 - For an existing active account associated with an accepted or legacy-closed Invitation, \`--rotate\` issues a separate, single-use Passkey Recovery Link. It preserves current roles, existing passkeys, and Invitation history. Recovery requires current roles and an enabled passkey provider.
@@ -92,6 +100,16 @@ pfcli destroy --project <project-number> --env <environment-name> --yes --no-wai
 - This is destructive: it deletes the environment's AWS stacks and environment record through the existing Backend process.
 - \`--yes\` is mandatory and there is no interactive prompt.
 - Waits for completion by default. \`--no-wait\` returns after the execution starts.
+
+### Create a project
+
+\`\`\`bash
+pfcli project create --name "Demo" --region <region-id>
+\`\`\`
+
+- Uses the Backend project-signup process, waits for completion, and prints JSON receipt lines with execution ID, project ID and project number.
+- Region IDs come from the target Backend; an unknown region lists valid choices before mutation.
+- A failed start response can have an uncertain outcome. Inspect projects before retrying; creation is never automatically resubmitted.
 
 ### List remote inventory
 
@@ -179,7 +197,7 @@ pfcli db rollback --project <project-number> --env <environment-name> --timestam
 pfcli auth login
 \`\`\`
 
-- Uses \`BASE_URL\` when set, otherwise defaults to \`https://console.processfocus.com\`.
+- Use \`--base-url <origin>\` to select the login endpoint. Supply an HTTP(S) origin without a path, credentials, query, or fragment. Otherwise uses \`BASE_URL\` when set, then \`https://console.processfocus.com\`. The option is rejected in OIDC federation mode (\`PFCLI_AUTH_MODE=github-workload\`), which uses its configured endpoint.
 - The Console host is the canonical CLI auth endpoint for customer sessions.
 - Stores CLI credentials under the Process Focus config directory.
 - Remote commands use these credentials; do not edit credential files manually.

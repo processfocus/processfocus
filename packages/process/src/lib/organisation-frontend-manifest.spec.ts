@@ -94,6 +94,7 @@ describe("organisation frontend manifest", () => {
 
     const start = new Form(process, "Submit enquiry", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com"],
@@ -102,7 +103,7 @@ describe("organisation frontend manifest", () => {
       form: () => ({
         email: ES.String,
         firstName: ES.String,
-        attachment: ES.String.annotations({
+        attachment: ES.String.annotate({
           [FormComponentPluginType]: {
             module: "@processfocus/plugin-google-drive/register-client",
             type: "google-drive",
@@ -171,15 +172,15 @@ describe("organisation frontend manifest", () => {
       purpose: "Capture enquiries",
     })
 
-    const wrappedPluginField = ES.String.pipe(ES.minLength(1))
-      .annotations({
+    const wrappedPluginField = ES.String.pipe(ES.check(ES.isMinLength(1)))
+      .annotate({
         [FormComponentPluginType]: {
           module: "inner-plugin/register-client",
           type: "inner-plugin",
         },
       })
-      .pipe(ES.maxLength(5))
-      .annotations({
+      .pipe(ES.check(ES.isMaxLength(5)))
+      .annotate({
         [FormComponentPluginType]: {
           module: "outer-plugin/register-client",
           type: "outer-plugin",
@@ -188,6 +189,7 @@ describe("organisation frontend manifest", () => {
 
     const start = new Form(process, "Submit enquiry", {
       role,
+      browser: { entrypoint: "form.ts", exportName: "form" },
       embed: {
         externalParticipantEmailField: "email",
         sites: ["https://school.example.com"],
@@ -223,7 +225,7 @@ describe("organisation frontend manifest", () => {
       query: () => Effect.succeed({ items: [], totalCount: 0 }),
       form: () => ({
         id: ES.String,
-        attachment: ES.String.annotations({
+        attachment: ES.String.annotate({
           [FormComponentPluginType]: {
             module: "@example/list-detail-plugin/register-client",
             type: "list-detail-plugin",

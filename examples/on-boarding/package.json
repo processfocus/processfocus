@@ -5,7 +5,9 @@
   "dependencies": {
     "@pf/auth-config": "workspace:*",
     "@pf/process": "workspace:*",
-    "@tursodatabase/database": "0.7.2"
+    "@processfocus/runtime": "workspace:*",
+    "@tursodatabase/database": "0.8.3",
+    "effect": "4.1.4"
   },
   "exports": {
     ".": {

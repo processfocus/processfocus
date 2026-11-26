@@ -48,10 +48,8 @@ const generateJsonSchema = (
     const filename = `${toKebabCase(collectionName)}-schema.json`
     const outputPath = `${outputDir}/${filename}`
 
-    // Generate RxDB-compatible JSON schema
     const rxdbSchema = toRxDbJsonSchema(schema)
 
-    // Write JSON file with pretty printing
     const content = prettyPrintJson(rxdbSchema)
     yield* Effect.tryPromise({
       try: () => fs.writeFile(outputPath, `${content}\n`, "utf-8"),
@@ -65,18 +63,13 @@ const generateJsonSchema = (
     yield* Console.log(`  ✓ ${filename}`)
   })
 
-/**
- * Main program logic
- */
 const program = Effect.gen(function* () {
   const graphqlOutputPath = "packages/graphql-schema/graphql/rxdb.graphql"
 
   yield* Console.log("Generating GraphQL schema from RxDB collections...")
 
-  // Generate GraphQL from collections
   const graphql = yield* generateGraphQL(RxDbCollections)
 
-  // Write GraphQL file
   yield* Effect.tryPromise({
     try: () => fs.writeFile(graphqlOutputPath, graphql, "utf-8"),
     catch: (error) =>
@@ -88,7 +81,6 @@ const program = Effect.gen(function* () {
 
   yield* Console.log(`✓ Generated ${graphqlOutputPath}`)
 
-  // Generate JSON schemas for each collection
   yield* Console.log("Generating RxDB JSON schemas...")
 
   for (const [collectionName, schema] of Object.entries(RxDbCollections)) {
@@ -118,10 +110,7 @@ const handleError = (error: CliError): Effect.Effect<void> =>
     Match.exhaustive,
   )
 
-/**
- * Run the program
- */
-Effect.runPromise(program.pipe(Effect.catchAll(handleError))).then(
+Effect.runPromise(program.pipe(Effect.catch(handleError))).then(
   () => process.exit(0),
   () => process.exit(1),
 )

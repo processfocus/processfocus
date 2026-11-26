@@ -66,7 +66,6 @@ export function NotificationBell({
   const isDenied = state.permission === "denied"
   const isPending = isPermissionRequestPending
 
-  // Determine icon and tooltip based on state
   const Icon = isPending
     ? LoaderCircle
     : isEnabled

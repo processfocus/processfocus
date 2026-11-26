@@ -1,5 +1,5 @@
-import { HttpClient } from "@effect/platform"
 import { Array as Arr, Config, Effect, Layer } from "effect"
+import { HttpClient } from "effect/http"
 import { type ProcessChangeEvent, ProcessCollectionOps } from "@pf/graphql-api"
 import { UserDetails } from "@pf/graphql-db-operations"
 import {
@@ -12,7 +12,6 @@ import { postInternalEvent } from "./post-internal-event"
 /**
  * ProcessFromJobPublisher implementation for local runtime.
  * Publishes process change events via HTTP POST to the GraphQL server's internal endpoint.
- * Uses fire-and-forget pattern since the local runtime keeps running.
  */
 export const HttpProcessFromJobPublisherLive = Layer.effect(
   ProcessFromJobPublisher,
@@ -21,7 +20,7 @@ export const HttpProcessFromJobPublisherLive = Layer.effect(
     const httpClient = yield* HttpClient.HttpClient
     const userDetails = yield* UserDetails
     const callbackSecret = yield* Config.option(
-      Config.string("INTERNAL_API_SECRET"),
+      Config.String("INTERNAL_API_SECRET"),
     )
     const baseUrl = yield* GraphqlServerUrl
 
@@ -51,7 +50,7 @@ export const HttpProcessFromJobPublisherLive = Layer.effect(
           )
 
           // Empty getByIds (or empty map result): expected race on rollback.
-          if (!Arr.isNonEmptyReadonlyArray(graphqlProcesses)) {
+          if (!Arr.isReadonlyArrayNonEmpty(graphqlProcesses)) {
             return "skipped-not-found" as const
           }
 

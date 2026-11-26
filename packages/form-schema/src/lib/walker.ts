@@ -4,15 +4,7 @@
  * very similar allowed for better verification that we can create real forms.
  */
 
-import {
-  Context,
-  Data,
-  Effect,
-  Layer,
-  Match,
-  Option,
-  type Schema,
-} from "effect"
+import { Context, Data, Effect, Layer, Match, type Schema } from "effect"
 import * as AST from "effect/SchemaAST"
 import { hasStructuralOnlyAnnotation } from "./annotation-helpers"
 import { STRUCTURAL_TYPE_SYMBOL } from "./form-schema"
@@ -24,7 +16,7 @@ export const isFieldset = (element: Element): element is { fieldset: Form } => {
   return typeof element === "object" && "fieldset" in element
 }
 
-class FormService extends Context.Tag("@pf/form-schema/FormService")<
+class FormService extends Context.Service<
   FormService,
   {
     readonly form: (
@@ -37,9 +29,9 @@ class FormService extends Context.Tag("@pf/form-schema/FormService")<
       FieldComponent
     >
   }
->() {}
+>()("@pf/form-schema/FormService") {}
 
-class FieldComponent extends Context.Tag("@pf/form-schema/FieldComponent")<
+class FieldComponent extends Context.Service<
   FieldComponent,
   {
     readonly component: (
@@ -53,7 +45,7 @@ class FieldComponent extends Context.Tag("@pf/form-schema/FieldComponent")<
       FieldComponent
     >
   }
->() {}
+>()("@pf/form-schema/FieldComponent") {}
 
 const FormServiceTest = Layer.succeed(FormService, {
   form: (ast: AST.AST) => walkAST(ast),
@@ -65,7 +57,7 @@ const FormServiceTest = Layer.succeed(FormService, {
 const walkAST = (ast: AST.AST, parentPath = "") =>
   Effect.gen(function* () {
     const fields = yield* Match.type<AST.AST>().pipe(
-      Match.tag("TypeLiteral", (typeLiteral) =>
+      Match.tag("Objects", (typeLiteral) =>
         Effect.gen(function* () {
           const fields: Form = {}
 
@@ -158,49 +150,25 @@ const tagToField = (
   const appField = (name: string) => Effect.succeed(name)
 
   const match = Match.type<AST.AST>().pipe(
-    Match.tag("StringKeyword", () => appField("textfield")),
-    Match.tag("BooleanKeyword", () => appField("checkbox")),
-    Match.tag("NumberKeyword", () => appField("numberfield")),
-    Match.tag("Refinement", (r) => {
-      const newProp = new AST.PropertySignature(
-        prop.name,
-        r.from,
-        prop.isOptional,
-        prop.isReadonly,
-      )
-      const field = tagToField(newProp, parentPath)
-      return field
-    }),
-    Match.tag("Transformation", (r) => {
-      const newProp = new AST.PropertySignature(
-        prop.name,
-        r.to,
-        prop.isOptional,
-        prop.isReadonly,
-        r.annotations,
-      )
-      const field = tagToField(newProp, parentPath)
-      return field
-    }),
-    Match.tag("TypeLiteral", () =>
+    Match.tag("String", () => appField("textfield")),
+    Match.tag("Boolean", () => appField("checkbox")),
+    Match.tag("Number", () => appField("numberfield")),
+    Match.tag("Objects", () =>
       Effect.gen(function* () {
         const fields = yield* walkAST(prop.type, name)
         return { fieldset: fields }
       }),
     ),
-    Match.tag("UndefinedKeyword", () => {
+    Match.tag("Undefined", () => {
       // Check if this is a structural-only element
-      const fieldAsSchema = { ast: prop.type } as Schema.Schema.Any
+      const fieldAsSchema = { ast: prop.type } as Schema.Top
       if (hasStructuralOnlyAnnotation(fieldAsSchema)) {
         // Extract the structural type from annotations
-        const typeAnnotation = AST.getAnnotation(
-          prop.type,
+        const value = Reflect.get(
+          AST.resolve(prop.type) ?? {},
           STRUCTURAL_TYPE_SYMBOL,
         )
-        const structuralType = Option.match(typeAnnotation, {
-          onNone: () => "structural",
-          onSome: (value) => value as string,
-        })
+        const structuralType = typeof value === "string" ? value : "structural"
         return appField(structuralType)
       }
       // Regular undefined field - not supported

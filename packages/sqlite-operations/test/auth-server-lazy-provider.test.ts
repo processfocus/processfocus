@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { createAuthenticationServer } from "@pf/auth-api"
 import * as schema from "@pf/drizzle-sqlite"
@@ -303,7 +304,7 @@ describe("auth-server lazy provider loading", () => {
     )
   })
 
-  it("should include database providers in well-known endpoint providers_supported", async () => {
+  it("discovers bootstrap capabilities from active, supported provider configuration", async () => {
     await Effect.runPromise(
       Effect.provide(
         Effect.gen(function* () {
@@ -363,6 +364,59 @@ describe("auth-server lazy provider loading", () => {
           ).providers_supported
           expect(providersSupported).toContain("google")
           expect(providersSupported).toContain("passkey")
+          expect(metadata).toMatchObject({
+            verified_human_identity_supported: true,
+            passkey_registration_supported: true,
+          })
+
+          const discover = () =>
+            Effect.promise(async () => {
+              const response = await auth5.request(
+                "https://auth.example.com/.well-known/oauth-authorization-server",
+              )
+              expect(response.status).toBe(200)
+              return response.json()
+            })
+
+          // Soft-deleted providers are disabled by the authoritative DB lookup.
+          yield* db
+            .update(schema.oauthProvider)
+            .set({ _deleted: true })
+            .where(eq(schema.oauthProvider.providerName, "google"))
+          expect(yield* discover()).toMatchObject({
+            verified_human_identity_supported: false,
+            passkey_registration_supported: true,
+          })
+          yield* db
+            .update(schema.oauthProvider)
+            .set({ _deleted: false })
+            .where(eq(schema.oauthProvider.providerName, "google"))
+          yield* db
+            .update(schema.oauthProvider)
+            .set({ _deleted: true })
+            .where(eq(schema.oauthProvider.providerName, "passkey"))
+          expect(yield* discover()).toMatchObject({
+            verified_human_identity_supported: true,
+            passkey_registration_supported: false,
+          })
+          yield* db.update(schema.oauthProvider).set({ _deleted: true })
+          // Subject-only human providers and non-human/unsupported mechanisms
+          // must not be mistaken for Invitation Acceptance methods.
+          yield* db.insert(schema.oauthProvider).values([
+            {
+              providerName: "x",
+              providerConfig: {
+                clientID: "subject-only",
+                clientSecret: "test-secret",
+                scopes: ["users.read"],
+              },
+            },
+            { providerName: "client_credentials", providerConfig: {} },
+          ])
+          expect(yield* discover()).toMatchObject({
+            verified_human_identity_supported: false,
+            passkey_registration_supported: false,
+          })
         }),
         TestLayer,
       ),

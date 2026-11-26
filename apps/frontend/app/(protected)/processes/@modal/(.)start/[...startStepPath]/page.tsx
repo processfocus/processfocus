@@ -1,7 +1,9 @@
-import { NotFound } from "@mcrovero/effect-nextjs/Navigation"
 import { Effect } from "effect"
 import StartProcessModalClient from "./client"
+import { NotFound } from "@/lib/effect/navigation"
 import { BasePage } from "@/lib/effect/runtime"
+
+export const instant = false
 
 /**
  * Start process modal - thin server wrapper that passes URL params to client.
@@ -9,13 +11,10 @@ import { BasePage } from "@/lib/effect/runtime"
  */
 const StartProcessModal = Effect.fn("StartProcessModal")(function* ({
   params,
-  searchParams,
 }: {
   params: Promise<{ startStepPath: string[] }>
-  searchParams: Promise<{ draftId?: string }>
 }) {
   const { startStepPath: pathSegments } = yield* Effect.promise(() => params)
-  const { draftId } = yield* Effect.promise(() => searchParams)
 
   // Guard against asset-like requests accidentally hitting this catch-all route
   // (e.g. `/processes/start/hr/installHook.js.map`).
@@ -33,9 +32,7 @@ const StartProcessModal = Effect.fn("StartProcessModal")(function* ({
   // Full path for lookup: "/engineering/bug-report-fix/Report bug"
   const startStepPath = `/${pathSegments.map(decodeURIComponent).join("/")}`
 
-  return (
-    <StartProcessModalClient startStepPath={startStepPath} draftId={draftId} />
-  )
+  return <StartProcessModalClient startStepPath={startStepPath} />
 })
 
 export default BasePage.build(StartProcessModal)

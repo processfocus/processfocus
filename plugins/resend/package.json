@@ -46,12 +46,9 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@effect/platform": "^0.97.2",
-    "@pf/document-store-service": "workspace:*",
-    "@pf/job-handler": "workspace:*",
     "@pf/process": "workspace:*",
     "@processfocus/runtime": "workspace:*",
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "publishConfig": {
     "access": "public",

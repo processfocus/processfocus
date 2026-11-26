@@ -1,4 +1,3 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import {
   type SQL,
   and,
@@ -12,7 +11,8 @@ import {
   sql,
 } from "drizzle-orm"
 import { alias } from "drizzle-orm/pg-core"
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import * as schema from "@pf/drizzle-postgres"
 import {
   ExecutionQueries,
@@ -57,6 +57,7 @@ export const PostgresExecutionQueriesLive = Layer.effect(
             stepName: schema.step.name,
             stepPath: schema.step.path,
             completed: schema.toDo._deleted,
+            interruptedAt: schema.toDo.interruptedAt,
             failureReason: schema.toDo.failureReason,
             notStartedReason: schema.toDo.notStartedReason,
             correctionRequiredAt: sql<
@@ -129,13 +130,42 @@ export const PostgresExecutionQueriesLive = Layer.effect(
           .where(inArray(schema.toDo.processExecutionId, executionIds))
           .orderBy(schema.toDo.updatedAt)
 
+        const deadlines = yield* db
+          .select({
+            id: schema.taskDeadline.id,
+            ownerTodoId: schema.taskDeadline.ownerToDoId,
+            name: schema.taskDeadline.deadlineName,
+            dueAt: schema.taskDeadline.scheduledAt,
+            triggeredAt: schema.taskDeadline.triggeredAt,
+            disarmedAt: schema.taskDeadline.disarmedAt,
+          })
+          .from(schema.taskDeadline)
+          .innerJoin(
+            schema.toDo,
+            eq(schema.taskDeadline.ownerToDoId, schema.toDo.id),
+          )
+          .where(inArray(schema.toDo.processExecutionId, executionIds))
         return rows.map((row) => ({
+          deadlines: deadlines
+            .filter((deadline) => deadline.ownerTodoId === row.todoId)
+            .map((deadline) => ({
+              id: deadline.id,
+              name: deadline.name,
+              dueAt: DateTime.formatIso(deadline.dueAt),
+              triggeredAt: deadline.triggeredAt
+                ? DateTime.formatIso(deadline.triggeredAt)
+                : null,
+              disarmedAt: deadline.disarmedAt
+                ? DateTime.formatIso(deadline.disarmedAt)
+                : null,
+            })),
           executionId: row.executionId,
           todoId: row.todoId,
           stepId: row.stepId,
           stepName: row.stepName,
           stepPath: row.stepPath,
           completed: row.completed,
+          interrupted: row.interruptedAt !== null,
           failureReason: row.failureReason,
           notStartedReason: row.notStartedReason,
           correctionRequiredAt: row.correctionRequiredAt,
@@ -287,6 +317,8 @@ export const PostgresExecutionQueriesLive = Layer.effect(
               ),
             // Started by provider user info
             startedByEmail: schema.providerUser.email,
+            startedByProvider: schema.user.provider,
+            startedBySubject: schema.user.sub,
             startedById: schema.providerUser.id,
             startedByFirstName: schema.providerUser.firstName,
             startedByLastName: schema.providerUser.lastName,
@@ -417,6 +449,10 @@ export const PostgresExecutionQueriesLive = Layer.effect(
               row.startStepExternalParticipantEmail,
             processStateCreatedAt: row.processStateCreatedAt,
             startedByEmail: row.startedByEmail,
+            startedByServiceAccountId:
+              row.startedByProvider === "client_credentials"
+                ? row.startedBySubject
+                : null,
             startedById: row.startedById,
             startedByFirstName: row.startedByFirstName,
             startedByLastName: row.startedByLastName,
@@ -529,6 +565,60 @@ export const PostgresExecutionQueriesLive = Layer.effect(
         }),
 
       getTodosForExecutions: queryTodosForExecutions,
+
+      getUnfinishedWorkForExecutions: (executionIds) =>
+        Effect.gen(function* () {
+          if (executionIds.length === 0)
+            return { todos: [], scheduledFlows: [] }
+          const source = alias(schema.step, "source_step")
+          const target = alias(schema.step, "target_step")
+          const todos = yield* db
+            .select({
+              executionId: schema.toDo.processExecutionId,
+              stepPath: schema.step.path,
+              failureReason: schema.toDo.failureReason,
+            })
+            .from(schema.toDo)
+            .innerJoin(schema.flow, eq(schema.toDo.flowId, schema.flow.id))
+            .innerJoin(
+              schema.step,
+              eq(schema.flow.targetStepId, schema.step.id),
+            )
+            .where(
+              and(
+                inArray(schema.toDo.processExecutionId, executionIds),
+                eq(schema.toDo._deleted, false),
+              ),
+            )
+          const scheduledFlows = yield* db
+            .select({
+              executionId: schema.scheduledFlow.processExecutionId,
+              sourceStepPath: source.path,
+              targetStepPath: target.path,
+            })
+            .from(schema.scheduledFlow)
+            .innerJoin(
+              source,
+              and(
+                eq(schema.scheduledFlow.sourceStepId, source.id),
+                eq(source._deleted, false),
+              ),
+            )
+            .leftJoin(
+              target,
+              and(
+                eq(schema.scheduledFlow.targetStepId, target.id),
+                eq(target._deleted, false),
+              ),
+            )
+            .where(
+              and(
+                inArray(schema.scheduledFlow.processExecutionId, executionIds),
+                eq(schema.scheduledFlow._deleted, false),
+              ),
+            )
+          return { todos, scheduledFlows }
+        }),
 
       getProcessStateByExecutionId,
     }

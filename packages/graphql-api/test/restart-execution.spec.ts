@@ -1,15 +1,16 @@
-import { FileSystem } from "@effect/platform"
-import { SqlClient } from "@effect/sql"
+import { EnqueueError, type Job, QueueService } from "@processfocus/runtime"
 import { eq } from "drizzle-orm"
+import type { Context } from "effect"
 import {
   DateTime,
   Schema as ES,
   Effect,
   type Effect as EffectType,
-  FiberRef,
+  FileSystem,
   Layer,
   Option,
 } from "effect"
+import { SqlClient } from "effect/sql"
 import { AuthorizationService } from "@pf/auth-policy"
 import * as schema from "@pf/drizzle-sqlite"
 import {
@@ -38,7 +39,6 @@ import {
   makeScheduleEvaluator,
   makeSystemStepExecutor,
 } from "@pf/process"
-import { EnqueueError, type Job, QueueService } from "@pf/queue-service"
 import { RequestTime } from "@pf/request-time"
 import {
   DatabaseTest,
@@ -51,7 +51,6 @@ import {
   SqliteGraphqlDbOperationsLive,
   SqliteScheduledFlowOperationsLive,
 } from "@pf/sqlite-operations"
-import { systemStartRestartDispatchId } from "../src/lib/execution-restart"
 import { DynamicSchemaConfig } from "../src/lib/graphql-api"
 import { systemSchema } from "../src/lib/system-resolvers"
 import type { UserContext } from "../src/lib/types"
@@ -112,12 +111,14 @@ const createMockQueueService = (options?: {
         })
         return `mock-job-${enqueuedJobs.length}`
       }),
-    enqueueWithDelay: () => Effect.dieMessage("not used"),
+    enqueueWithDelay: () => Effect.die("not used"),
     rawClaim: () => Effect.succeed(Option.none()),
-    acknowledge: () => Effect.dieMessage("not used"),
-    fail: () => Effect.dieMessage("not used"),
-    extendVisibility: () => Effect.dieMessage("not used"),
-    getStats: () => Effect.dieMessage("not used"),
+    rawClaimBatch: () => Effect.succeed([]),
+    acknowledgeBatch: () => Effect.succeed([]),
+    acknowledge: () => Effect.die("not used"),
+    fail: () => Effect.die("not used"),
+    extendVisibility: () => Effect.die("not used"),
+    getStats: () => Effect.die("not used"),
   })
   return { layer, enqueuedJobs }
 }
@@ -158,17 +159,18 @@ const makeStartSystemStepOrg = (
   return { org, hello, done }
 }
 
-const makeAuthorizationService = (): AuthorizationService["Type"] => ({
+const makeAuthorizationService = (): Context.Service.Shape<
+  typeof AuthorizationService
+> => ({
   canIssueDelegationSecret: () => Effect.succeed(false),
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(true),
+  policyVersion: Effect.succeed("test-policy"),
   canCompleteStep: () => Effect.succeed(true),
-  canCompleteTodo: () => Effect.succeed(true),
+  canViewEmbeddedForm: () => Effect.succeed(false),
   canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-  canCompletePublicTodo: () => Effect.succeed(false),
   canRequestRole: () => Effect.succeed(false),
-  canRequestProviderUserPermissions: () => Effect.succeed(false),
   canActOnBehalfOf: () => Effect.succeed(false),
   canViewExecution: () => Effect.succeed(true),
   canRestartExecution: () => Effect.succeed(true),
@@ -194,15 +196,12 @@ const createTestLayers = (
     createMockQueueService(queueOptions)
   const RequestTimeLive = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
-  const UserDetailsLive = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "TEST_USER",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsLive = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "TEST_USER",
+  } as UserDetailsValue)
   const ConditionEvaluatorLive = Layer.succeed(
     ConditionEvaluator,
     makeConditionEvaluator(org),
@@ -293,7 +292,7 @@ const insertFailedSystemStartExecution = Effect.gen(function* () {
 })
 
 const makeContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "starter@example.com",
     id: "starter@example.com",
@@ -321,7 +320,7 @@ const callRestartExecution = (executionId: string) =>
   Effect.gen(function* () {
     const schemaResult = yield* systemSchema
     const resolver = (schemaResult.resolvers?.Mutation?.["restartExecution"] ??
-      (() => Effect.dieMessage("Missing restartExecution resolver"))) as (
+      (() => Effect.die("Missing restartExecution resolver"))) as (
       parent: unknown,
       args: { executionId: string },
       context: UserContext,
@@ -597,21 +596,25 @@ describe("restartExecution for failed system-start executions", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           yield* storeOrganisation(org)
+          // Import notifications remain pending independently of restart dispatch.
+          const importJobs = yield* (yield* TypedSqliteDrizzle)
+            .select({ id: schema.jobQueue.id })
+            .from(schema.jobQueue)
           const { processExecutionId, stepId, stepPath } =
             yield* insertFailedSystemStartExecution
 
           // Production path: GraphQL mutation, not the helper alone.
           const first = yield* callRestartExecution(processExecutionId).pipe(
-            Effect.either,
+            Effect.result,
           )
-          expect(first._tag).toBe("Left")
+          expect(first._tag).toBe("Failure")
 
           const db = yield* TypedSqliteDrizzle
           const outboxBefore = yield* db
             .select({ payload: schema.jobQueue.jobPayload })
             .from(schema.jobQueue)
             .where(eq(schema.jobQueue._deleted, false))
-          expect(outboxBefore.length).toBeGreaterThan(0)
+          expect(outboxBefore.length).toBeGreaterThan(importJobs.length)
 
           const executions = yield* db
             .select({
@@ -636,7 +639,7 @@ describe("restartExecution for failed system-start executions", () => {
             .select({ id: schema.jobQueue.id })
             .from(schema.jobQueue)
             .where(eq(schema.jobQueue._deleted, false))
-          expect(outboxAfter).toEqual([])
+          expect(outboxAfter).toEqual(importJobs)
 
           const startJobs = enqueuedJobs.filter(
             (job) => job.queue === SYSTEM_STEP_EXECUTION_QUEUE,
@@ -656,11 +659,6 @@ describe("restartExecution for failed system-start executions", () => {
               ),
             ),
           ).toBe(true)
-
-          // Dispatch id remains stable for recovery of the same attempt.
-          expect(systemStartRestartDispatchId(processExecutionId)).toBe(
-            `execution-restart:${processExecutionId}`,
-          )
         }).pipe(Effect.provide(layers)) as Effect.Effect<void>,
       )
     })
@@ -682,13 +680,17 @@ describe("restartExecution for failed system-start executions", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* storeOrganisation(org)
+        // Import notifications remain pending independently of restart dispatch.
+        const importJobs = yield* (yield* TypedSqliteDrizzle)
+          .select({ id: schema.jobQueue.id })
+          .from(schema.jobQueue)
         const { processExecutionId, stepId, stepPath } =
           yield* insertFailedSystemStartExecution
 
         const first = yield* callRestartExecution(processExecutionId).pipe(
-          Effect.either,
+          Effect.result,
         )
-        expect(first._tag).toBe("Left")
+        expect(first._tag).toBe("Failure")
 
         const firstStartLogicalJobId = enqueuedJobs.find(
           (job) => job.queue === SYSTEM_STEP_EXECUTION_QUEUE,
@@ -712,7 +714,7 @@ describe("restartExecution for failed system-start executions", () => {
           .select({ id: schema.jobQueue.id })
           .from(schema.jobQueue)
           .where(eq(schema.jobQueue._deleted, false))
-        expect(leftover.length).toBeGreaterThan(0)
+        expect(leftover.length).toBeGreaterThan(importJobs.length)
 
         enqueuedJobs.length = 0
         const second = yield* callRestartExecution(processExecutionId)
@@ -772,9 +774,13 @@ describe("restartExecution for failed system-start executions", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* storeOrganisation(org)
+        // Import notifications remain pending independently of restart dispatch.
+        const importJobs = yield* (yield* TypedSqliteDrizzle)
+          .select({ id: schema.jobQueue.id })
+          .from(schema.jobQueue)
         const { processExecutionId } = yield* insertFailedSystemStartExecution
 
-        yield* callRestartExecution(processExecutionId).pipe(Effect.either)
+        yield* callRestartExecution(processExecutionId).pipe(Effect.result)
 
         const flowExecutionOps = yield* FlowExecutionOperations
         const completedJobOps = yield* CompletedJobOperations
@@ -834,7 +840,7 @@ describe("restartExecution for failed system-start executions", () => {
           .select({ id: schema.jobQueue.id })
           .from(schema.jobQueue)
           .where(eq(schema.jobQueue._deleted, false))
-        expect(outbox).toEqual([])
+        expect(outbox).toEqual(importJobs)
       }).pipe(Effect.provide(layers)) as Effect.Effect<void>,
     )
   })
@@ -861,6 +867,7 @@ describe("restartExecution for failed system-start executions", () => {
         const reopened =
           yield* stepCompletionOps.reopenFailedSystemStartExecution(
             processExecutionId,
+            "restart-attempt",
           )
         expect(reopened).toBe(false)
 

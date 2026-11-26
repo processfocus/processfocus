@@ -3,8 +3,9 @@
  * GET /oauth/authorize
  * @packageDocumentation
  */
-import { HttpServerRequest, HttpServerResponse } from "@effect/platform"
+
 import { Effect } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { serializeCookie } from "../http-middleware/cookies"
 import { isValidRedirectUri, normalizeRedirectUri } from "../redirect-uri"
 import { getProtocol } from "../request"
@@ -90,6 +91,10 @@ export const handleAuthorize: Effect.Effect<
   const responseType = searchParams.get("response_type") ?? undefined
   const redirectUriParam = searchParams.get("redirect_uri") ?? undefined
   const state = searchParams.get("state") ?? undefined
+  const googleRevalidationSubject =
+    provider === "google" && state
+      ? searchParams.get("google_revalidation_sub") || undefined
+      : undefined
   const clientIdParam = searchParams.get("client_id") ?? undefined
   const audience = searchParams.get("audience") ?? undefined
   const codeChallenge = searchParams.get("code_challenge") ?? undefined
@@ -134,7 +139,6 @@ export const handleAuthorize: Effect.Effect<
     )
   }
 
-  // Validate redirect URI
   const redirectResult = validateRedirectUri(client, redirectUri)
   if (!redirectResult.ok) {
     return yield* errorJson(
@@ -173,12 +177,10 @@ export const handleAuthorize: Effect.Effect<
     )
   }
 
-  // Call start callback if configured
   if (callbacks.start) {
     yield* callbacks.start(request)
   }
 
-  // Check allow callback
   const allowed = yield* callbacks.allow(
     {
       clientID: clientId,
@@ -196,13 +198,13 @@ export const handleAuthorize: Effect.Effect<
     )
   }
 
-  // Build authorization state
   const authorization: AuthorizationState = {
     response_type: "code",
     redirect_uri: normalizedRedirect,
     state,
     client_id: clientId,
     audience,
+    ...(googleRevalidationSubject ? { googleRevalidationSubject } : {}),
     pkce:
       codeChallenge && codeChallengeMethod
         ? {
@@ -225,7 +227,7 @@ export const handleAuthorize: Effect.Effect<
     } else if (allProviders.includes(provider)) {
       // Dynamic provider - catch-all route will handle it
       redirectUrl = `/oauth/${provider}/authorize`
-    } else if (hasDummyProvider) {
+    } else if (hasDummyProvider && !googleRevalidationSubject) {
       yield* Effect.logWarning(
         `Provider '${provider}' not found, falling back to dummy provider`,
       )
@@ -252,7 +254,6 @@ export const handleAuthorize: Effect.Effect<
   // Encrypt authorization state and set cookie
   const encryptedAuth = yield* encryption.encrypt(authorization)
 
-  // Determine if the request is secure (HTTPS)
   const isSecure = getProtocol(request.headers) === "https"
   const cookieValue = serializeCookie("authorization", encryptedAuth, {
     maxAge: 60 * 60 * 24,
@@ -261,7 +262,6 @@ export const handleAuthorize: Effect.Effect<
     sameSite: isSecure ? "none" : "lax",
   })
 
-  // Return redirect with cookie
   return HttpServerResponse.redirect(redirectUrl, { status: 302 }).pipe(
     HttpServerResponse.setHeader("Set-Cookie", cookieValue),
   )

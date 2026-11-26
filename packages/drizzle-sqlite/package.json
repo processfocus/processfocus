@@ -22,15 +22,15 @@
     "migrate": "drizzle-kit migrate"
   },
   "devDependencies": {
-    "@types/bun": "1.4.2",
-    "drizzle-kit": "^1.0.0-rc.4-ca0f029"
+    "@types/bun": "1.4.5",
+    "drizzle-kit": "1.0.0-rc.4-5d5b77c"
   },
   "peerDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "drizzle-orm": "^1.0.0-rc.4-5d5b77c",
-    "effect": "^3.22.2",
+    "effect": "4.1.4",
     "ulidx": "^2.4.1"
   },
   "license": "SEE LICENSE IN LICENSE.md"

@@ -168,10 +168,12 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("Duplicate virtual attribute")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
+        "Duplicate virtual attribute",
+      )
     }
   })
 
@@ -183,10 +185,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "conflicts with regular attribute",
       )
     }
@@ -200,9 +202,9 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
     }
   })
 
@@ -213,10 +215,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("Cannot extend base")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("Cannot extend base")
     }
   })
 
@@ -229,10 +231,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "perPath attribute 'nonexistent' not found",
       )
     }
@@ -248,10 +250,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("must be a type reference")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("must be a type reference")
     }
   })
 
@@ -284,10 +286,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain(
         "perPath attribute 'nonexistent' not found in type 'b'",
       )
     }
@@ -304,10 +306,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      expect(result.left[0]?.message).toContain("must be a type reference")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      expect(result.failure[0]?.message).toContain("must be a type reference")
     }
   })
 
@@ -319,10 +321,10 @@ describe("Extend declarations", () => {
     `
     const result = await parseSourceExpectingErrors(source)
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left.length).toBeGreaterThan(0)
-      const errorMessage = result.left[0]?.message || ""
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure.length).toBeGreaterThan(0)
+      const errorMessage = result.failure[0]?.message || ""
       expect(errorMessage).toContain("Use 'with' instead of 'its'")
       expect(errorMessage).toContain("extend <type> with <attribute>")
     }

@@ -23,6 +23,7 @@ function buildDependentLookupQuery(
     `  ${queryName}(input: { ${inputPassthrough} }, limit: $limit) {`,
     "    value",
     "    label",
+    "    searchText",
     "  }",
     "}",
   ].join("\n")

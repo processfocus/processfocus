@@ -4,6 +4,8 @@ import {
   Divider,
   Image,
   Link,
+  LookupField,
+  NumberFromString,
   TextBlock,
   TextField,
   Wrapper,
@@ -13,16 +15,22 @@ import { describe, expect, it } from "bun:test"
 
 describe("getSchemaDefaults", () => {
   it("initializes optional and nullable choices with valid empty selections", () => {
-    const choices = ES.Literal("Member", "Guest")
+    const choices = ES.Literals(["Member", "Guest"])
+    const lookup = LookupField({ mode: "server" })
     const fields = {
       optional: ES.optional(choices),
-      exactOptional: ES.optionalWith(choices, { exact: true }),
-      single: ES.optionalWith(ES.Literal("Member"), { exact: true }),
+      exactOptional: ES.optionalKey(choices),
+      single: ES.optionalKey(ES.Literal("Member")),
       nullable: ES.NullOr(choices),
       both: ES.optional(ES.NullOr(choices)),
       required: choices,
-      nested: ES.Struct({ choice: ES.optionalWith(choices, { exact: true }) }),
+      nested: ES.Struct({ choice: ES.optionalKey(choices) }),
       wrapper: Wrapper({ wrapped: ES.NullOr(choices) }),
+      optionalLookup: ES.optional(lookup),
+      nullableLookup: ES.NullOr(lookup),
+      requiredLookup: lookup,
+      nestedLookup: ES.Struct({ choice: ES.optionalKey(lookup) }),
+      wrappedLookup: Wrapper({ order: ES.optional(lookup) }),
     }
 
     const defaults: unknown = getSchemaDefaults(fields)
@@ -35,6 +43,11 @@ describe("getSchemaDefaults", () => {
       required: "",
       nested: { choice: undefined },
       wrapped: null,
+      optionalLookup: undefined,
+      nullableLookup: null,
+      requiredLookup: "",
+      nestedLookup: { choice: undefined },
+      order: undefined,
     })
   })
 
@@ -68,7 +81,7 @@ describe("getSchemaDefaults", () => {
 
   it("should generate default values for NumberFromString fields", () => {
     const fields = {
-      age: ES.NumberFromString,
+      age: NumberFromString,
     }
 
     const defaults = getSchemaDefaults(fields)
@@ -181,8 +194,8 @@ describe("getSchemaDefaults", () => {
 
   it("should handle refinements by using the underlying type", () => {
     const fields = {
-      email: ES.String.pipe(ES.minLength(5)),
-      age: ES.Number.pipe(ES.positive()),
+      email: ES.String.pipe(ES.check(ES.isMinLength(5))),
+      age: ES.Number.pipe(ES.check(ES.isGreaterThan(0))),
     }
 
     const defaults = getSchemaDefaults(fields)

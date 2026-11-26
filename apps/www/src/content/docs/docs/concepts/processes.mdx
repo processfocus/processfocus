@@ -3,7 +3,14 @@ title: Processes
 description: Understanding processes in Process Focus - the core building blocks of your workflows.
 ---
 
-A **Process** is the core building block in Process Focus. It represents a complete workflow that can be instantiated and executed.
+A **Process** is the core building block in Process Focus. In its
+basic form it's two or more steps, done one after another. Often these
+steps are done by different people in your organisation.
+
+We call it a business process, as in a business or organisation
+context we often deal with timelines: ideally we do this within so
+many days. A complaints process for example would said response times
+within 5 business days for example.
 
 ## What is a Process?
 
@@ -14,32 +21,16 @@ A process defines:
 - **Data** that flows through the process
 - **Participants** who interact with the process
 
-## Creating a Process
+## Process flow: steps between processes
 
-Use the `Process.create()` function to define a new process:
+When building a business process, you connect one step to
+another. Steps can be connected sequentially, or conditionally.
 
-```typescript
-import { Process } from "@pf/sdk"
-
-export const myProcess = Process.create("my-process", {
-  name: "My Business Process",
-  description: "A description of what this process does",
-})
-```
-
-## Adding Steps
-
-Processes are composed of steps. Add steps using the fluent API:
-
-```typescript
-const process = Process.create("order-fulfillment", {
-  name: "Order Fulfillment",
-})
-  .addStep(Step.form("receive-order", { ... }))
-  .addStep(Step.task("process-payment", { ... }))
-  .addStep(Step.approval("manager-approval", { ... }))
-  .addStep(Step.automated("send-notification", { ... }))
-```
+A basic order process would be to enter the order, a human step, then
+in the second step store the order in the order table. Those would be
+unconditional steps. The third step could be conditional: pick the
+order if the item is in stock, or if it is not in stock, start a
+back order process.
 
 ## Process Instances
 
@@ -49,6 +40,19 @@ When a process is started, a **process instance** is created. Each instance:
 - Maintains its own state and data
 - Tracks which step it's currently on
 - Records an audit trail of all actions
+
+Each instance has its own execution flow.
+
+## How work progresses
+
+Starting a process creates an execution. As it progresses, the runtime evaluates
+the process's conditions, dependencies, and schedules to determine what work
+can proceed. Human work appears as To-Dos; automated steps run through the
+runtime. An execution can have more than one piece of work in progress.
+
+The path taken depends on the execution's data and the process definition.
+The [workflow diagram](/docs/frontend/visualisation/) shows the authored paths,
+not necessarily every step taken by a particular execution.
 
 ## Process Lifecycle
 

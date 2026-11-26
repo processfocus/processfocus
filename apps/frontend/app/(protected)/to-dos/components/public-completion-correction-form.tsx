@@ -2,9 +2,10 @@
 
 import { ClientError, gql } from "graphql-request"
 import { useRouter } from "next/navigation"
-import { type FormEvent, useCallback, useEffect, useId, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { EffectSchemaForm } from "@pf/form/effect-schema-form"
+import { publicCompletionCorrectionForm } from "@pf/form-schema"
 import { Button } from "@pf/shadcn-components"
-import { Input } from "@/components/ui/input"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 
 interface PublicCompletionCorrection {
@@ -84,12 +85,9 @@ export function PublicCompletionCorrectionForm({
 }) {
   const graphqlClient = useGraphqlClient()
   const router = useRouter()
-  const emailId = useId()
   const [correction, setCorrection] =
     useState<PublicCompletionCorrection | null>(null)
-  const [email, setEmail] = useState("")
   const [isLoading, setIsLoading] = useState(Boolean(todoId))
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -112,7 +110,6 @@ export function PublicCompletionCorrectionForm({
             setError("This todo is no longer available for correction.")
           } else {
             setCorrection(result.publicCompletionCorrection)
-            setEmail(result.publicCompletionCorrection.correctedEmail)
           }
         }
       } catch (loadError) {
@@ -135,35 +132,29 @@ export function PublicCompletionCorrectionForm({
   }, [graphqlClient, todoId])
 
   const handleSubmit = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault()
+    async (values: Record<string, unknown>) => {
       if (!todoId) return
 
-      setIsSubmitting(true)
       setError(null)
       try {
         await graphqlClient.request<CorrectionMutationResult>(
           correctionMutation,
-          { todoId, correctedEmail: email },
+          { todoId, correctedEmail: values["correctedEmail"] },
         )
         router.push("/to-dos")
+        return undefined
       } catch (submitError) {
-        if (submitError instanceof ClientError) {
-          setError(
-            validationErrorsFromClientError(submitError) ??
-              "Unable to submit correction.",
-          )
-        } else {
-          setError(
-            submitError instanceof Error
+        const message =
+          submitError instanceof ClientError
+            ? (validationErrorsFromClientError(submitError) ??
+              "Unable to submit correction.")
+            : submitError instanceof Error
               ? submitError.message
-              : "Unable to submit correction.",
-          )
-        }
+              : "Unable to submit correction."
+        return [{ field: "correctedEmail", message }]
       }
-      setIsSubmitting(false)
     },
-    [email, graphqlClient, router, todoId],
+    [graphqlClient, router, todoId],
   )
 
   if (isLoading) {
@@ -177,7 +168,7 @@ export function PublicCompletionCorrectionForm({
   const title = correction?.stepName ?? fallbackStepName
 
   return (
-    <form className="space-y-6" onSubmit={handleSubmit}>
+    <div className="space-y-6">
       <div>
         <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
           {correction?.processName ?? "Public completion"}
@@ -197,37 +188,29 @@ export function PublicCompletionCorrectionForm({
         </p>
       )}
 
-      <div className="space-y-2">
-        <label
-          className="text-sm font-medium text-slate-700 dark:text-slate-200"
-          htmlFor={emailId}
-        >
-          Corrected email
-        </label>
-        <Input
-          id={emailId}
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          required
-          autoComplete="email"
-        />
-      </div>
-
       {error && <p className="text-sm text-rose-600">{error}</p>}
 
-      <div className="flex justify-end gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => router.push("/to-dos")}
-        >
-          Cancel
-        </Button>
-        <Button type="submit" disabled={isSubmitting || !todoId}>
-          {isSubmitting ? "Sending..." : "Send new invitation"}
-        </Button>
-      </div>
-    </form>
+      <EffectSchemaForm
+        schema={publicCompletionCorrectionForm}
+        draftId={`todo-correction-${todoId}`}
+        defaultValues={{ correctedEmail: correction?.correctedEmail ?? "" }}
+        onSubmit={handleSubmit}
+      >
+        {({ formState }) => (
+          <div className="flex justify-end gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => router.push("/to-dos")}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={formState.isSubmitting || !todoId}>
+              {formState.isSubmitting ? "Sending..." : "Send new invitation"}
+            </Button>
+          </div>
+        )}
+      </EffectSchemaForm>
+    </div>
   )
 }

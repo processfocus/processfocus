@@ -1,11 +1,9 @@
-# About
+# @pf/graphql-db-operations
 
-Package containing the Effect Service definitions of all database
-operations the graphql server needs to perform.
+Database service contracts used by the GraphQL API and process runtime, with
+shared helpers for composing those operations.
 
-There is no real logic behind the various services, just a grouping
-that feels more or less natural for a set of related operations.
-
-Concrete implements are provided by `sqlite-operations` and
-`postgres-operations`. Having a shared service definition allows us to
-statically verify both sqlite and postgres implement the same operations.
+These contracts keep application code independent of the database driver.
+Concrete implementations live in
+[`@pf/sqlite-operations`](../sqlite-operations/README.md) and
+[`@pf/postgres-operations`](../postgres-operations/README.md).

@@ -31,6 +31,9 @@
       "path": "../auth-api/tsconfig.lib.json"
     },
     {
+      "path": "../audit/tsconfig.lib.json"
+    },
+    {
       "path": "../process/tsconfig.lib.json"
     },
     {

@@ -1,4 +1,11 @@
+import type {
+  DocumentStoreService,
+  EmailSender,
+  NotificationDeliveryConfig,
+} from "@processfocus/runtime"
 import type { IConstruct } from "constructs"
+import type { Layer } from "effect"
+import type { HttpClient } from "effect/http"
 import type { BusinessCalendarConfig } from "@pf/business-calendar"
 import {
   isDocumentStore,
@@ -44,6 +51,12 @@ export const validateTimeZone = (timeZone: string): void => {
  * various helper methods to use it.
  */
 
+type NotificationEmailLayer = Layer.Layer<
+  EmailSender | NotificationDeliveryConfig,
+  unknown,
+  DocumentStoreService | HttpClient.HttpClient
+>
+
 export interface OrganisationProps {
   /**
    * Full name of organisation.
@@ -76,6 +89,9 @@ export interface OrganisationProps {
    * Default when no calendar is specified: a 24/7 calendar.
    */
   readonly businessCalendar?: BusinessCalendarConfig | undefined
+
+  /** The same notification layer used by the job worker, independent of other job services. */
+  readonly notificationEmailLayer?: (() => NotificationEmailLayer) | undefined
 }
 
 /**
@@ -113,6 +129,7 @@ export class Organisation extends OrgUnitClass {
    * Defines working hours, holidays, and special periods.
    */
   readonly businessCalendar?: BusinessCalendarConfig | undefined
+  readonly notificationEmailLayer: OrganisationProps["notificationEmailLayer"]
 
   constructor(props: OrganisationProps) {
     const timeZone = props.timeZone ?? "UTC"
@@ -128,6 +145,7 @@ export class Organisation extends OrgUnitClass {
     this.timeZone = timeZone
     this.locale = props.locale ?? "en"
     this.businessCalendar = props.businessCalendar
+    this.notificationEmailLayer = props.notificationEmailLayer
   }
 
   /**

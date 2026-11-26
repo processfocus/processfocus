@@ -19,5 +19,5 @@ Feature: Execute onboarding without scheduled waits
     Given I am authenticated with the "/Employee" role
     When I attempt a purchase request without waiting
     Then no rejected execution or scheduled work exists
-    When I start a purchase request for item "Ordinary" with value "150"
+    When I start a purchase request for item "Ordinary {purchase}" with value "150"
     And I wait for flow to advance

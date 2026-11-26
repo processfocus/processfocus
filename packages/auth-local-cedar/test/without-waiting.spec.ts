@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import {
   AuthorizationService,
   DelegationPrincipal,
@@ -19,7 +19,7 @@ import { describe, expect, it } from "bun:test"
 
 const time = Layer.effect(
   RequestTime,
-  FiberRef.make(DateTime.unsafeMake("2026-09-14T00:00:00Z")),
+  Effect.succeed(DateTime.makeUnsafe("2026-09-14T00:00:00Z")),
 )
 const demoPolicy = readFileSync(
   new URL("../../../examples/demo/cedar/custom.cedar", import.meta.url),

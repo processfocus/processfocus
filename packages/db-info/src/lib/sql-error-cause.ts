@@ -111,3 +111,15 @@ export const isSqlLockError = (error: unknown): boolean =>
 /** True when the error indicates a concurrent commit write-write conflict. */
 export const isSqlWriteWriteConflictError = (error: unknown): boolean =>
   causeChainIncludes(error, (message) => SQL_WRITE_WRITE_CONFLICT.test(message))
+
+/** Status exposed in the Turso SDK's error message, including wrapped errors. */
+export const getTursoHttpStatus = (error: unknown): number | undefined => {
+  let status: number | undefined
+  causeChainIncludes(error, (message) => {
+    const match = /^HTTP error! status: ([1-5]\d{2})(?!\d)/u.exec(message)?.[1]
+    if (match === undefined) return false
+    status = Number(match)
+    return true
+  })
+  return status
+}

@@ -1,0 +1,83 @@
+---
+title: Cedar policies
+description: Use Cedar policies to control access in cloud environments.
+---
+
+Cedar policies control what users can do in a deployed Process Focus
+organisation. Use request context to apply a policy only in a particular cloud
+stage or environment.
+
+## Permission for a specific environment
+
+Every Cedar request includes these context fields:
+
+| Field | Value |
+| --- | --- |
+| `runtimeMode` | `"local"` for the local Dashboard, GraphQL server and worker, `"deployed"` for deployed Dashboard, GraphQL, workers and AppSync authorisation, or `"unknown"` when the runtime identity is unavailable. |
+| `stage` | The exact Process Focus stage name from `PF_STAGE`, or `""` when unavailable. |
+| `environment` | The exact Process Focus environment name from `PF_ENV`, or `""` when unavailable. |
+
+The runtime sets `PF_RUNTIME_MODE` explicitly to `local` or `deployed`.
+An absent or unrecognised marker produces `"unknown"`, never `"local"`.
+Stage and environment are independent: for example, environment `stage`
+can belong to stage `production`. Local runtimes expose `PF_STAGE` and `PF_ENV`
+if supplied; otherwise both are empty. Missing stage or environment metadata
+does not change a known runtime identity. Restart after changing these settings.
+
+This policy forbids Alice's login in the deployed production environment `prod`,
+even when another policy permits her to log in:
+
+```cedar
+forbid (
+    principal == PF::ProviderUser::"alice@example.com",
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+when {
+    context.runtimeMode == "deployed" &&
+    context.environment == "prod"
+};
+```
+
+This policy permits Bob to administer users in the deployed staging (`stage`)
+environment of the `production` stage:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"bob@example.com",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
+)
+when {
+    context.runtimeMode == "deployed" &&
+    context.stage == "production" &&
+    context.environment == "stage"
+};
+```
+
+Use your actual stage and environment names. These examples use environments
+`prod` and `stage`; `production` is a stage name.
+
+This separate policy grants Bob user administration during local development,
+but grants nothing when deployed or when runtime identity is unknown:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"bob@example.com",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
+)
+when {
+    context.runtimeMode == "local"
+};
+```
+
+A permit adds access; it does not override a forbid or narrow another applicable
+permit. Bob may still have access elsewhere through another policy, such as an
+Administrator role grant. To prohibit access despite other permits, use a
+forbid. Requests need at least one matching permit and no matching forbid.
+An environment-specific forbid does not match an empty environment value;
+add an explicit forbid for missing metadata if your policy requires that.
+
+For policy syntax, role and user identities, local runtime context, and more
+examples, see the [Cedar policies reference](/docs/reference/authorisation/cedar-policies/).

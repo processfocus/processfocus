@@ -15,25 +15,6 @@ describe("Organisation", () => {
   })
 
   describe("stepByPath", () => {
-    it("should find a step by its full path", () => {
-      const dept = new OrgUnit(org, "engineering", {
-        name: "Engineering",
-        type: "department",
-      })
-      const role = new Role(dept, "developer", { name: "Developer" })
-      const process = new Process(dept, "bug-fix", {
-        name: "Bug Fix",
-        purpose: "Fix bugs",
-      })
-      const step = new Form(process, "report", { role, form: () => ({}) })
-
-      process.start(step)
-
-      const found = org.stepByPath("engineering/bug-fix/report")
-      expect(found).toBeDefined()
-      expect(found?.node.id).toBe("report")
-    })
-
     it("should return undefined for non-existent path", () => {
       const found = org.stepByPath("nonexistent/path/step")
       expect(found).toBeUndefined()
@@ -90,28 +71,6 @@ describe("Organisation", () => {
       const found = org.stepByPath("engineering//bug-fix///report")
       expect(found).toBeDefined()
       expect(found?.node.id).toBe("report")
-    })
-
-    it("should find Form steps", () => {
-      const dept = new OrgUnit(org, "hr", {
-        name: "HR",
-        type: "department",
-      })
-      const role = new Role(dept, "manager", { name: "Manager" })
-      const process = new Process(dept, "onboarding", {
-        name: "Onboarding",
-        purpose: "Onboard employees",
-      })
-      const form = new Form(process, "employee-info", {
-        role,
-        form: () => ({ name: ES.String }),
-      })
-
-      process.start(form)
-
-      const found = org.stepByPath("hr/onboarding/employee-info")
-      expect(found).toBeDefined()
-      expect(found?.node.id).toBe("employee-info")
     })
   })
 

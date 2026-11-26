@@ -26,7 +26,6 @@ export const fetchOrgChartDataEffect = () =>
   Effect.gen(function* () {
     const graphql = yield* GraphQLService
 
-    // Fetch data via GraphQL service
     const data = yield* graphql
       .request<OrgChartDataQuery>(orgChartDataQuery)
       .pipe(
@@ -39,9 +38,8 @@ export const fetchOrgChartDataEffect = () =>
         ),
       )
 
-    // Validate org exists
     if (!data.org) {
-      yield* Effect.fail(
+      return yield* Effect.fail(
         new OrgChartDataError({
           reason: "missing_org",
           message: "No organization data available",
@@ -49,9 +47,8 @@ export const fetchOrgChartDataEffect = () =>
       )
     }
 
-    // Validate orgLevels exist
     if (!data.orgLevels || data.orgLevels.length === 0) {
-      yield* Effect.fail(
+      return yield* Effect.fail(
         new OrgChartDataError({
           reason: "missing_levels",
           message: "No organization levels available",

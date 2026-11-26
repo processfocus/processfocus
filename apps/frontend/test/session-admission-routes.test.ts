@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect"
 import { NextRequest } from "next/server"
 import { AuthorizationService } from "@pf/auth-policy"
-import { afterAll, beforeEach, expect, mock, test } from "bun:test"
+import { afterAll, beforeEach, expect, mock, spyOn, test } from "bun:test"
 
 // Identity verification and Cedar are external to admission; cookie writing and
 // the deployed balance client's HTTP request run through their real implementations.
@@ -24,6 +24,7 @@ mock.module("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) => ({ value: cookies.get(name) }),
     set: writes,
+    delete: (name: string) => cookies.delete(name),
   }),
   headers: async () => new Headers({ host: "dashboard.example.test" }),
 }))
@@ -63,36 +64,39 @@ mock.module("@/lib/auth/client", () => ({
   }),
 }))
 let allowed = true
+let authorizationError: Error | undefined
 mock.module("@/lib/effect/services", () => ({
-  CedarAuthorizationLayer: Layer.succeed(
-    AuthorizationService,
-    AuthorizationService.of({
-      canManageDelegation: () => Effect.succeed(false),
-      canIssueDelegationSecret: () => Effect.succeed(false),
-      canListDelegationTokens: () => Effect.succeed(false),
-      canLogin: () => Effect.succeed(allowed),
-      canCompleteStep: () => Effect.succeed(false),
-      canCompleteTodo: () => Effect.succeed(false),
-      canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-      canCompletePublicTodo: () => Effect.succeed(false),
-      canRequestRole: () => Effect.succeed(false),
-      canRequestProviderUserPermissions: () => Effect.succeed(false),
-      canActOnBehalfOf: () => Effect.succeed(false),
-      canViewExecution: () => Effect.succeed(false),
-      canRestartExecution: () => Effect.succeed(false),
-      canAbandonStep: () => Effect.succeed(false),
-      canDraftStep: () => Effect.succeed(false),
-      canModifyField: () => Effect.succeed(false),
-      canAccessField: () => Effect.succeed(false),
-      canAccessFeature: () => Effect.succeed(false),
-      canAccessList: () => Effect.succeed(false),
-      canCreateList: () => Effect.succeed(false),
-      canUpdateList: () => Effect.succeed(false),
-      canDeleteList: () => Effect.succeed(false),
-      canDownloadFile: () => Effect.succeed(false),
-      canDeleteFile: () => Effect.succeed(false),
-      canPerformAction: () => Effect.succeed(false),
-    }),
+  CedarAuthorizationLayer: Layer.suspend(() =>
+    authorizationError
+      ? Layer.effect(AuthorizationService, Effect.fail(authorizationError))
+      : Layer.succeed(
+          AuthorizationService,
+          AuthorizationService.of({
+            canManageDelegation: () => Effect.succeed(false),
+            canIssueDelegationSecret: () => Effect.succeed(false),
+            canListDelegationTokens: () => Effect.succeed(false),
+            canLogin: () => Effect.succeed(allowed),
+            policyVersion: Effect.succeed("test-policy"),
+            canCompleteStep: () => Effect.succeed(false),
+            canCorrectPublicCompletionTodo: () => Effect.succeed(false),
+            canRequestRole: () => Effect.succeed(false),
+            canActOnBehalfOf: () => Effect.succeed(false),
+            canViewExecution: () => Effect.succeed(false),
+            canRestartExecution: () => Effect.succeed(false),
+            canAbandonStep: () => Effect.succeed(false),
+            canDraftStep: () => Effect.succeed(false),
+            canModifyField: () => Effect.succeed(false),
+            canAccessField: () => Effect.succeed(false),
+            canAccessFeature: () => Effect.succeed(false),
+            canAccessList: () => Effect.succeed(false),
+            canCreateList: () => Effect.succeed(false),
+            canUpdateList: () => Effect.succeed(false),
+            canDeleteList: () => Effect.succeed(false),
+            canDownloadFile: () => Effect.succeed(false),
+            canDeleteFile: () => Effect.succeed(false),
+            canPerformAction: () => Effect.succeed(false),
+          }),
+        ),
   ),
 }))
 let balance: number | null = 1
@@ -168,6 +172,7 @@ beforeEach(() => {
   balance = 1
   reads = 0
   allowed = true
+  authorizationError = undefined
   delegated = false
   cookies.clear()
   writes.mockClear()
@@ -237,12 +242,49 @@ for (const flow of [
     expect(cookies.get(names.accessToken)).toBe(token)
   })
 }
-test("role denial remains distinct and does not reach admission", async () => {
-  allowed = false
-  const response = await callback()
-  expect(response.headers.get("location")).toEndWith(
-    "/login?error=not_authorized",
-  )
-  expect(reads).toBe(0)
-  expect(writes).not.toHaveBeenCalled()
-})
+test.each(["deny", "policy-fetch-error"])(
+  "authorization %s logs the correct diagnostic and does not reach admission",
+  async (outcome) => {
+    const errorLog = spyOn(console, "error").mockImplementation(() => {})
+    const warningLog = spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      allowed = false
+      if (outcome === "policy-fetch-error") {
+        authorizationError = new Error("Failed to fetch Cedar policies", {
+          cause: new Error("Unauthenticated"),
+        })
+      }
+      const response = await callback()
+      expect(response.status).toBe(307)
+      expect(response.headers.get("location")).toEndWith(
+        "/login?error=not_authorized",
+      )
+      expect(reads).toBe(0)
+      expect(writes).not.toHaveBeenCalled()
+      const context = {
+        userId: "operator",
+        email: "operator@example.test",
+        roles: ["/Support", "/Administrator"],
+      }
+      if (outcome === "policy-fetch-error") {
+        expect(errorLog).toHaveBeenCalledTimes(1)
+        expect(errorLog).toHaveBeenCalledWith({
+          message: "Authorization check failed",
+          error: authorizationError,
+          ...context,
+        })
+        expect(warningLog).not.toHaveBeenCalled()
+      } else {
+        expect(warningLog).toHaveBeenCalledTimes(1)
+        expect(warningLog).toHaveBeenCalledWith({
+          message: "User denied access - no roles assigned",
+          ...context,
+        })
+        expect(errorLog).not.toHaveBeenCalled()
+      }
+    } finally {
+      errorLog.mockRestore()
+      warningLog.mockRestore()
+    }
+  },
+)

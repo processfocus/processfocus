@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { Effect, Metric, MetricState } from "effect"
+import { Effect, Metric } from "effect"
 import {
   makeBusinessMetricDimensionsLayer,
   recordSuccessfulProcessStart,
@@ -8,16 +8,11 @@ import {
 import { describe, expect, it } from "bun:test"
 
 const metricSeries = (projectPrefix: string) =>
-  Metric.globalMetricRegistry
-    .snapshot()
-    .filter(
-      (pair) =>
-        pair.metricKey.name === "pf.business.process.starts" &&
-        pair.metricKey.tags.some(
-          (label) =>
-            label.key === "pf_project" && label.value.startsWith(projectPrefix),
-        ),
-    )
+  Effect.runSync(Metric.snapshot).filter(
+    (pair) =>
+      pair.id === "pf.business.process.starts" &&
+      String(pair.attributes?.["pf_project"] ?? "").startsWith(projectPrefix),
+  )
 
 describe("business metric dimensions", () => {
   it("does not classify an account from its id alone", () => {
@@ -92,14 +87,12 @@ describe("business metric dimensions", () => {
     const series = metricSeries(project)
     expect(series).toHaveLength(2)
     const observed = series.map((pair) => {
-      if (!MetricState.isCounterState(pair.metricState)) {
+      if (pair.type !== "Counter") {
         throw new Error("Expected process starts to be a counter")
       }
       return {
-        count: pair.metricState.count,
-        labels: Object.fromEntries(
-          pair.metricKey.tags.map((label) => [label.key, label.value]),
-        ),
+        count: pair.state.count,
+        labels: pair.attributes,
       }
     })
     expect(observed).toEqual(

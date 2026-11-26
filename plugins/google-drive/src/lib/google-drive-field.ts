@@ -3,6 +3,7 @@ import {
   type FieldOptions,
   FormComponentPluginType,
   FormFileInput,
+  FormPluginData,
   applyFieldAnnotations,
 } from "@pf/form-schema"
 import {
@@ -13,14 +14,8 @@ import {
   GOOGLE_DRIVE_CLIENT_MODULE,
   GOOGLE_DRIVE_PLUGIN_TYPE,
 } from "./plugin-identity"
-import { registerGoogleDriveWalkerPlugin } from "./register-walker"
 
 export { FormGoogleDriveGeneratePdf, FormGoogleDriveInput }
-
-// Organisation bundles contain their own runtime plugin registry. Registering
-// while the field module loads keeps the walker and its registry in that same
-// JavaScript realm, even when the host runtime has a separate registry copy.
-registerGoogleDriveWalkerPlugin()
 
 /**
  * Extended options for GoogleDriveField.
@@ -46,7 +41,7 @@ export const GoogleDriveGeneratedPdfSchema = Schema.Struct({
 
 export type GoogleDriveGeneratedPdf = typeof GoogleDriveGeneratedPdfSchema.Type
 
-const GoogleDriveGeneratedPdfJsonSchema = Schema.parseJson(
+const GoogleDriveGeneratedPdfJsonSchema = Schema.fromJsonString(
   GoogleDriveGeneratedPdfSchema,
 )
 
@@ -83,7 +78,7 @@ export const isGoogleDriveGeneratedPdf = (value: string): boolean =>
  */
 export const GoogleDriveField = (
   options?: GoogleDriveFieldOptions,
-): Schema.Schema<string, string, never> => {
+): Schema.Codec<string, string, never, never> => {
   const documentStore = options?.generatePdf?.node.path
   const normalizedDocumentStore = documentStore?.startsWith("/")
     ? documentStore
@@ -95,20 +90,25 @@ export const GoogleDriveField = (
     normalizedDocumentStore === undefined
       ? Schema.String
       : Schema.String.pipe(
-          Schema.filter(isGoogleDriveGeneratedPdf, {
-            message: () =>
-              "Select a Google Drive file and wait for its PDF upload to finish",
-          }),
+          Schema.check(
+            Schema.makeFilter(isGoogleDriveGeneratedPdf, {
+              message:
+                "Select a Google Drive file and wait for its PDF upload to finish",
+            }),
+          ),
         )
 
   return applyFieldAnnotations(
-    valueSchema.annotations({
+    valueSchema.annotate({
       [FormComponentPluginType]: {
         module: GOOGLE_DRIVE_CLIENT_MODULE,
         type: GOOGLE_DRIVE_PLUGIN_TYPE,
       },
       [FormGoogleDriveInput]: true,
       ...(normalizedDocumentStore !== undefined && {
+        [FormPluginData]: {
+          generatePdf: { documentStore: normalizedDocumentStore },
+        },
         [FormGoogleDriveGeneratePdf]: {
           documentStore: normalizedDocumentStore,
         },
@@ -143,6 +143,6 @@ export type DrivePickerFile = typeof DrivePickerFileSchema.Type
  * ```
  */
 export const parseGoogleDriveValue = (value: string): DrivePickerFile =>
-  Schema.decodeUnknownSync(Schema.parseJson(DrivePickerFileSchema), {
+  Schema.decodeUnknownSync(Schema.fromJsonString(DrivePickerFileSchema), {
     onExcessProperty: "error",
   })(value)

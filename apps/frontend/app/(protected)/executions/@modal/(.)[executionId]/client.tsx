@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
-import { ExecutionsPageContent } from "../../page"
+import { ExecutionsPageContent } from "../../executions-client"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 

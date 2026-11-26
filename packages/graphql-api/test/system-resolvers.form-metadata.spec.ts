@@ -1,20 +1,41 @@
-import { FileSystem } from "@effect/platform"
-import { DateTime, Schema as ES, Effect, Layer, Option } from "effect"
-import { AuthorizationService } from "@pf/auth-policy"
+import { readFileSync } from "node:fs"
+import type { Context } from "effect"
+import {
+  DateTime,
+  Schema as ES,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  ManagedRuntime,
+  Option,
+} from "effect"
+import { graphql } from "graphql"
+import { createSchema } from "graphql-yoga"
+import {
+  LocalCedarAuthorizationLive,
+  LocalCedarConfig,
+  getDefaultPoliciesPath,
+  getDefaultSchemaPath,
+} from "@pf/auth-local-cedar"
+import { AuthorizationService, CurrentPrincipal } from "@pf/auth-policy"
 import {
   CurrentProviderUser,
   LookupField,
   ProviderUserField,
   TextField,
   Wrapper,
+  searchLookupItems,
 } from "@pf/form-schema"
 import {
   OrgQueries,
+  type ProcessListRow,
   ProcessQueries,
   ProviderUserQueries,
   type ProviderUserRow,
   StepCompletionOperations,
   StepRoleQueries,
+  UserDetails,
   WorkflowQueries,
 } from "@pf/graphql-db-operations"
 import { NotAuthorized } from "@pf/graphql-schema"
@@ -29,16 +50,148 @@ import {
   Role,
   normalizePath,
 } from "@pf/process"
+import { transformSchemaWithAuthDirective } from "../src/lib/auth-directive-plugin"
 import { dynamicSchema } from "../src/lib/dynamic-resolvers"
 import { DynamicSchemaConfig } from "../src/lib/graphql-api"
+import { createResolverExecutor } from "../src/lib/resolver-utils"
 import { systemSchema } from "../src/lib/system-resolvers"
 import type { UserContext } from "../src/lib/types"
 import { describe, expect, it } from "bun:test"
 
+it("authorizes embedded metadata through real Cedar without exposing ordinary forms or Todo state", async () => {
+  const org = new Organisation({ name: "Embed authorization" })
+  const role = new Role(org, "Employee")
+  const process = new Process(org, "enquiry", {
+    name: "Enquiry",
+    purpose: "Test",
+  })
+  const form = new Form(process, "Submit", {
+    role,
+    embed: {
+      externalParticipantEmailField: "email",
+      sites: ["https://school.example"],
+      thankYou: "Thanks",
+    },
+    form: () => ({
+      email: TextField({ label: "Email", default: "public@example.com" }),
+    }),
+  })
+  process.start(form).end()
+  const stepPath = normalizePath(form.node.path)
+  const context = makeServiceAccountContext()
+  if (!context.jwt) throw new Error("Missing test session")
+  context.jwt.properties = {
+    userId: "frontend",
+    clientId: "frontend",
+    roles: [],
+  }
+  let embedded = true
+  let startsProcess = true
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      makeLayers(org),
+      Layer.succeed(CurrentPrincipal, null),
+      Layer.succeed(UserDetails, context._userDetails),
+      LocalCedarAuthorizationLive.pipe(
+        Layer.provide(
+          Layer.succeed(LocalCedarConfig, {
+            schemaText: readFileSync(getDefaultSchemaPath(), "utf8"),
+            policiesText: [
+              readFileSync(getDefaultPoliciesPath(), "utf8"),
+              'forbid(principal == PF::ServiceAccount::"frontend", action == PF::Action::"complete", resource);',
+            ],
+          }),
+        ),
+      ),
+      Layer.succeed(StepRoleQueries, {
+        queryRolePathsByStepPath: () =>
+          Effect.succeed({
+            rolePath: "/Employee",
+            supportingRolePaths: [],
+            embedded,
+            startsProcess,
+          }),
+        queryRolePathsByStepPaths: () => Effect.succeed(new Map()),
+        queryRoleIdByPath: () => Effect.succeed(undefined),
+      }),
+    ),
+  )
+  try {
+    const definition = await runtime.runPromise(systemSchema)
+    const schema = transformSchemaWithAuthDirective(
+      createSchema({
+        typeDefs: [
+          readFileSync(
+            new URL(
+              "../../graphql-schema/graphql/system.graphql",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+          readFileSync(
+            new URL(
+              "../../graphql-schema/graphql/rxdb.graphql",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+          'directive @step(path: String!) on FIELD_DEFINITION\nextend type Query { boundLookup: String @step(path: "/enquiry/Submit") }',
+        ],
+        resolvers: {
+          ...definition.resolvers,
+          Query: {
+            ...definition.resolvers?.Query,
+            boundLookup: () => Effect.succeed("public option"),
+          },
+        },
+      }),
+      createResolverExecutor(runtime),
+    )
+    const execute = (source: string) =>
+      graphql({
+        schema,
+        source,
+        variableValues: { stepPath },
+        contextValue: context,
+      })
+    const query =
+      "query($stepPath: String!) { embeddedFormMetadata(stepPath: $stepPath) { defaultValues } }"
+    const allowed = await execute(query)
+    expect(allowed.errors).toBeUndefined()
+    expect(allowed.data).toMatchObject({
+      embeddedFormMetadata: { defaultValues: { email: "public@example.com" } },
+    })
+    expect((await execute("{ boundLookup }")).data).toMatchObject({
+      boundLookup: "public option",
+    })
+    embedded = false
+    const internal = await execute(query)
+    expect(internal.errors?.[0]?.extensions["code"]).toBe("NotAuthorized")
+    expect(
+      (await execute("{ boundLookup }")).errors?.[0]?.extensions["code"],
+    ).toBe("NotAuthorized")
+    embedded = true
+    startsProcess = false
+    const continuation = await execute(query)
+    expect(continuation.errors?.[0]?.extensions["code"]).toBe("NotAuthorized")
+    startsProcess = true
+    const ordinary = await execute(
+      "query($stepPath: String!) { formMetadata(stepPath: $stepPath) { defaultValues } }",
+    )
+    expect(ordinary.errors?.[0]?.extensions["code"]).toBe("NotAuthorized")
+    const todo = await execute(
+      'query($stepPath: String!) { embeddedFormMetadata(stepPath: $stepPath, todoId: "private-todo") { defaultValues } }',
+    )
+    expect(todo.errors?.[0]?.message).toContain('Unknown argument "todoId"')
+  } finally {
+    await runtime.dispose()
+  }
+})
+
 const makeContext = (
   roles: readonly string[] = ["/Administrator"],
 ): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "current@example.com",
     id: "current@example.com",
@@ -62,8 +215,404 @@ const makeContext = (
   userId: "current@example.com",
 })
 
+it("searches authorized lookup labels and authored text, reports truncation and preserves dependent local completeness", async () => {
+  const org = new Organisation({ name: "Search contract" })
+  const role = new Role(org, "Employee")
+  const manager = new Role(org, "Manager")
+  const process = new Process(org, "search", {
+    name: "Search",
+    purpose: "Lookup contract",
+  })
+  const form = new Form(process, "Submit", {
+    role,
+    form: ES.Struct({
+      choice: LookupField({ mode: "server", label: "Choice" }),
+      group: Wrapper({
+        details: Wrapper({
+          restricted: LookupField({
+            mode: "server",
+            label: "Restricted",
+            permission: { modify: manager },
+            resolve: (value) =>
+              Effect.succeed({ value, label: "Restricted label" }),
+          }),
+        }),
+      }),
+      dependent: LookupField({ mode: "local", maxItems: 500 }),
+      dependentServer: LookupField({ mode: "server" }),
+    }),
+  })
+  const items = [
+    { value: "hidden-id", label: "Other" },
+    { value: "inside", label: "Office café" },
+    { value: "prefix-1", label: "Café desk", searchText: "Auckland furniture" },
+    { value: "prefix-2", label: "Cafe chair" },
+    { value: "exact", label: "CAFÉ" },
+  ]
+  let searches = 0
+  form.lookups.choice.setQuery(({ filter }, limit) => {
+    searches += 1
+    return Effect.succeed(searchLookupItems(items, filter, limit))
+  })
+  let eligible = true
+  form.lookups.choice.setResolver((value) =>
+    Effect.succeed(
+      eligible ? (items.find((item) => item.value === value) ?? null) : null,
+    ),
+  )
+  form.lookups.dependent
+    .dependsOn([form.lookups.choice])
+    .setQuery(({ choice }, limit) =>
+      Effect.succeed(
+        Array.from({ length: Number(choice) }, (_, i) => ({
+          value: `id-${i}`,
+          label: `Child ${i}`,
+        })).slice(0, limit),
+      ),
+    )
+  const flow = process.start(form)
+  form.lookups.dependentServer
+    .dependsOn([form.lookups.choice])
+    .setQuery(({ choice, filter }, limit) =>
+      Effect.succeed(
+        searchLookupItems(
+          items.map((item) => ({ ...item, value: `${choice}-${item.value}` })),
+          filter,
+          limit,
+        ),
+      ),
+    )
+  const continuation = new Form(flow, "Choose", {
+    role,
+    form: () => ({
+      choice: LookupField({
+        label: "Choice",
+        resolve: (value) => Effect.succeed({ value, label: "Todo label" }),
+      }),
+    }),
+  })
+  flow.next(continuation).end()
+  const list = new List(org, "choices", {
+    name: "Choices",
+    roles: [role],
+    output: { id: ES.String, choice: ES.String },
+    query: () => Effect.succeed({ items: [], totalCount: 0 }),
+    form: () => ({
+      choice: LookupField({
+        label: "Choice",
+        resolve: (value) =>
+          Effect.succeed(
+            value === "list-id" ? { value, label: "List label" } : null,
+          ),
+      }),
+    }),
+    itemQuery: () => Effect.succeed(null),
+    update: () => Effect.succeed(null),
+  })
+  const stepPath = normalizePath(form.node.path)
+  const continuationPath = normalizePath(continuation.node.path)
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      makeLayers(
+        org,
+        {},
+        {},
+        {
+          queryTodoById: (id) =>
+            Effect.succeed({
+              id,
+              processExecutionId: "execution-1",
+              processStateId: "state-1",
+              startedByUserId: null,
+              targetStepId: "choose",
+              targetStepPath: id === "wrong-step" ? stepPath : continuationPath,
+              processPath: "/search",
+              orgUnitPath: "/",
+              orgUnitId: "/",
+              assignedToProviderUserId: id === "other-user" ? "other" : null,
+              assignedToProviderUserEmail:
+                id === "other-user" ? "other@example.com" : null,
+              correctionRequiredAt: null,
+              createdAtMs: 0,
+              itemData: null,
+              hasForEach: false,
+              barrierScheduledFlowId: null,
+            }),
+          getProcessStateByTodoId: () =>
+            Effect.succeed({
+              processExecutionId: "execution-1",
+              processStateId: "state-1",
+              updatedAt: DateTime.makeUnsafe("2026-04-06T09:00:00Z"),
+              processStartedAt: DateTime.makeUnsafe("2026-04-06T09:00:00Z"),
+              state: {},
+            }),
+          getCompletedStepsForExecution: () => Effect.succeed([]),
+        },
+      ),
+      Layer.succeed(CurrentPrincipal, null),
+      LocalCedarAuthorizationLive.pipe(
+        Layer.provide(
+          Layer.succeed(LocalCedarConfig, {
+            schemaText: readFileSync(getDefaultSchemaPath(), "utf8"),
+            policiesText: [readFileSync(getDefaultPoliciesPath(), "utf8")],
+          }),
+        ),
+      ),
+      Layer.succeed(StepRoleQueries, {
+        queryRolePathsByStepPath: (path) =>
+          Effect.succeed({
+            rolePath: "/Employee",
+            supportingRolePaths: [],
+            startsProcess: normalizePath(path) === stepPath,
+            embedded: false,
+          }),
+        queryRolePathsByStepPaths: () => Effect.succeed(new Map()),
+        queryRoleIdByPath: () => Effect.succeed(undefined),
+      }),
+    ),
+  )
+  try {
+    const definition = await runtime.runPromise(systemSchema)
+    const dynamic = await runtime.runPromise(dynamicSchema)
+    const dependentQuery = form.lookupQueryName("dependent")
+    const serverQuery = form.lookupQueryName("dependentServer")
+    const schema = transformSchemaWithAuthDirective(
+      createSchema({
+        typeDefs: [
+          ...["system", "rxdb"].map((name) =>
+            readFileSync(
+              new URL(
+                `../../graphql-schema/graphql/${name}.graphql`,
+                import.meta.url,
+              ),
+              "utf8",
+            ),
+          ),
+          `input DependentInput { choice: String!, filter: String }
+          extend type Query {
+            ${dependentQuery}(input: DependentInput!, limit: Int): [LookupItem!]!
+            ${serverQuery}(input: DependentInput!, limit: Int): [LookupItem!]!
+          }`,
+        ],
+        resolvers: [
+          definition.resolvers,
+          {
+            Query: {
+              [dependentQuery]: dynamic.resolvers?.Query?.[dependentQuery],
+              [serverQuery]: dynamic.resolvers?.Query?.[serverQuery],
+            },
+          },
+        ],
+      }),
+      createResolverExecutor(runtime),
+    )
+    const execute = (
+      filter: string,
+      limit: number,
+      context = makeContext(["/Employee"]),
+    ) =>
+      graphql({
+        schema,
+        source: `query($stepPath: String!, $filter: String!, $limit: Int!) { lookupSearch(stepPath: $stepPath, field: "choice", filter: $filter, limit: $limit) { items { value label } hasMore } }`,
+        variableValues: { stepPath, filter, limit },
+        contextValue: context,
+      })
+    const ranked = await execute("CaFe", 2)
+    const searchDependent = (
+      choice: string,
+      context = makeContext(["/Employee"]),
+    ) =>
+      graphql({
+        schema,
+        source: `query($choice: String!) { ${serverQuery}(input: { choice: $choice, filter: "CAFE" }, limit: 3) { value label } }`,
+        variableValues: { choice },
+        contextValue: context,
+      })
+    for (const choice of ["north", "south"]) {
+      const response = await searchDependent(choice)
+      expect(response.errors).toBeUndefined()
+      expect(response.data?.[serverQuery]).toEqual([
+        { value: `${choice}-exact`, label: "CAFÉ" },
+        { value: `${choice}-prefix-1`, label: "Café desk" },
+        { value: `${choice}-prefix-2`, label: "Cafe chair" },
+      ])
+    }
+    const executeDependent = (
+      count: number,
+      context = makeContext(["/Employee"]),
+      limit = 501,
+    ) =>
+      graphql({
+        schema,
+        source: `query($choice: String!, $limit: Int!) { ${dependentQuery}(input: { choice: $choice, filter: "" }, limit: $limit) { value label } }`,
+        variableValues: { choice: String(count), limit },
+        contextValue: context,
+      })
+    for (const count of [150, 500, 501, 600]) {
+      const response = await executeDependent(count)
+      expect(response.errors).toBeUndefined()
+      expect(response.data?.[dependentQuery]).toHaveLength(Math.min(count, 501))
+    }
+    expect(
+      (await executeDependent(150, undefined, 20)).data?.[dependentQuery],
+    ).toHaveLength(150)
+    expect(
+      (await executeDependent(600, undefined, 10000)).data?.[dependentQuery],
+    ).toHaveLength(501)
+    for (const context of [
+      makeContext(["/Other"]),
+      makeServiceAccountContext(),
+    ]) {
+      expect(
+        (await searchDependent("south", context)).errors?.[0]?.extensions[
+          "code"
+        ],
+      ).toBe("NotAuthorized")
+      expect(
+        (await executeDependent(150, context)).errors?.[0]?.extensions["code"],
+      ).toBe("NotAuthorized")
+    }
+    expect(ranked.errors).toBeUndefined()
+    expect(ranked.data?.["lookupSearch"]).toEqual({
+      items: [items[4], { value: "prefix-1", label: "Café desk" }],
+      hasMore: true,
+    })
+    expect((await execute("cafe", 4)).data?.["lookupSearch"]).toMatchObject({
+      items: [
+        { value: "exact" },
+        { value: "prefix-1" },
+        { value: "prefix-2" },
+        { value: "inside" },
+      ],
+      hasMore: false,
+    })
+    expect((await execute("", 2)).data?.["lookupSearch"]).toEqual({
+      items: items.slice(0, 2),
+      hasMore: true,
+    })
+    expect((await execute("LAND af", 2)).data?.["lookupSearch"]).toEqual({
+      items: [{ value: "prefix-1", label: "Café desk" }],
+      hasMore: false,
+    })
+    expect((await execute("hidden-id", 2)).data?.["lookupSearch"]).toEqual({
+      items: [],
+      hasMore: false,
+    })
+    const resolve = (
+      value: string,
+      context = makeContext(["/Employee"]),
+      field = "choice",
+      path = stepPath,
+      todoId?: string,
+    ) =>
+      graphql({
+        schema,
+        source: `query($stepPath: String!, $field: String!, $value: String!, $todoId: ID) { lookupSelection(stepPath: $stepPath, field: $field, value: $value, todoId: $todoId) { value label } }`,
+        variableValues: { stepPath: path, field, value, todoId },
+        contextValue: context,
+      })
+    const searchCount = searches
+    // Not in the initial page, and searching its ID cannot find it.
+    const restored = await resolve("prefix-2")
+    expect(restored.errors).toBeUndefined()
+    expect(restored.data?.["lookupSelection"]).toEqual({
+      value: "prefix-2",
+      label: "Cafe chair",
+    })
+    expect((await resolve("missing")).data?.["lookupSelection"]).toBeNull()
+    eligible = false
+    expect((await resolve("prefix-2")).data?.["lookupSelection"]).toBeNull()
+    expect(
+      (await resolve("prefix-2", makeContext(["/Employee"]), "missing")).data?.[
+        "lookupSelection"
+      ],
+    ).toBeNull()
+    for (const context of [
+      makeContext([]),
+      makeContext(["/Other"]),
+      makeServiceAccountContext(),
+    ]) {
+      expect(
+        (await resolve("prefix-2", context)).errors?.[0]?.extensions["code"],
+      ).toBe("NotAuthorized")
+    }
+    expect(searches).toBe(searchCount)
+    expect(
+      (await resolve("id", makeContext(["/Employee"]), "restricted"))
+        .errors?.[0]?.extensions["code"],
+    ).toBe("NotAuthorized")
+    expect(
+      (
+        await resolve(
+          "id",
+          makeContext(["/Employee", "/Manager"]),
+          "restricted",
+        )
+      ).data?.["lookupSelection"],
+    ).toEqual({ value: "id", label: "Restricted label" })
+    expect(
+      (
+        await resolve(
+          "list-id",
+          makeContext(["/Employee"]),
+          "choice",
+          list.node.path,
+        )
+      ).data?.["lookupSelection"],
+    ).toEqual({ value: "list-id", label: "List label" })
+    expect(
+      (
+        await resolve(
+          "list-id",
+          makeContext(["/Other"]),
+          "choice",
+          list.node.path,
+        )
+      ).errors?.[0]?.extensions["code"],
+    ).toBe("NotAuthorized")
+    expect(
+      (
+        await resolve(
+          "id",
+          makeContext(["/Employee"]),
+          "choice",
+          continuationPath,
+          "todo-1",
+        )
+      ).data?.["lookupSelection"],
+    ).toEqual({ value: "id", label: "Todo label" })
+    for (const todoId of [undefined, "wrong-step", "other-user"]) {
+      expect(
+        (
+          await resolve(
+            "id",
+            makeContext(["/Employee"]),
+            "choice",
+            continuationPath,
+            todoId,
+          )
+        ).errors?.[0]?.extensions["code"],
+      ).toBe("NotAuthorized")
+    }
+    expect(
+      (await execute("", 2, makeContext([]))).errors?.[0]?.extensions["code"],
+    ).toBe("NotAuthorized")
+    expect(
+      (await execute("", 2, makeContext(["/Other"]))).errors?.[0]?.extensions[
+        "code"
+      ],
+    ).toBe("NotAuthorized")
+    expect(
+      (await execute("", 2, makeServiceAccountContext())).errors?.[0]
+        ?.extensions["code"],
+    ).toBe("NotAuthorized")
+  } finally {
+    await runtime.dispose()
+  }
+})
+
 const makeServiceAccountContext = (): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {} as UserContext["_userDetails"],
   jwt: {
     mode: "access",
@@ -93,12 +642,8 @@ type FormMetadataResult = {
   readonly inputTypeName: string
   readonly completeMutationName: string
   readonly totalFields: number
-  readonly formDefinition: {
-    readonly components: Record<string, unknown>
-    readonly rules: readonly unknown[]
-  } | null
+  readonly requestData?: { readonly inaccessible: readonly string[] }
   readonly defaultValues: Record<string, unknown> | null
-  readonly jsonSchema: Record<string, unknown> | null
 }
 
 type ListFormMetadataResult = {
@@ -107,27 +652,22 @@ type ListFormMetadataResult = {
   readonly updateMutationName: string | null
   readonly updateInputTypeName: string | null
   readonly deleteMutationName: string | null
-  readonly formDefinition: {
-    readonly components: Record<string, unknown>
-    readonly rules: readonly unknown[]
-  } | null
+  readonly requestData?: { readonly inaccessible: readonly string[] }
   readonly defaultValues: Record<string, unknown> | null
-  readonly jsonSchema: Record<string, unknown> | null
 }
 
 const makeAuthorizationService = (
-  overrides: Partial<AuthorizationService["Type"]> = {},
-): AuthorizationService["Type"] => ({
+  overrides: Partial<Context.Service.Shape<typeof AuthorizationService>> = {},
+): Context.Service.Shape<typeof AuthorizationService> => ({
   canIssueDelegationSecret: () => Effect.succeed(false),
   canListDelegationTokens: () => Effect.succeed(false),
   canManageDelegation: () => Effect.succeed(false),
   canLogin: () => Effect.succeed(false),
+  policyVersion: Effect.succeed("test-policy"),
   canCompleteStep: () => Effect.succeed(true),
-  canCompleteTodo: () => Effect.succeed(true),
+  canViewEmbeddedForm: () => Effect.succeed(false),
   canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-  canCompletePublicTodo: () => Effect.succeed(false),
   canRequestRole: () => Effect.succeed(false),
-  canRequestProviderUserPermissions: () => Effect.succeed(false),
   canActOnBehalfOf: () => Effect.succeed(false),
   canViewExecution: () => Effect.succeed(false),
   canRestartExecution: () => Effect.succeed(false),
@@ -148,9 +688,15 @@ const makeAuthorizationService = (
 
 const makeLayers = (
   org: Organisation,
-  authOverrides: Partial<AuthorizationService["Type"]> = {},
-  providerUserQueries: Partial<ProviderUserQueries["Type"]> = {},
-  stepCompletionOperations: Partial<StepCompletionOperations["Type"]> = {},
+  authOverrides: Partial<
+    Context.Service.Shape<typeof AuthorizationService>
+  > = {},
+  providerUserQueries: Partial<
+    Context.Service.Shape<typeof ProviderUserQueries>
+  > = {},
+  stepCompletionOperations: Partial<
+    Context.Service.Shape<typeof StepCompletionOperations>
+  > = {},
 ) =>
   Layer.mergeAll(
     Layer.succeed(FileSystem.FileSystem, {
@@ -158,18 +704,28 @@ const makeLayers = (
       readFileString: () => Effect.succeed("type Query { _: Boolean }"),
     } as unknown as FileSystem.FileSystem),
     Layer.succeed(DynamicSchemaConfig, { schemaPath: "/tmp/org.graphql" }),
-    Layer.succeed(OrgQueries, {} as unknown as OrgQueries["Type"]),
+    Layer.succeed(
+      OrgQueries,
+      {} as unknown as Context.Service.Shape<typeof OrgQueries>,
+    ),
     Layer.succeed(ProcessQueries, {
       queryAllProcesses: Effect.succeed([]),
-    } as unknown as ProcessQueries["Type"]),
+    } as unknown as Context.Service.Shape<typeof ProcessQueries>),
     Layer.succeed(
       ProviderUserQueries,
-      providerUserQueries as unknown as ProviderUserQueries["Type"],
+      providerUserQueries as unknown as Context.Service.Shape<
+        typeof ProviderUserQueries
+      >,
     ),
-    Layer.succeed(WorkflowQueries, {} as unknown as WorkflowQueries["Type"]),
+    Layer.succeed(
+      WorkflowQueries,
+      {} as unknown as Context.Service.Shape<typeof WorkflowQueries>,
+    ),
     Layer.succeed(
       StepCompletionOperations,
-      stepCompletionOperations as unknown as StepCompletionOperations["Type"],
+      stepCompletionOperations as unknown as Context.Service.Shape<
+        typeof StepCompletionOperations
+      >,
     ),
     Layer.succeed(
       AuthorizationService,
@@ -193,16 +749,97 @@ const makeLayers = (
     }),
   )
 
+it("pages MCP starts only after removing entries without a callable start mutation", async () => {
+  const org = new Organisation({ name: "Process catalog" })
+  const role = new Role(org, "Employee")
+  const models = [
+    new Process(org, "multiple", { name: "Multiple", purpose: "Test" }),
+    new Process(org, "scheduled", {
+      name: "Scheduled",
+      purpose: "Test",
+      cron: {
+        type: "weekly",
+        weekday: "monday",
+        timeZone: "UTC",
+        at: { hour: 9, minute: 30 },
+      },
+    }),
+    new Process(org, "single", { name: "Single", purpose: "Test" }),
+  ]
+  const rows = models.map((process, index): ProcessListRow => {
+    const start =
+      index === 1
+        ? new NodeStep(process, "Start", {
+            input: () => Effect.void,
+            output: {},
+            execute: () => Effect.succeed({}),
+          })
+        : new Form(process, "Start", { role, form: () => ({}) })
+    process.start(start).end()
+    if (index === 0)
+      process
+        .start(new Form(process, "Other", { role, form: () => ({}) }))
+        .end()
+    return {
+      id: String(index),
+      path: normalizePath(process.node.path),
+      name: process.props.name,
+      purpose: process.props.purpose,
+      category: "Test",
+      startStepPath: normalizePath(start.node.path),
+      activeInstances: 0,
+    }
+  })
+  const layers = Layer.merge(
+    makeLayers(org),
+    Layer.succeed(ProcessQueries, {
+      queryAllProcesses: Effect.succeed([]),
+      listProcesses: ({ offset, limit }) =>
+        Effect.succeed(rows.slice(offset, offset + limit)),
+    }),
+  )
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const schema = yield* systemSchema
+      const resolver = schema.resolvers?.Query?.["processes"] as (
+        parent: unknown,
+        args: { page: number; limit: number; requireStartMutation?: boolean },
+        context: UserContext,
+      ) => Effect.Effect<unknown>
+      const context = makeContext(["/Employee"])
+      return {
+        sharedCatalog: yield* resolver(
+          undefined,
+          { page: 1, limit: 3 },
+          context,
+        ),
+        mcpCatalog: yield* resolver(
+          undefined,
+          { page: 1, limit: 1, requireStartMutation: true },
+          context,
+        ),
+      }
+    }).pipe(Effect.provide(layers)),
+  )
+  expect(result.sharedCatalog).toMatchObject({ nodes: rows })
+  expect(result.mcpCatalog).toMatchObject({
+    nodes: [{ path: "/single" }],
+    hasNextPage: false,
+  })
+})
+
 const resolveFormMetadata = (
   org: Organisation,
   args: { stepPath: string; todoId?: string | null },
   context: UserContext,
-  authOverrides: Partial<AuthorizationService["Type"]> = {},
+  authOverrides: Partial<
+    Context.Service.Shape<typeof AuthorizationService>
+  > = {},
 ) =>
   Effect.gen(function* () {
     const schema = yield* systemSchema
     const resolver = (schema.resolvers?.Query?.["formMetadata"] ??
-      (() => Effect.dieMessage("Missing formMetadata resolver"))) as (
+      (() => Effect.die("Missing formMetadata resolver"))) as (
       parent: unknown,
       args: { stepPath: string; todoId?: string | null },
       context: UserContext,
@@ -215,12 +852,14 @@ const resolveListFormMetadata = (
   org: Organisation,
   args: { listPath: string },
   context: UserContext,
-  authOverrides: Partial<AuthorizationService["Type"]> = {},
+  authOverrides: Partial<
+    Context.Service.Shape<typeof AuthorizationService>
+  > = {},
 ) =>
   Effect.gen(function* () {
     const schema = yield* systemSchema
     const resolver = (schema.resolvers?.Query?.["listFormMetadata"] ??
-      (() => Effect.dieMessage("Missing listFormMetadata resolver"))) as (
+      (() => Effect.die("Missing listFormMetadata resolver"))) as (
       parent: unknown,
       args: { listPath: string },
       context: UserContext,
@@ -244,17 +883,18 @@ const resolveLookupSuggestions = (
     todoId?: string | null
   },
   context: UserContext,
-  authOverrides: Partial<AuthorizationService["Type"]>,
-  providerUserQueries: Partial<ProviderUserQueries["Type"]>,
-  stepCompletionOperations: Partial<StepCompletionOperations["Type"]> = {},
+  authOverrides: Partial<Context.Service.Shape<typeof AuthorizationService>>,
+  providerUserQueries: Partial<
+    Context.Service.Shape<typeof ProviderUserQueries>
+  >,
+  stepCompletionOperations: Partial<
+    Context.Service.Shape<typeof StepCompletionOperations>
+  > = {},
 ) =>
   Effect.gen(function* () {
     const schema = yield* systemSchema
     const resolver = (schema.resolvers?.Query?.["lookupSuggestions"] ??
-      (() =>
-        Effect.dieMessage(
-          "Missing lookupSuggestions resolver",
-        ))) as unknown as (
+      (() => Effect.die("Missing lookupSuggestions resolver"))) as unknown as (
       parent: unknown,
       args: {
         stepPath: string
@@ -286,13 +926,15 @@ const resolveListUpdate = (
     input: Record<string, unknown>
   },
   context: UserContext,
-  authOverrides: Partial<AuthorizationService["Type"]>,
-  providerUserQueries: Partial<ProviderUserQueries["Type"]>,
+  authOverrides: Partial<Context.Service.Shape<typeof AuthorizationService>>,
+  providerUserQueries: Partial<
+    Context.Service.Shape<typeof ProviderUserQueries>
+  >,
 ) =>
   Effect.gen(function* () {
     const schema = yield* dynamicSchema
     const resolver = (schema.resolvers?.Mutation?.[args.mutationName] ??
-      (() => Effect.dieMessage("Missing list update resolver"))) as unknown as (
+      (() => Effect.die("Missing list update resolver"))) as unknown as (
       parent: unknown,
       args: { id: string; input: Record<string, unknown> },
       context: UserContext,
@@ -305,7 +947,7 @@ const resolveListUpdate = (
     )
   }).pipe(Effect.provide(makeLayers(org, authOverrides, providerUserQueries)))
 
-const makeRestrictedFieldOrganisation = () => {
+const makeRestrictedFieldOrganisation = (executable = false) => {
   const org = new Organisation({ name: "Test Org" })
   const operations = new OrgUnit(org, "operations", {
     name: "Operations",
@@ -318,6 +960,17 @@ const makeRestrictedFieldOrganisation = () => {
     purpose: "Test field permission metadata",
   })
   const submit = new Form(process, "Submit", {
+    ...(executable && {
+      browser: {
+        entrypoint: "src/form.ts",
+        exportName: "form",
+        resolvePluginConfiguration: () =>
+          Effect.succeed({
+            title: { hint: "Visible hint" },
+            requestedFor: { hint: "Restricted hint" },
+          }),
+      },
+    }),
     role: employee,
     form: () => ({
       title: TextField({ default: "unchanged" }),
@@ -639,10 +1292,9 @@ const makeProviderUserLookupQueries = () => ({
     ),
 })
 
-const roleBasedFieldAuth: AuthorizationService["Type"]["canModifyField"] = (
-  principal,
-  resource,
-) =>
+const roleBasedFieldAuth: Context.Service.Shape<
+  typeof AuthorizationService
+>["canModifyField"] = (principal, resource) =>
   Effect.succeed(
     resource.role !== undefined &&
       principal.roles.some((role) => role.id === resource.role?.id),
@@ -676,14 +1328,6 @@ describe("systemSchema formMetadata", () => {
       ),
     )
 
-    expect(
-      Object.values(result?.formDefinition?.components ?? {}).every(
-        (component) =>
-          typeof component === "object" &&
-          component !== null &&
-          "_tag" in component,
-      ),
-    ).toBe(true)
     expect(result).toMatchObject({
       stepPath: "/operations/hello-system-start/Hello",
       processName: "Hello System Start",
@@ -693,97 +1337,8 @@ describe("systemSchema formMetadata", () => {
       inputTypeName: "",
       completeMutationName: "",
       totalFields: 0,
-      formDefinition: null,
       defaultValues: null,
-      jsonSchema: null,
     })
-  })
-
-  it("returns an empty canonical rule channel for forms without rules", async () => {
-    const org = new Organisation({ name: "Test Org" })
-    const operations = new OrgUnit(org, "operations", {
-      name: "Operations",
-      type: "department",
-    })
-    const employee = new Role(operations, "employee", { name: "Employee" })
-    const process = new Process(operations, "key-request", {
-      name: "Key Request",
-      purpose: "Test absent form rules metadata",
-    })
-    const order = new Form(process, "Order", {
-      role: employee,
-      form: () => ({ keyNumber: TextField({ label: "Key Number" }) }),
-    })
-
-    process.start(order).end()
-
-    const result = await Effect.runPromise(
-      resolveFormMetadata(
-        org,
-        { stepPath: "/operations/key-request/Order" },
-        makeContext([employee.node.path]),
-      ),
-    )
-
-    expect(result?.formDefinition).toEqual({
-      components: expect.objectContaining({
-        keyNumber: expect.objectContaining({ _tag: "text" }),
-      }),
-      rules: [],
-    })
-  })
-
-  it("returns serialized rules for forms with rules", async () => {
-    const org = new Organisation({ name: "Test Org" })
-    const operations = new OrgUnit(org, "operations", {
-      name: "Operations",
-      type: "department",
-    })
-    const employee = new Role(operations, "employee", { name: "Employee" })
-    const process = new Process(operations, "key-request", {
-      name: "Key Request",
-      purpose: "Test form rules metadata",
-    })
-    const order = new Form(process, "Order", {
-      role: employee,
-      form: () => ({
-        keyNumber: TextField({ label: "Key Number" }),
-        details: TextField({ label: "Details" }),
-      }),
-    }).rules((value, rule) => [
-      rule.when(value.keyNumber.equals("restricted")).effects({
-        details: { hidden: true },
-      }),
-    ])
-
-    process.start(order).end()
-
-    const result = await Effect.runPromise(
-      resolveFormMetadata(
-        org,
-        { stepPath: "/operations/key-request/Order" },
-        makeContext([employee.node.path]),
-      ),
-    )
-
-    expect(result?.formDefinition?.rules).toEqual([
-      {
-        condition: {
-          _tag: "equals",
-          left: { _tag: "field", path: ["keyNumber"] },
-          right: { _tag: "literal", value: "restricted" },
-        },
-        effects: [{ target: ["details"], state: { hidden: true } }],
-      },
-    ])
-    expect(
-      Object.values(result?.formDefinition?.components ?? {}).every(
-        (component) =>
-          typeof component === "object" &&
-          component !== null &&
-          "_tag" in component,
-      ),
-    ).toBe(true)
   })
 
   it("returns the configured form name as the step name", async () => {
@@ -816,6 +1371,25 @@ describe("systemSchema formMetadata", () => {
     expect(result?.stepName).toBe("Mint key")
   })
 
+  it("filters executable plugin configuration using field permissions", async () => {
+    const { org, employee, manager, stepPath } =
+      makeRestrictedFieldOrganisation(true)
+    for (const [role, allowed] of [
+      [employee, false],
+      [manager, true],
+    ] as const) {
+      const result = await Effect.runPromise(
+        resolveFormMetadata(org, { stepPath }, makeContext([role.node.path]), {
+          canModifyField: roleBasedFieldAuth,
+        }),
+      )
+      expect(result).toHaveProperty("pluginConfiguration", {
+        title: { hint: "Visible hint" },
+        ...(allowed && { requestedFor: { hint: "Restricted hint" } }),
+      })
+    }
+  })
+
   it("omits restricted fields from metadata when modifyField is denied", async () => {
     const { org, employee, stepPath } = makeRestrictedFieldOrganisation()
 
@@ -831,98 +1405,9 @@ describe("systemSchema formMetadata", () => {
     )
     if (!result) throw new Error("Expected form metadata")
 
-    expect(result.formDefinition?.components).toHaveProperty("title")
-    expect(result.formDefinition?.components).toHaveProperty("notes")
-    expect(result.formDefinition?.components).not.toHaveProperty("requestedFor")
     expect(result.defaultValues).toEqual({ title: "unchanged", notes: "" })
-    expect(
-      (result.jsonSchema as { properties?: Record<string, unknown> })
-        .properties,
-    ).not.toHaveProperty("requestedFor")
-    expect(
-      (result.jsonSchema as { required?: string[] }).required ?? [],
-    ).not.toContain("requestedFor")
+    expect(result.requestData?.inaccessible).toContain("requestedFor")
     expect(result?.totalFields).toBe(2)
-  })
-
-  it("omits rules that reference restricted fields when modifyField is denied", async () => {
-    const org = new Organisation({ name: "Test Org" })
-    const operations = new OrgUnit(org, "operations", {
-      name: "Operations",
-      type: "department",
-    })
-    const employee = new Role(operations, "employee", { name: "Employee" })
-    const manager = new Role(operations, "manager", { name: "Manager" })
-    const process = new Process(operations, "field-rule-metadata", {
-      name: "Field Rule Metadata",
-      purpose: "Test field permission rule metadata",
-    })
-    const submit = new Form(process, "Submit", {
-      role: employee,
-      form: () => ({
-        title: TextField(),
-        notes: TextField(),
-        requestedFor: ProviderUserField({
-          default: CurrentProviderUser,
-          permission: { modify: manager },
-        }),
-      }),
-    }).rules((value, rule) => [
-      rule.when(value.title.blank()).effects({
-        notes: { disabled: true },
-      }),
-      rule.when(value.requestedFor.present()).effects({
-        notes: { hidden: true },
-      }),
-      rule.when(value.title.present()).effects({
-        requestedFor: { hidden: true },
-      }),
-      rule
-        .when(value.notes.present())
-        .effects(
-          { title: { disabled: true } },
-          { requestedFor: { hidden: true } },
-        ),
-    ])
-
-    process.start(submit).end()
-
-    const result = await Effect.runPromise(
-      resolveFormMetadata(
-        org,
-        { stepPath: submit.node.path },
-        makeContext([employee.node.path]),
-        { canModifyField: roleBasedFieldAuth },
-      ),
-    )
-    if (!result) throw new Error("Expected form metadata")
-
-    expect(result.formDefinition?.rules).toEqual([
-      {
-        condition: {
-          _tag: "blank",
-          value: { _tag: "field", path: ["title"] },
-        },
-        effects: [{ target: ["notes"], state: { disabled: true } }],
-      },
-    ])
-    expect(result.formDefinition?.components).not.toHaveProperty("requestedFor")
-
-    const managerResult = await Effect.runPromise(
-      resolveFormMetadata(
-        org,
-        { stepPath: submit.node.path },
-        makeContext([manager.node.path]),
-        { canModifyField: roleBasedFieldAuth },
-      ),
-    )
-    expect(managerResult?.formDefinition?.components).toHaveProperty(
-      "requestedFor",
-    )
-    expect(managerResult?.formDefinition?.rules).toHaveLength(4)
-    expect(JSON.stringify(managerResult?.formDefinition?.rules)).toContain(
-      "requestedFor",
-    )
   })
 
   it("keeps restricted fields in metadata when modifyField is allowed", async () => {
@@ -941,18 +1426,12 @@ describe("systemSchema formMetadata", () => {
     expect(seenOrgUnitIds).toEqual(["operations"])
     if (result === null) throw new Error("Expected form metadata")
 
-    expect(result.formDefinition?.components).toHaveProperty("title")
-    expect(result.formDefinition?.components).toHaveProperty("notes")
-    expect(result.formDefinition?.components).toHaveProperty("requestedFor")
     expect(result.defaultValues).toMatchObject({
       title: "unchanged",
       notes: "",
       requestedFor: "current@example.com",
     })
-    expect(
-      (result.jsonSchema as { properties?: Record<string, unknown> })
-        .properties,
-    ).toHaveProperty("requestedFor")
+    expect(result.requestData?.inaccessible).not.toContain("requestedFor")
     expect(result.totalFields).toBe(3)
   })
 
@@ -972,7 +1451,6 @@ describe("systemSchema formMetadata", () => {
 
     // Root-scoped FormField resources use the empty string as their org-unit id.
     expect(seenOrgUnitIds).toEqual([""])
-    expect(result?.formDefinition?.components).toHaveProperty("requestedFor")
     expect(result?.defaultValues).toMatchObject({
       requestedFor: "current@example.com",
     })
@@ -986,8 +1464,6 @@ describe("systemSchema formMetadata", () => {
       resolveFormMetadata(org, { stepPath }, makeContext([employee.node.path])),
     )
 
-    expect(result?.formDefinition?.components).toHaveProperty("title")
-    expect(result?.formDefinition?.components).toHaveProperty("notes")
     expect(result?.defaultValues).toEqual({ title: "", notes: "" })
     expect(result?.totalFields).toBe(2)
   })
@@ -1001,10 +1477,6 @@ describe("systemSchema formMetadata", () => {
       }),
     )
 
-    expect(result?.formDefinition?.components).toHaveProperty("managerNote")
-    expect(result?.formDefinition?.components).not.toHaveProperty(
-      "employeeNote",
-    )
     expect(result?.defaultValues).toEqual({ managerNote: "manager" })
     expect(result?.totalFields).toBe(1)
   })
@@ -1030,9 +1502,6 @@ describe("systemSchema formMetadata", () => {
       }),
     )
 
-    expect(result?.formDefinition?.components).not.toHaveProperty(
-      "requestedFor",
-    )
     expect(result?.defaultValues).toEqual({ title: "unchanged", notes: "" })
   })
 })
@@ -1059,8 +1528,8 @@ describe("systemSchema provider-user lookupSuggestions", () => {
             Effect.succeed({
               processExecutionId: "execution-1",
               processStateId: "state-1",
-              updatedAt: DateTime.unsafeMake("2026-04-06T09:00:00.000Z"),
-              processStartedAt: DateTime.unsafeMake("2026-04-06T09:00:00.000Z"),
+              updatedAt: DateTime.makeUnsafe("2026-04-06T09:00:00.000Z"),
+              processStartedAt: DateTime.makeUnsafe("2026-04-06T09:00:00.000Z"),
               state: {
                 choices: [
                   { value: "first", label: "First choice" },
@@ -1117,8 +1586,8 @@ describe("systemSchema provider-user lookupSuggestions", () => {
               Effect.succeed({
                 processExecutionId: "execution-1",
                 processStateId: "state-1",
-                updatedAt: DateTime.unsafeMake("2026-04-06T09:00:00.000Z"),
-                processStartedAt: DateTime.unsafeMake(
+                updatedAt: DateTime.makeUnsafe("2026-04-06T09:00:00.000Z"),
+                processStartedAt: DateTime.makeUnsafe(
                   "2026-04-06T09:00:00.000Z",
                 ),
                 state: { choices: [] },
@@ -1196,8 +1665,8 @@ describe("systemSchema provider-user lookupSuggestions", () => {
               Effect.succeed({
                 processExecutionId: "execution-1",
                 processStateId: "state-1",
-                updatedAt: DateTime.unsafeMake("2026-04-06T09:00:00.000Z"),
-                processStartedAt: DateTime.unsafeMake(
+                updatedAt: DateTime.makeUnsafe("2026-04-06T09:00:00.000Z"),
+                processStartedAt: DateTime.makeUnsafe(
                   "2026-04-06T09:00:00.000Z",
                 ),
                 state: { choices: [] },
@@ -1615,6 +2084,142 @@ describe("dynamicSchema list provider-user updates", () => {
   })
 })
 
+it("resolves create-only List lookups with create rather than update permission", async () => {
+  const org = new Organisation({ name: "Test Org" })
+  const role = new Role(org, "Employee")
+  const reviewer = new Role(org, "Reviewer")
+  const item = { value: "123", label: "Test student" }
+  const list = new List(org, "attendance", {
+    name: "Attendance",
+    roles: [role, reviewer],
+    output: { id: ES.String, notes: ES.String },
+    query: () => Effect.succeed({ items: [], totalCount: 0 }),
+    form: () => ({ notes: TextField({ label: "Notes" }) }),
+    itemQuery: () => Effect.succeed(null),
+    update: () => Effect.succeed(null),
+    create: {
+      form: () => ({
+        studentNumber: LookupField({
+          label: "Child",
+          mode: "server",
+          query: (filter) =>
+            Effect.succeed(item.label.includes(filter) ? [item] : []),
+          resolve: (value) =>
+            Effect.succeed(value === item.value ? item : null),
+        }),
+        owner: ProviderUserField(),
+      }),
+      submit: () => Effect.succeed("created"),
+    },
+  })
+  const logs: Array<ReturnType<typeof Logger.formatStructured.log>> = []
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(
+      makeLayers(org, {}, makeProviderUserLookupQueries()),
+      Logger.layer([
+        Logger.map(Logger.formatStructured, (entry) => {
+          logs.push(entry)
+        }),
+      ]),
+      LocalCedarAuthorizationLive.pipe(
+        Layer.provide(
+          Layer.succeed(LocalCedarConfig, {
+            schemaText: readFileSync(getDefaultSchemaPath(), "utf8"),
+            policiesText: [
+              readFileSync(getDefaultPoliciesPath(), "utf8"),
+              `permit(principal in PF::Role::"/Employee", action == PF::Action::"create", resource == PF::List::"/attendance");
+               forbid(principal in PF::Role::"/Employee", action == PF::Action::"update", resource == PF::List::"/attendance");`,
+            ],
+          }),
+        ),
+      ),
+    ),
+  )
+  try {
+    const definition = await runtime.runPromise(systemSchema)
+    const schema = transformSchemaWithAuthDirective(
+      createSchema({
+        typeDefs: ["system", "rxdb"].map((name) =>
+          readFileSync(
+            new URL(
+              `../../graphql-schema/graphql/${name}.graphql`,
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        ),
+        resolvers: definition.resolvers,
+      }),
+      createResolverExecutor(runtime),
+    )
+    const execute = (
+      fields: string,
+      context = makeContext(["/Employee"]),
+      listCreate: boolean | undefined = true,
+    ) =>
+      graphql({
+        schema,
+        source: `query($path: String!, $create: Boolean) { ${fields} }`,
+        variableValues: {
+          path: normalizePath(list.node.path),
+          create: listCreate,
+        },
+        contextValue: context,
+      })
+    const suggestions = `lookupSuggestions(stepPath: $path, field: "studentNumber", filter: "student", listCreate: $create) { value label }`
+    const result = await execute(suggestions)
+    expect(result.errors).toBeUndefined()
+    expect(result.data?.["lookupSuggestions"]).toEqual([item])
+    const searchAndSelection = await execute(`
+      lookupSearch(stepPath: $path, field: "studentNumber", filter: "student", listCreate: $create) { items { value label } hasMore }
+      lookupSelection(stepPath: $path, field: "studentNumber", value: "123", listCreate: $create) { value label }
+      owners: lookupSuggestions(stepPath: $path, field: "owner", filter: "Current", listCreate: $create) { label }
+    `)
+    expect(searchAndSelection.errors).toBeUndefined()
+    expect(searchAndSelection.data).toEqual({
+      lookupSearch: { items: [item], hasMore: false },
+      lookupSelection: item,
+      owners: [{ label: "Current User" }],
+    })
+    expect(
+      (await execute(suggestions, makeContext(["/Employee"]), false))
+        .errors?.[0]?.extensions,
+    ).toMatchObject({ code: "NotAuthorized", action: "update" })
+    expect(
+      (await execute(suggestions, makeContext(["/Other"]))).errors?.[0]
+        ?.extensions,
+    ).toMatchObject({ code: "NotAuthorized", action: "query" })
+    expect(
+      (await execute(suggestions, makeContext(["/Reviewer"]))).errors?.[0]
+        ?.extensions,
+    ).toMatchObject({ code: "NotAuthorized", action: "create" })
+
+    const missing = await execute(
+      `lookupSuggestions(stepPath: $path, field: "missing", listCreate: $create) { value }`,
+      {
+        ...makeContext(["/Employee"]),
+        _userDetails: { id: "usr-employee", by: "current@example.com" },
+      },
+    )
+    expect(missing.errors?.[0]?.extensions).toEqual({
+      code: "LookupFieldNotFoundError",
+      fieldName: "missing",
+      formStep: "/attendance",
+    })
+    const lookupFailure = logs.at(-1)
+    expect(lookupFailure?.message).toContainEqual(
+      expect.objectContaining({
+        userId: "usr-employee",
+        formPath: "/attendance",
+        fieldName: "missing",
+      }),
+    )
+    expect(JSON.stringify(lookupFailure)).not.toContain("current@example.com")
+  } finally {
+    await runtime.dispose()
+  }
+})
+
 describe("systemSchema listCreateFormMetadata", () => {
   it.each([
     {
@@ -1676,7 +2281,7 @@ describe("systemSchema listCreateFormMetadata", () => {
 })
 
 describe("systemSchema listFormMetadata", () => {
-  it("returns the structured definition additively with list field metadata", async () => {
+  it("returns authorized list mutation metadata", async () => {
     const org = new Organisation({ name: "Test Org" })
     const operations = new OrgUnit(org, "operations", {
       name: "Operations",
@@ -1720,25 +2325,13 @@ describe("systemSchema listFormMetadata", () => {
         },
       ),
     )
-
     expect(result).toMatchObject({
       listPath: list.node.path,
       listName: "Employees",
       updateMutationName: list.updateMutationName(),
       updateInputTypeName: list.updateInputTypeName(),
       deleteMutationName: list.deleteMutationName(),
-      formDefinition: {
-        components: {
-          id: expect.objectContaining({ readonly: true }),
-          name: expect.objectContaining({ _tag: "text", field: "name" }),
-          managerNote: expect.objectContaining({
-            permission: { modify: normalizePath(manager.node.path) },
-          }),
-        },
-        rules: [],
-      },
     })
-    expect(result?.jsonSchema?.["properties"]).not.toHaveProperty("id")
   })
 
   it("keeps list forms without an update mutation read-only", async () => {
@@ -1768,18 +2361,10 @@ describe("systemSchema listFormMetadata", () => {
         },
       ),
     )
-
     expect(result).toMatchObject({
       updateMutationName: null,
       updateInputTypeName: null,
       deleteMutationName: null,
-      formDefinition: {
-        components: {
-          id: expect.objectContaining({ readonly: true }),
-          name: expect.objectContaining({ readonly: true }),
-        },
-        rules: [],
-      },
     })
   })
 

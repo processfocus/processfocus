@@ -46,7 +46,12 @@
   },
   "workspaces": {
     "fixtures/external-authoring": {
-      "entry": ["src/index.ts", "src/cross-copy.ts"],
+      "entry": [
+        "src/index.ts",
+        "src/cross-copy.ts",
+        "src/custom-field-client.tsx",
+        "src/exercise-artifact.mjs"
+      ],
       "ignoreDependencies": [
         "@types/react",
         "constructs",
@@ -55,15 +60,22 @@
         "validator"
       ]
     },
-    "tools/eslint-react-compiler": {
-      "entry": ["eslint.config.mjs", "run.mjs"]
-    },
     "cli/generate-triggers": {
       "ignoreBinaries": ["drizzle-kit"]
     },
     "packages/*": {
       "entry": ["src/index.ts", "test/**/*.{test,spec}.ts"],
       "project": ["src/**/*.{ts,tsx}", "test/**/*.ts"]
+    },
+    "packages/sdk": {
+      "ignore": ["dist/**"]
+    },
+    "packages/layer-turso-local": {
+      "entry": [
+        "src/index.ts",
+        "test/**/*.{test,spec}.ts",
+        "test/fixtures/holding-writer.ts"
+      ]
     },
     "packages/service-drizzle-sqlite": {
       "ignoreDependencies": ["@pf/db-info"]
@@ -91,18 +103,23 @@
     },
     "runtime/local": {
       "entry": [
+        "formal/queue/check.ts",
         "scripts/build-distribution.ts",
         "scripts/delegation-next-runtime.ts",
         "src/main.ts",
         "src/authentication-server/authentication-server.ts",
         "src/graphql-server/graphql-server.ts",
+        "src/graphql-api/artifact-roundtrip.host.ts",
         "src/graphql-server/graphql-internal-server.ts",
         "src/job-worker/job-worker.ts",
+        "src/job-worker/job-worker-supervisor.ts",
+        "src/test-fixtures/supervised-queue-worker.ts",
         "src/serve-frontend.ts",
         "src/**/*.{test,spec}.ts"
       ],
       "ignoreDependencies": [
         "@cedar-policy/cedar-wasm",
+        "@opentelemetry/sdk-trace-node",
         "@tursodatabase/database",
         "@tursodatabase/serverless",
         "@tursodatabase/sync",
@@ -113,11 +130,12 @@
         "rxdb",
         "@standard-schema/spec",
         "@graphql-typed-document-node/core",
+        "@effect-aws/client-dynamodb",
+        "@modelcontextprotocol/sdk",
         "rxjs",
         "graphql-request",
         "next",
         "ulidx",
-        "ajv",
         "validator",
         "@tanstack/react-form",
         "@radix-ui/react-slot",
@@ -129,16 +147,17 @@
         "@radix-ui/react-checkbox",
         "lucide-react",
         "react-day-picker",
+        "qrcode.react",
         "@radix-ui/react-popover",
         "cmdk",
         "@tanstack/react-query",
         "@radix-ui/react-tooltip",
         "@radix-ui/react-dropdown-menu",
         "@radix-ui/react-dialog",
+        "@date-fns/utc",
         "date-fns",
         "@xyflow/react",
         "@simplewebauthn/browser",
-        "@mcrovero/effect-nextjs",
         "@opentelemetry/context-async-hooks",
         "@opentelemetry/core",
         "@aws-sdk/client-acm",
@@ -157,7 +176,12 @@
       ]
     },
     "cli/pfcli": {
-      "entry": ["src/main.ts", "src/prepare-deployment-artifact-main.ts"],
+      "entry": [
+        "src/main.ts",
+        "src/prepare-deployment-artifact-main.ts",
+        "src/bundle-organisation-main.ts",
+        "test/fixtures/artifact-roundtrip/src/index.ts"
+      ],
       "ignoreDependencies": [
         "@cedar-policy/cedar-wasm",
         "@pf/auth-policy",
@@ -171,11 +195,12 @@
     "apps/www": {
       "entry": ["src/pages/**/*.astro", "astro.config.mjs"],
       "ignore": ["src/styles/starlight-custom.css"],
-      "ignoreDependencies": ["@astrojs/check", "@astrojs/mdx"]
+      "ignoreDependencies": ["@astrojs/mdx"]
     },
     "apps/frontend": {
       "entry": [
         "scripts/generate-organisation-plugin-composition.ts",
+        "scripts/generate-organisation-form-loaders.ts",
         "scripts/assert-dashboard-client-chunks.ts",
         "test/fixtures/delegation-ui-probe.tsx"
       ],
@@ -190,7 +215,8 @@
         "@cedar-policy/cedar-wasm",
         "@graphql-typed-document-node/core",
         "@opennextjs/aws",
-        "server-only"
+        "server-only",
+        "@pf/form-schema"
       ]
     },
     "apps/graphql-e2e": {
@@ -243,7 +269,6 @@
       "entry": ["src/exercise.ts"],
       "ignore": ["host/**"],
       "ignoreDependencies": [
-        "@pf/form-client-representation",
         "@pf/frontend-plugin-host",
         "constructs",
         "effect",

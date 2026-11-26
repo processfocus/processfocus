@@ -1,7 +1,8 @@
-# About
+# @pf/postgres-operations
 
-Concrete implementations to execute database operations against a postgres database.
+PostgreSQL implementations of application database services, including
+organisation persistence, process operations, and authentication storage.
 
-## Running unit tests
-
-Run `nx test postgres-operations` to execute the unit tests via [Vitest](https://vitest.dev/).
+Uses [`@pf/service-drizzle-postgres`](../service-drizzle-postgres/README.md).
+Shared API/runtime contracts live in
+[`@pf/graphql-db-operations`](../graphql-db-operations/README.md).

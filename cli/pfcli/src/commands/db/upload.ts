@@ -3,10 +3,12 @@ import { basename, resolve } from "node:path"
 import type { DatabaseUploadMode } from "@processfocus/hosting-contract"
 import { Console, Effect } from "effect"
 import { CliError } from "../../errors"
+import { acquireAccessToken } from "../../utils/credentials"
 import {
   buildExecutionEventSource,
   closeExecutionEventSource,
 } from "../../utils/execution-event-source"
+import { workloadExecutionPoll } from "../../utils/execution-snapshot"
 import { createExecutionEventSource } from "../../utils/execution-subscription"
 import {
   extractExecutionFailureMessage,
@@ -23,6 +25,7 @@ import {
   SUBSCRIPTION_TRANSPORT_QUERY,
   type SubscriptionTransportResponse,
 } from "../../utils/subscription-transport"
+import { withTransferDeadline } from "./transfer-deadline"
 
 const REQUEST_DATABASE_UPLOAD_URL_MUTATION = `
   mutation RequestDatabaseUploadUrl($project: String!, $env: String!, $contentType: String, $filename: String) {
@@ -180,7 +183,7 @@ const uploadDatabaseArtifact = (
 ): Effect.Effect<void, CliError> =>
   Effect.gen(function* () {
     const response = yield* Effect.tryPromise({
-      try: () =>
+      try: (signal) =>
         fetchImpl(url, {
           method: "PUT",
           headers: {
@@ -188,6 +191,7 @@ const uploadDatabaseArtifact = (
             "Content-Type": DATABASE_UPLOAD_CONTENT_TYPE,
           },
           body: bytes,
+          signal,
         }),
       catch: (cause) =>
         new CliError({
@@ -205,7 +209,7 @@ const uploadDatabaseArtifact = (
 
 const cleanupDatabaseUploadArtifact = (
   endpoint: string,
-  accessToken: string,
+  accessToken: string | Effect.Effect<string, CliError>,
   fileId: string,
 ): Effect.Effect<void> =>
   graphqlRequest<DeleteFileResponse>(
@@ -235,14 +239,18 @@ export const runUploadDb = (
 
   return Effect.gen(function* () {
     const uploadFile = yield* readSqliteFileForUpload(inputPath)
-    const credentials = yield* readCredentialsOrFail()
+    const credentials = yield* readCredentialsOrFail("database-upload")
     const endpoint = resolveGraphqlEndpoint(credentials.baseUrl)
 
-    yield* ensureKnownEnvironmentName(projectId, environmentId)
+    yield* ensureKnownEnvironmentName(
+      projectId,
+      environmentId,
+      "database-upload",
+    )
 
     const uploadInfo = yield* graphqlRequest<RequestDatabaseUploadUrlResponse>(
       endpoint,
-      credentials.accessToken,
+      acquireAccessToken(credentials),
       REQUEST_DATABASE_UPLOAD_URL_MUTATION,
       {
         project: projectId,
@@ -265,15 +273,20 @@ export const runUploadDb = (
       }),
     )
 
-    yield* uploadDatabaseArtifact(
+    const transfer = uploadDatabaseArtifact(
       uploadRequest.uploadUrl,
       uploadFile.bytes,
       fetchImpl,
+    )
+    yield* (
+      credentials.workload
+        ? withTransferDeadline(transfer, uploadRequest.expiresAt)
+        : transfer
     ).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         cleanupDatabaseUploadArtifact(
           endpoint,
-          credentials.accessToken,
+          acquireAccessToken(credentials),
           uploadRequest.fileId,
         ).pipe(Effect.flatMap(() => Effect.fail(error))),
       ),
@@ -285,7 +298,7 @@ export const runUploadDb = (
       const subscriptionTransport =
         yield* graphqlRequest<SubscriptionTransportResponse>(
           endpoint,
-          credentials.accessToken,
+          acquireAccessToken(credentials),
           SUBSCRIPTION_TRANSPORT_QUERY,
           {},
         )
@@ -306,7 +319,7 @@ export const runUploadDb = (
       return yield* Effect.gen(function* () {
         const startResult = yield* graphqlRequest<StartUploadDbResponse>(
           endpoint,
-          credentials.accessToken,
+          acquireAccessToken(credentials),
           START_UPLOAD_DB_MUTATION,
           {
             projectId,
@@ -343,6 +356,7 @@ export const runUploadDb = (
           executionEventSource,
           executionId,
           {
+            ...workloadExecutionPoll(endpoint, credentials, executionId),
             executionLabel: "database upload",
             timeoutMs: UPLOAD_WAIT_TIMEOUT_MS,
             heartbeatMs: UPLOAD_WAIT_HEARTBEAT_MS,
@@ -379,14 +393,14 @@ export const runUploadDb = (
         }
       }).pipe(Effect.ensuring(closeEventSource))
     }).pipe(
-      Effect.catchAll((error) => {
+      Effect.catch((error) => {
         if (applyStarted) {
           return Effect.fail(error)
         }
 
         return cleanupDatabaseUploadArtifact(
           endpoint,
-          credentials.accessToken,
+          acquireAccessToken(credentials),
           uploadRequest.fileId,
         ).pipe(Effect.flatMap(() => Effect.fail(error)))
       }),

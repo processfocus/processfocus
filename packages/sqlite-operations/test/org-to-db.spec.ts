@@ -1,7 +1,7 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
 
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema } from "effect"
 import { AuthenticationConfig } from "@pf/auth-config"
 import * as schema from "@pf/drizzle-sqlite"
 import {
@@ -21,7 +21,7 @@ import { describe, expect, it } from "bun:test"
 describe("storeOrganisation", () => {
   const RequestTimeTest = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
 
   const TestLayer = Layer.mergeAll(
@@ -30,7 +30,7 @@ describe("storeOrganisation", () => {
     DatabaseTest,
   )
 
-  type TestRequirements = Layer.Layer.Success<typeof TestLayer>
+  type TestRequirements = Layer.Success<typeof TestLayer>
 
   const runTest = <A, E>(
     test: Effect.Effect<A, E, TestRequirements>,
@@ -340,7 +340,7 @@ describe("storeOrganisation", () => {
         const send_welcome_pack = new Form(process, "send_welcome_pack", {
           role,
           form: () => ({
-            start_date: Schema.Date,
+            start_date: Schema.DateFromString,
           }),
         })
 
@@ -1344,7 +1344,7 @@ describe("storeOrganisation", () => {
           .values({
             sub: "test-user-sub",
             provider: "google",
-            lastLoggedIn: DateTime.unsafeNow(),
+            createdAt: DateTime.nowUnsafe(),
           })
           .returning({ id: schema.user.id })
 

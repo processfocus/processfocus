@@ -1,3 +1,6 @@
+import { makeRouter } from "../router"
+import { formValues } from "../util"
+
 /**
  * Configures a provider that supports pin code authentication. This is usually paired with the
  * `CodeUI`.
@@ -53,12 +56,8 @@
  * @packageDocumentation
  */
 
-import {
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
 import { Effect } from "effect"
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { generateUnbiasedDigits, timingSafeCompare } from "../random.js"
 import {
   type Provider,
@@ -188,12 +187,9 @@ export function CodeProvider<
         const request = yield* HttpServerRequest.HttpServerRequest
         const code = generate()
         const urlParams = yield* request.urlParamsBody.pipe(
-          Effect.catchAll(() => Effect.succeed([] as const)),
+          Effect.catch(() => Effect.succeed([] as const)),
         )
-        const fd = new Map<string, string>()
-        for (const [key, value] of urlParams) {
-          fd.set(key, value)
-        }
+        const fd = formValues(urlParams)
 
         const state = yield* options.getCookie<CodeProviderState>("provider")
         const action = fd.get("action")
@@ -243,10 +239,10 @@ export function CodeProvider<
         return yield* transition({ type: "start" }, fd)
       })
 
-      return HttpRouter.empty.pipe(
-        HttpRouter.get("/authorize", authorizeHandler),
-        HttpRouter.post("/authorize", postHandler),
-      )
+      return makeRouter([
+        HttpRouter.route("GET", "/authorize", authorizeHandler),
+        HttpRouter.route("POST", "/authorize", postHandler),
+      ])
     },
   }
 }

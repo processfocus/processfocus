@@ -2,14 +2,9 @@
 
 import { ClientError } from "graphql-request"
 import { useCallback, useState } from "react"
-import {
-  type FieldError,
-  type FormActionsContext,
-  type JsonSchemaRoot,
-  dynamicForm,
-} from "@pf/form"
-import type { ClientFormDefinition } from "@pf/form-client-representation/client-form-definition"
+import type { FieldError, FormActionsContext } from "@pf/form"
 import { Button } from "@pf/shadcn-components"
+import { ListSchemaForm } from "./list-schema-form"
 import {
   Dialog,
   DialogContent,
@@ -28,8 +23,6 @@ interface ListItemEditFormProps {
   updateInputTypeName: string | null
   deleteMutationName: string | null
   defaultValues: Record<string, unknown> | null
-  formDefinition: ClientFormDefinition | null
-  jsonSchema: JsonSchemaRoot | null
   /** Column field names from the list output (for response field selection) */
   outputFields: string[]
   /** Called when form is cancelled or submitted successfully */
@@ -41,8 +34,8 @@ interface ListItemEditFormProps {
 }
 
 /**
- * Edit form for a list item, using the same dynamic form system as
- * todo completion and process start forms.
+ * Edit a List item using its organisation-owned executable schema.
+ * The caller owns navigation and post-save data refresh.
  */
 export function ListItemEditForm({
   itemId,
@@ -52,8 +45,6 @@ export function ListItemEditForm({
   updateInputTypeName,
   deleteMutationName,
   defaultValues,
-  formDefinition,
-  jsonSchema,
   outputFields,
   onClose,
   onSaved,
@@ -72,7 +63,6 @@ export function ListItemEditForm({
         return [{ field: "", message: "This item is read-only." }]
       }
 
-      // Build the GraphQL mutation dynamically
       const fieldsSelection = outputFields.join("\n            ")
 
       const mutation = `mutation UpdateListItem($id: String!, $input: ${updateInputTypeName}!) {
@@ -191,15 +181,17 @@ export function ListItemEditForm({
     [deleteMutationName, updateInputTypeName, updateMutationName],
   )
 
-  const form = dynamicForm({
-    draftId: `list-item-edit-${listPath}-${itemId}`,
-    formDefinition,
-    defaultValues,
-    handleSubmit,
-    jsonSchema,
-    renderActions,
-    stepPath: listPath,
-  })
+  const formPath = `${listPath}/edit`
+  const form = (
+    <ListSchemaForm
+      formPath={formPath}
+      draftId={`list-item-edit-${listPath}-${itemId}`}
+      defaultValues={defaultValues ?? {}}
+      onSubmit={handleSubmit}
+    >
+      {renderActions}
+    </ListSchemaForm>
+  )
 
   return (
     <>
@@ -208,11 +200,13 @@ export function ListItemEditForm({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm Delete</DialogTitle>
-            <DialogDescription>
-              <p>
-                Delete item {itemId} from {listName}?
-              </p>
-              <p>This action cannot be undone.</p>
+            <DialogDescription asChild>
+              <div>
+                <p>
+                  Delete item {itemId} from {listName}?
+                </p>
+                <p>This action cannot be undone.</p>
+              </div>
             </DialogDescription>
           </DialogHeader>
           {deleteError && (

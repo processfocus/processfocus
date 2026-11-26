@@ -1,9 +1,5 @@
-import {
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "@effect/platform"
-import { Cause, Config, Effect, Layer, Option, Runtime } from "effect"
+import { Cause, Config, Effect, Layer, Option } from "effect"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { CedarReloadNotifierService } from "@pf/auth-local-cedar"
 import { getEffectiveFrontendBaseUrl } from "@pf/frontend-endpoints/port-files"
 
@@ -18,11 +14,11 @@ export const HttpCedarReloadNotifierLive = Layer.effect(
   CedarReloadNotifierService,
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient
-    const runtime = yield* Effect.runtime()
+    const runtime = yield* Effect.context()
 
     // Get the revalidation secret - required for the frontend endpoint
     const revalidateSecret = yield* Config.option(
-      Config.string("REVALIDATE_SECRET"),
+      Config.String("REVALIDATE_SECRET"),
     )
 
     if (Option.isNone(revalidateSecret)) {
@@ -81,7 +77,7 @@ export const HttpCedarReloadNotifierLive = Layer.effect(
         }).pipe(
           // HTTP request and response failures are handled above. This catch is
           // only for unexpected setup failures such as JSON body encoding.
-          Effect.catchAllCause((cause) =>
+          Effect.catchCause((cause) =>
             Effect.logWarning(
               `Failed to prepare frontend cache invalidation request (non-fatal): ${Cause.pretty(cause)}`,
             ),
@@ -89,7 +85,7 @@ export const HttpCedarReloadNotifierLive = Layer.effect(
         )
 
         // Fire and forget using the captured runtime - don't block the Cedar reload
-        Runtime.runFork(runtime, effect)
+        Effect.runForkWith(runtime)(effect)
       },
     }
   }),

@@ -1,7 +1,9 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
+
 import { expect, it } from "@effect/vitest"
 import { eq, sql } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-postgres"
 import {
   DraftProcessExecutionQueries,
@@ -11,29 +13,31 @@ import {
   UserDetails,
   type UserDetailsValue,
 } from "@pf/graphql-db-operations"
+import { DbOperations } from "@pf/org-to-db/db-operations"
+import { RequestTime } from "@pf/request-time"
 import { PostgresDraftProcessExecutionQueriesLive } from "../src/lib/draft-process-execution"
 import { PostgresExecutionQueriesLive } from "../src/lib/execution-queries"
+import { PostgresDbOperationsLive } from "../src/lib/org-to-db"
 import { PostgresProcessCollectionQueriesLive } from "../src/lib/query-processes"
 import { PostgresTodoQueriesLive } from "../src/lib/todo-queries"
 import { PostgresTest, TypedPostgresDrizzle } from "./postgres-test"
 
 const userId = "usr-checkpoint"
-const timestamp = DateTime.unsafeMake("2040-01-01T00:00:00.000Z")
+const timestamp = DateTime.makeUnsafe("2040-01-01T00:00:00.000Z")
 const checkpointTimestamp = sql`TIMESTAMPTZ '2026-07-23T00:00:00.000107Z'`
 const replicationHeadTimestamp = sql`TIMESTAMPTZ '2026-07-24T00:00:00.000Z'`
 const completionTimestamp = sql`TIMESTAMPTZ '2026-07-25T00:00:00.000Z'`
 const incrementalStartMillis = Date.parse("2026-07-23T12:00:00.000Z")
 const replicationHeadMillis = Date.parse("2026-07-24T00:00:00.000Z")
 const completionMillis = Date.parse("2026-07-25T00:00:00.000Z")
-const UserDetailsTest = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake({
-    by: "checkpoint@example.com",
-    id: userId,
-  }) as FiberRef.FiberRef<UserDetailsValue>,
-)
+const UserDetailsTest = Layer.succeed(UserDetails, {
+  by: "checkpoint@example.com",
+  id: userId,
+} as UserDetailsValue)
 const TestLayer = Layer.provideMerge(
   Layer.mergeAll(
+    PostgresDbOperationsLive,
+    Layer.succeed(RequestTime, timestamp),
     PostgresDraftProcessExecutionQueriesLive,
     PostgresExecutionQueriesLive,
     PostgresProcessCollectionQueriesLive,
@@ -49,7 +53,7 @@ const seedCollections = Effect.gen(function* () {
     id: userId,
     provider: "test",
     sub: "checkpoint",
-    lastLoggedIn: timestamp,
+    createdAt: timestamp,
   })
   yield* db.insert(schema.orgUnit).values({
     id: "ou-checkpoint",
@@ -192,12 +196,46 @@ it.layer(TestLayer, { timeout: "60 seconds" })(
           )
           expect(processA.map(({ id }) => id)).toEqual(["prc-checkpoint-a"])
           expect(processB.map(({ id }) => id)).toEqual(["prc-checkpoint-b"])
+          // Live authorization reads the same current metadata without joining
+          // execution statistics or the collection-wide start-step view.
+          expect(
+            yield* processes.getProcessMetadata(["prc-checkpoint-a"]),
+          ).toMatchObject([
+            {
+              id: "prc-checkpoint-a",
+              name: "Process a",
+              path: "/checkpoint/a",
+              startStepPath: "/checkpoint/a/start",
+              deleted: false,
+              updatedAt: processA[0]!.updatedAt,
+            },
+          ])
           expect(
             yield* processes.pullProcess(
               { id: processB[0]!.id, updatedAt: processB[0]!.updatedAt },
               1,
             ),
           ).toEqual([])
+
+          // Event revisions must pass the whole collection head, including when
+          // the next changed process has a lower ID and an older revision.
+          const sqlClient = yield* SqlClient.SqlClient
+          let processCheckpoint = {
+            id: processB[0]!.id,
+            updatedAt: processB[0]!.updatedAt,
+          }
+          for (const id of ["prc-checkpoint-b", "prc-checkpoint-a"]) {
+            yield* sqlClient.withTransaction(
+              processes.advanceProcessRevision(id),
+            )
+            const changed = yield* processes.pullProcess(processCheckpoint, 1)
+            expect(changed.map((row) => row.id)).toEqual([id])
+            expect(Number(changed[0]!.updatedAt)).toBeGreaterThan(
+              Number(processCheckpoint.updatedAt),
+            )
+            processCheckpoint = { id, updatedAt: changed[0]!.updatedAt }
+          }
+          expect(yield* processes.pullProcess(processCheckpoint, 1)).toEqual([])
 
           const executions = yield* ExecutionQueries
           const executionA = yield* executions.pullExecution(null, 1)
@@ -380,7 +418,7 @@ it.layer(TestLayer)("execution history window", (it) => {
           .update(schema.processExecution)
           .set({
             finishedAt: timestamp,
-            updatedAt: DateTime.unsafeMake("2026-09-03T00:00:00Z"),
+            updatedAt: DateTime.makeUnsafe("2026-09-03T00:00:00Z"),
           })
           .where(eq(schema.processExecution.id, "pex-checkpoint-a"))
         const completion = yield* executions.pullExecution(
@@ -395,3 +433,82 @@ it.layer(TestLayer)("execution history window", (it) => {
       }),
   )
 })
+
+it.layer(TestLayer, { timeout: "60 seconds" })(
+  "concurrent Process revisions",
+  (it) => {
+    it.effect(
+      "pulls a lower-ID event committed after another event or import",
+      () =>
+        Effect.gen(function* () {
+          yield* seedCollections
+          const client = yield* SqlClient.SqlClient
+          const processes = yield* ProcessCollectionQueries
+          const imports = yield* DbOperations
+          for (const firstWriter of ["event", "import"]) {
+            const firstReady = yield* Deferred.make<void>()
+            const commitFirst = yield* Deferred.make<void>()
+            const secondReady = yield* Deferred.make<void>()
+            const commitSecond = yield* Deferred.make<void>()
+            const first = yield* Effect.forkScoped(
+              client.withTransaction(
+                Effect.gen(function* () {
+                  if (firstWriter === "event") {
+                    yield* processes.advanceProcessRevision("prc-checkpoint-b")
+                  } else {
+                    const revision =
+                      yield* imports.nextProcessReplicationRevision
+                    yield* imports.setProcessReplicationRevision(revision)
+                  }
+                  yield* Deferred.succeed(firstReady, undefined)
+                  yield* Deferred.await(commitFirst)
+                }),
+              ),
+            )
+            yield* Deferred.await(firstReady).pipe(
+              Effect.raceFirst(Fiber.join(first)),
+            )
+            const second = yield* Effect.forkScoped(
+              client.withTransaction(
+                Effect.gen(function* () {
+                  yield* client`SET LOCAL application_name = 'process-revision-regression'`
+                  yield* processes.advanceProcessRevision("prc-checkpoint-a")
+                  yield* Deferred.succeed(secondReady, undefined)
+                  yield* Deferred.await(commitSecond)
+                }),
+              ),
+            )
+            // Wait for the actual concurrent allocation: it either finishes (the
+            // regression) or blocks behind the first writer. No timing assumptions.
+            while (!(yield* Deferred.isDone(secondReady))) {
+              const waiting = yield* client`
+            SELECT 1 FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND application_name = 'process-revision-regression'
+              AND wait_event_type = 'Lock'`
+              if (waiting.length > 0) break
+              yield* Effect.yieldNow
+            }
+            yield* Deferred.succeed(commitFirst, undefined)
+            yield* Fiber.join(first)
+            const page = yield* processes.pullProcess(null, 50)
+            const head = page.at(-1)!
+            expect(head.id).toBe("prc-checkpoint-b")
+            yield* Deferred.await(secondReady).pipe(
+              Effect.raceFirst(Fiber.join(second)),
+            )
+            yield* Deferred.succeed(commitSecond, undefined)
+            yield* Fiber.join(second)
+            const changed = yield* processes.pullProcess(
+              { id: head.id, updatedAt: head.updatedAt },
+              50,
+            )
+            expect(changed.map(({ id }) => id)).toEqual(["prc-checkpoint-a"])
+            expect(Number(changed[0]!.updatedAt)).toBeGreaterThan(
+              Number(head.updatedAt),
+            )
+          }
+        }).pipe(Effect.scoped),
+    )
+  },
+)

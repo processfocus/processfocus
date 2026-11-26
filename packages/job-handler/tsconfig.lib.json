@@ -20,7 +20,10 @@
       "path": "../request-time/tsconfig.lib.json"
     },
     {
-      "path": "../queue-service/tsconfig.lib.json"
+      "path": "../public-completion/tsconfig.lib.json"
+    },
+    {
+      "path": "../process-execution/tsconfig.lib.json"
     },
     {
       "path": "../process/tsconfig.lib.json"
@@ -32,16 +35,7 @@
       "path": "../graphql-db-operations/tsconfig.lib.json"
     },
     {
-      "path": "../document-store-service/tsconfig.lib.json"
-    },
-    {
       "path": "../db-info/tsconfig.lib.json"
-    },
-    {
-      "path": "../business-metrics/tsconfig.lib.json"
-    },
-    {
-      "path": "../business-calendar/tsconfig.lib.json"
     },
     {
       "path": "../sqlite-operations/tsconfig.lib.json"

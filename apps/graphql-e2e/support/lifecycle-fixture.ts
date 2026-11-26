@@ -15,6 +15,10 @@ export const prepareLifecycleOrganisation = async (
       join(root, "examples/demo/test/fixtures/without-waiting-lifecycle.ts"),
       join(org, "src/lifecycle.ts"),
     )
+    await cp(
+      join(root, "examples/demo/test/fixtures/lifecycle-forms.ts"),
+      join(org, "src/lifecycle-forms.ts"),
+    )
     await appendFile(
       join(org, "src/org.ts"),
       '\nimport { addLifecycleFixtures } from "./lifecycle"\naddLifecycleFixtures(org, employee)\n',
@@ -25,6 +29,8 @@ export const prepareLifecycleOrganisation = async (
 // Exercise caller-specific execution capabilities without changing demo policy.
 permit(principal == PF::ProviderUser::"finance-manager@example.com", action == PF::Action::"abandon", resource is PF::Step)
 when { resource in PF::Process::"/finance/purchase-request" };
+permit(principal is PF::ProviderUser, action == PF::Action::"abandon", resource is PF::Step)
+when { principal in PF::Role::"/GraphQLE2EFinance" && resource in PF::Process::"/finance/purchase-request" };
 // Only the disposable acceptance organisation uses these ordinary-work grants.
 permit(principal, action == PF::Action::"view", resource is PF::Execution)
 when { principal in PF::Role::"/Employee" && (resource in PF::Process::"/lifecycle" || resource in PF::Process::"/handled" || resource in PF::Process::"/invalid-schedule") };

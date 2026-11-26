@@ -3,10 +3,9 @@ import { buildSchema } from "graphql"
 import { type EventHubService, createEventHubLayer } from "./event-hub"
 import { describe, expect, it } from "bun:test"
 
-class Events extends Context.Tag("event-hub-test")<
-  Events,
-  EventHubService<number>
->() {}
+class Events extends Context.Service<Events, EventHubService<number>>()(
+  "event-hub-test",
+) {}
 
 const schema = buildSchema("type Query { value: Int }")
 

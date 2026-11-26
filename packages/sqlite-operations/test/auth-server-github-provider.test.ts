@@ -50,7 +50,7 @@ const runGithubLogin = (options: {
       const now = yield* DateTime.now
       const [user] = yield* db
         .insert(schema.user)
-        .values({ provider: "github", sub: subject, lastLoggedIn: now })
+        .values({ provider: "github", sub: subject, createdAt: now })
         .returning()
       if (!user) throw new Error("Failed to create existing user")
       yield* db.insert(schema.providerUser).values({

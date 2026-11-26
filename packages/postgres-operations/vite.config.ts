@@ -1,13 +1,10 @@
+import { nxReadySignal } from "@nx/vite/plugins/nx-ready-signal.plugin"
 import { defineConfig } from "vite"
 
 export default defineConfig(() => ({
   root: import.meta.dirname,
   cacheDir: "../../node_modules/.vite/packages/postgres-operations",
-  plugins: [],
-  // Uncomment this if you are using workers.
-  // worker: {
-  //  plugins: [ nxViteTsPaths() ],
-  // },
+  plugins: [nxReadySignal()],
   test: {
     name: "@pf/postgres-operations",
     watch: false,

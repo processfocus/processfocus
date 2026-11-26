@@ -5,20 +5,24 @@ import { existsSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, relative } from "node:path"
 import { expect } from "@playwright/test"
-import { getEffectiveAuthUrl } from "@pf/frontend-endpoints/port-files"
+import {
+  getEffectiveAuthUrl,
+  getEffectiveGraphqlEndpoint,
+} from "@pf/frontend-endpoints/port-files"
 import {
   checkAndDismissDelegationSecret,
   requireDelegationArtifactSafety,
 } from "./delegated-access-artifacts"
 import { Given, Then, When } from "./fixtures"
 
-const invitationEmail =
-  process.env["FRONTEND_E2E_INVITATION_EMAIL"] ?? "settings-e2e@example.com"
 const ordinaryEmail = "employee-2@example.com"
 
 Given(
-  "I register a real virtual passkey in the disposable delegation organisation",
-  async ({ page, context, baseURL, trace, screenshot, video }) => {
+  "I register a real virtual passkey for {string} in the disposable delegation organisation",
+  async (
+    { page, context, baseURL, trace, screenshot, video },
+    invitationEmail: string,
+  ) => {
     requireDelegationArtifactSafety({ trace, screenshot, video })
     const org = process.env["FRONTEND_E2E_DISPOSABLE_ORG"]
     if (!org || !baseURL || new URL(baseURL).hostname !== "localhost") {
@@ -35,6 +39,31 @@ Given(
     const databasePath = join(org, "db/pf.db")
     if (!existsSync(databasePath))
       throw new Error("Import the disposable organisation first")
+    // Dashboard readiness is enforced by Playwright's webServer; also verify
+    // both backend boundaries before consuming a one-time Invitation.
+    await expect
+      .poll(
+        async () =>
+          (
+            await context.request.get(
+              `${getEffectiveAuthUrl()}/.well-known/jwks.json`,
+            )
+          ).status(),
+        { timeout: 30_000 },
+      )
+      .toBe(200)
+    await expect
+      .poll(
+        async () => {
+          const response = await context.request.post(
+            getEffectiveGraphqlEndpoint(),
+            { data: { query: "{ __typename }" } },
+          )
+          return response.json()
+        },
+        { timeout: 30_000 },
+      )
+      .toMatchObject({ errors: [{ message: "Unauthenticated" }] })
     const cdp = await context.newCDPSession(page)
     await cdp.send("WebAuthn.enable")
     await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -76,7 +105,10 @@ Given(
     if (!registrationUrl)
       throw new Error("CLI did not return a Registration Link")
     try {
-      await page.goto(registrationUrl)
+      // Evaluate keeps the bearer URL out of Playwright's navigation step title.
+      await page.evaluate((url) => {
+        window.location.href = url
+      }, registrationUrl)
     } catch {
       // Navigation errors otherwise embed the bearer Registration Link in reports.
       throw new Error("Invitation registration navigation failed")
@@ -203,7 +235,8 @@ Then(
       throw new Error(
         "This journey requires a localhost BASE_URL and disposable organisation.",
       )
-    await context.clearCookies()
+    await page.goto(`${baseURL}/api/auth/logout`)
+    await expect(page).toHaveURL(/\/login(?:\?|$)/)
     const output = execFileSync(
       "bun",
       [
@@ -231,7 +264,10 @@ Then(
     if (!registrationUrl)
       throw new Error("CLI did not return an ordinary-user Registration Link")
     try {
-      await page.goto(registrationUrl)
+      // Evaluate keeps the bearer URL out of Playwright's navigation step title.
+      await page.evaluate((url) => {
+        window.location.href = url
+      }, registrationUrl)
     } catch {
       throw new Error("Ordinary-user registration navigation failed")
     }
@@ -252,12 +288,12 @@ Then(
     if (!accessCookie) throw new Error("Ordinary-user access cookie is missing")
     const authorization = { Authorization: `Bearer ${accessCookie.value}` }
     const list = await context.request.get(
-      `${getEffectiveAuthUrl()}/delegations`,
+      new URL("/delegations", getEffectiveGraphqlEndpoint()).href,
       { headers: authorization },
     )
     expect(list.status()).toBe(403)
     const create = await context.request.post(
-      `${getEffectiveAuthUrl()}/delegations`,
+      new URL("/delegations", getEffectiveGraphqlEndpoint()).href,
       {
         headers: authorization,
         data: { name: "unauthorized-browser-token", lifetimeDays: 1 },

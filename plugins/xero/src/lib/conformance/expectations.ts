@@ -65,6 +65,26 @@ export const expectSharedScenarioResults = (
   expect(results.unknownItem.retryable).toBe(false)
   expect(results.unknownItem.fields).toEqual(["ItemCode"])
 
+  expect(results.multiLine.invoice).toMatchObject({
+    type: "ACCREC",
+    status: "AUTHORISED",
+    currency: "NZD",
+    lineCount: 2,
+    total: "23.30",
+    totalTax: "3.00",
+  })
+  expect(results.multiLine.lines).toMatchObject([
+    { itemCode: items.zeroTax, quantity: 3, unitAmount: "0.10" },
+    { itemCode: items.gst, quantity: 2, unitAmount: "11.50" },
+  ])
+  expect(
+    results.multiLine.lines.every((line) => line.description.trim() !== ""),
+  ).toBe(true)
+  expect(results.multiLineReplay.invoiceId).toBe(results.multiLine.invoiceId)
+  expect(results.multiLineReplay.lines).toEqual(results.multiLine.lines)
+  expect(results.partialLineConflict.code).toBe("intent_conflict")
+  expect(results.partialLineConflict.retryable).toBe(false)
+
   expect(requestedUrls.some((url) => url.includes("/Email"))).toBe(false)
 
   const evidence = evidenceJson({

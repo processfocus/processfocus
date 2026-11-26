@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
+import { createClient } from "@pf/openauth/client"
+import {
+  InvalidAccessTokenError,
+  InvalidRefreshTokenError,
+  InvalidSubjectError,
+  OAuthMetadataFetchError,
+} from "@pf/openauth/error"
 import { mock } from "bun:test"
 
 mock.module("server-only", () => ({}))
@@ -7,6 +14,7 @@ import { NextRequest } from "next/server"
 import * as authClient from "../lib/auth/client"
 import { isPublicPath } from "../lib/auth/config"
 
+const sessionAdmission = await import("../lib/auth/ssr-session")
 const { proxy } = await import("../proxy")
 
 function createRequest(
@@ -34,9 +42,104 @@ function createRequest(
 }
 
 describe("proxy", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   beforeEach(() => {
     vi.restoreAllMocks()
   })
+
+  test.each([
+    {
+      label: "invalid access token",
+      err: new InvalidAccessTokenError(),
+      errors: 0,
+    },
+    {
+      label: "invalid refresh token",
+      err: new InvalidRefreshTokenError(),
+      errors: 0,
+    },
+    { label: "invalid subject", err: new InvalidSubjectError(), errors: 0 },
+    { label: "session admission rejection", err: undefined, errors: 0 },
+    {
+      label: "OAuth metadata socket failure",
+      err: new OAuthMetadataFetchError(
+        "https://issuer.example.com/.well-known/oauth-authorization-server",
+        "socket failure",
+        new Error("socket closed"),
+      ),
+      errors: 1,
+    },
+    {
+      label: "unexpected error with credential-like text",
+      err: new Error("Invalid access token"),
+      errors: 1,
+    },
+  ])(
+    "logs $label at the appropriate severity and preserves cleanup",
+    async ({ err, errors }) => {
+      const client = createClient({
+        clientID: "proxy-test",
+        issuer: "https://issuer.example.com",
+      })
+      vi.spyOn(authClient, "getAuthClient").mockReturnValue(client)
+      vi.spyOn(client, "verify").mockResolvedValue(
+        err
+          ? { err }
+          : {
+              aud: "proxy-test",
+              subject: {
+                type: "providerUser",
+                properties: {
+                  userId: "user",
+                  email: "user@example.com",
+                  orgUnitId: "org",
+                  orgUnitPath: "/",
+                  roles: [],
+                },
+              },
+            },
+      )
+      vi.spyOn(sessionAdmission, "acceptVerifiedSession").mockResolvedValue(
+        null,
+      )
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined)
+
+      const response = await proxy(
+        new NextRequest("https://example.com/to-dos?filter=urgent", {
+          headers: {
+            host: "example.com",
+            cookie: "access_token=access; refresh_token=refresh",
+          },
+        }),
+      )
+
+      expect(response.status).toBe(307)
+      expect(response.headers.get("location")).toBe(
+        "https://example.com/login?redirect=%2Fto-dos%3Ffilter%3Durgent",
+      )
+      expect(await response.text()).toBe("")
+      expect(response.cookies.getAll()).toEqual([
+        { name: "access_token", value: "", path: "/", expires: new Date(0) },
+        { name: "refresh_token", value: "", path: "/", expires: new Date(0) },
+      ])
+      expect(consoleError).toHaveBeenCalledTimes(errors)
+      if (errors) {
+        expect(consoleError).toHaveBeenCalledWith(
+          "[proxy] Token verification FAILED, redirecting to /login",
+          expect.objectContaining({
+            error: err,
+            pathname: "/to-dos",
+            hadRefreshToken: true,
+          }),
+        )
+      }
+    },
+  )
 
   test.each(["GET", "POST"])(
     "lets protected cli-auth own stale-session handling on %s",

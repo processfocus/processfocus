@@ -93,10 +93,10 @@ const fetchCleanup = (accessToken: string | null) =>
 /**
  * Retry schedule: exponential backoff (500ms, 1s, 2s) up to 3 retries.
  */
-const retrySchedule = Schedule.intersect(
+const retrySchedule = Schedule.max([
   Schedule.exponential("500 millis"),
   Schedule.recurs(3),
-)
+])
 
 /**
  * Call cleanupExecutions mutation with retry logic for transient errors.

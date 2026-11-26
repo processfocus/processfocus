@@ -14,8 +14,8 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "chevrotain": "^12.0.0",
-    "effect": "^3.22.2"
+    "chevrotain": "^13.2.0",
+    "effect": "4.1.4"
   },
   "license": "SEE LICENSE IN LICENSE.md"
 }

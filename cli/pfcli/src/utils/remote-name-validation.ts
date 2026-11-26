@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import type { ProjectWorkloadPermission } from "@pf/auth-config/runtime"
 import { CliError } from "../errors"
 import { graphqlRequestWithCredentials } from "./graphql-client"
 
@@ -204,6 +205,7 @@ const validateKnownName = (options: {
 export const ensureKnownStageNames = (
   projectId: string,
   stageNames: ReadonlyArray<string>,
+  purpose?: ProjectWorkloadPermission,
 ): Effect.Effect<void, CliError> =>
   Effect.gen(function* () {
     const response =
@@ -211,6 +213,7 @@ export const ensureKnownStageNames = (
         LIST_PROJECT_STAGES_QUERY,
         { projectId },
         { timeoutMs: VALIDATION_LOOKUP_TIMEOUT_MS },
+        purpose,
       ).pipe(Effect.catchTag("CliError", () => Effect.void))
 
     if (!response) {
@@ -238,6 +241,7 @@ export const ensureKnownStageNames = (
 export const ensureKnownEnvironmentName = (
   projectId: string,
   environmentName: string,
+  purpose?: ProjectWorkloadPermission,
 ): Effect.Effect<void, CliError> =>
   Effect.gen(function* () {
     if (INTERNAL_ENVIRONMENT_ID_PATTERN.test(environmentName)) {
@@ -249,6 +253,7 @@ export const ensureKnownEnvironmentName = (
         LIST_PROJECT_ENVIRONMENTS_QUERY,
         { projectId },
         { timeoutMs: VALIDATION_LOOKUP_TIMEOUT_MS },
+        purpose,
       ).pipe(Effect.catchTag("CliError", () => Effect.void))
 
     if (!response) {

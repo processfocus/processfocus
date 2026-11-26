@@ -1,0 +1,66 @@
+---
+title: Charts
+---
+
+## StatsView
+
+Use the `StatsView` construct from `@pf/process` to define charts.
+
+For example, add a **Web order timeline** so Sales can see when orders
+were received, packed, and shipped:
+
+```typescript
+import { Organisation, Role, StatsView } from "@pf/process"
+
+export const org = new Organisation({ name: "Demo Store" })
+const sales = new Role(org, "Sales")
+
+new StatsView(org, "web-order-timeline", {
+  name: "Web order timeline",
+  purpose: "See how long orders spend at each stage",
+  roles: [sales],
+  renderer: "timeline",
+  queryName: "timelineWebOrders",
+})
+```
+
+`renderer: "timeline"` tells the Dashboard how to display the data.
+`queryName` points to a field on your organisation's GraphQL `Query`;
+`StatsView` does not create that field or load the orders for you.
+Define `timelineWebOrders` to return an `items` array with one item per
+order. Each item includes `id`, `label`, `currentStatus`, `startDate`,
+`endDate`, and `segments`. Each segment has a `status`, `startDate`, and
+`endDate`. Use a null end date for a stage that is still in progress.
+
+For example, a resolver could return this data for an order that is
+currently being packed:
+
+```typescript
+{
+  items: [
+    {
+      id: "ORD-101",
+      label: "Order ORD-101",
+      currentStatus: "Packing",
+      startDate: "2026-11-25T09:00:00Z",
+      endDate: null,
+      segments: [
+        {
+          status: "Received",
+          startDate: "2026-11-25T09:00:00Z",
+          endDate: "2026-11-25T09:15:00Z",
+        },
+        {
+          status: "Packing",
+          startDate: "2026-11-25T09:15:00Z",
+          endDate: null,
+        },
+      ],
+    },
+  ],
+}
+```
+
+The `roles` option controls access to the view. Also check permission
+in the GraphQL resolver before returning order data, since callers can
+request the query directly.

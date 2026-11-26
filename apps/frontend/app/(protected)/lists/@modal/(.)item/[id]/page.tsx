@@ -1,6 +1,8 @@
 import { Suspense } from "react"
 import ListDetailModalClient from "./client"
 
+export const instant = false
+
 interface PageProps {
   params: Promise<{ id: string }>
   searchParams: Promise<{ list?: string }>

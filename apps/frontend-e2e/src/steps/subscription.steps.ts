@@ -41,16 +41,10 @@ const getTodoCardWithDoAction = (page: Page, stepName: string) =>
     .first()
 
 Given(
-  "I am authenticated as provider user {string} with roles {string} using client {string}",
-  async (
-    { authenticateAsProviderUser },
-    email: string,
-    rolesStr: string,
-    clientId: string,
-  ) => {
-    // Parse comma-separated roles string into array
+  "I am authenticated as provider user {string} with roles {string}",
+  async ({ authenticateAsProviderUser }, email: string, rolesStr: string) => {
     const roles = rolesStr.split(",").map((role) => role.trim())
-    await authenticateAsProviderUser(email, roles, clientId)
+    await authenticateAsProviderUser(email, roles)
   },
 )
 
@@ -70,7 +64,6 @@ When("I start the {string} process", async ({ page }, processName: string) => {
     })
     .first()
 
-  // Click "Start process" link within the card
   const startLink = processCard.locator('a:has-text("Start process")').first()
   await startLink.click()
 
@@ -98,22 +91,15 @@ When("I start the {string} process", async ({ page }, processName: string) => {
 When(
   "I fill in the purchase request form with item {string} and value {string}",
   async ({ page }, item: string, value: string) => {
-    // The form fields are in groups with "Item" and "Value" text
-    // Use getByRole with name since labels may not be proper <label> elements
-    const itemGroup = appDialog(page).locator('[role="group"]', {
-      hasText: "Item",
-    })
-    const valueGroup = appDialog(page).locator('[role="group"]', {
-      hasText: "Value",
-    })
-
-    await itemGroup.locator('input, [role="textbox"]').fill(item)
-    await valueGroup.locator('input, [role="textbox"]').fill(value)
+    const dialog = appDialog(page)
+    await dialog.getByRole("textbox", { name: "Item", exact: true }).fill(item)
+    await dialog
+      .getByRole("textbox", { name: "Value", exact: true })
+      .fill(value)
   },
 )
 
 When("I submit the process form", async ({ page }) => {
-  // Click Submit button from process-form-actions.tsx
   await page.getByRole("button", { name: "Submit" }).click()
 
   // Wait for either dialog to close OR navigation away from the form
@@ -197,7 +183,6 @@ Then(
 When(
   "I sort the todo queue by {string}",
   async ({ page }, sortName: string) => {
-    // The current To-Dos sort control is a native select.
     await page.getByLabel("Sort").selectOption(sortName)
   },
 )

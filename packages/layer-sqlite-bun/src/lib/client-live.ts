@@ -1,7 +1,7 @@
-import { SqlClient, type SqlError } from "@effect/sql"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
-import { Config, Context, Effect, Layer } from "effect"
-import type { ConfigError } from "effect/ConfigError"
+import { Config, Context, Effect, Layer, Schema } from "effect"
+import type { ConfigError } from "effect/Config"
+import { SqlClient, type SqlError } from "effect/sql"
 import { DatabaseConnectionInfo, DatabasePathConfig } from "@pf/db-info"
 
 export interface SqliteLiveOptions {
@@ -18,11 +18,16 @@ const DEFAULT_BUSY_TIMEOUT_MS = 500
  * Ensures the path is not empty.
  */
 const ValidatedDatabasePathConfig = DatabasePathConfig.pipe(
-  Config.validate({
-    message:
-      "Database path cannot be empty. Set SQLITE_DATABASE_PATH or PF_ORG environment variable.",
-    validation: (path) => path.trim().length > 0,
-  }),
+  Config.mapEffect((path) =>
+    Schema.decodeUnknownEffect(
+      Schema.String.check(
+        Schema.makeFilter((value) => value.trim().length > 0, {
+          message:
+            "Database path cannot be empty. Set SQLITE_DATABASE_PATH or PF_ORG environment variable.",
+        }),
+      ),
+    )(path).pipe(Effect.mapError((cause) => new Config.ConfigError(cause))),
+  ),
 )
 
 /**
@@ -42,6 +47,38 @@ const runPragmas =
   (ctx: Context.Context<SqlClient.SqlClient>) =>
     Effect.gen(function* () {
       const sql = Context.get(ctx, SqlClient.SqlClient)
+      // Preserve v3's deferred BEGIN. v4 defaults to IMMEDIATE, which reserves
+      // the writer even for the existing read-only publication snapshots.
+      const withTransaction = SqlClient.makeWithTransaction({
+        transactionService: sql.transactionService,
+        spanAttributes: [["db.system.name", "sqlite"]],
+        acquireConnection: (restore) => restore(sql.reserve),
+        begin: (connection) =>
+          connection.executeUnprepared("BEGIN DEFERRED", [], undefined),
+        commit: (connection) =>
+          connection.executeUnprepared("COMMIT", [], undefined),
+        rollback: (connection) =>
+          connection.executeUnprepared("ROLLBACK", [], undefined),
+        savepoint: (connection, id) =>
+          connection.executeUnprepared(
+            `SAVEPOINT effect_sql_${id}`,
+            [],
+            undefined,
+          ),
+        releaseSavepoint: (connection, id) =>
+          connection.executeUnprepared(
+            `RELEASE SAVEPOINT effect_sql_${id}`,
+            [],
+            undefined,
+          ),
+        rollbackSavepoint: (connection, id) =>
+          connection.executeUnprepared(
+            `ROLLBACK TO SAVEPOINT effect_sql_${id}`,
+            [],
+            undefined,
+          ),
+      })
+      Object.assign(sql, { withTransaction })
       const busyTimeout = options?.busy_timeout ?? DEFAULT_BUSY_TIMEOUT_MS
       yield* sql`PRAGMA journal_mode = WAL`
       yield* sql`PRAGMA foreign_keys = ON`

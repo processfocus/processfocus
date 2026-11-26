@@ -61,8 +61,7 @@ export const POST = async (request: NextRequest) => {
   }
 
   const client = createServerGraphqlClient(frontendJwt)
-  const hasInput =
-    entry.inputTypeName.length > 0 && Object.keys(values).length > 0
+  const hasInput = entry.inputTypeName.length > 0
   const mutation = hasInput
     ? `
       mutation SubmitEmbeddedForm($input: ${entry.inputTypeName}!) {

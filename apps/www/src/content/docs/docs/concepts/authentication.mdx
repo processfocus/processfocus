@@ -3,18 +3,26 @@ title: Authentication
 description: Understanding authentication in Process Focus.
 ---
 
-Authentication verifies the identity of users accessing the system.
+Authentication is verifying the identity of a user or system. Are you
+who you say you are? Authorisation is deciding what an authenticated
+user or system can do.
 
-## Supported Methods
+## Supported Authentication Methods
 
-- **Email/Password** - Traditional credential-based authentication
-- **OAuth 2.0** - Social login and enterprise SSO
-- **API Keys** - For service-to-service communication
+- **Single-Sign-On**: recommended for businesses. Connect your user
+  directory such as Google Workspace, or Microsoft Entra (Active
+  Directory). This has important benefits: you do not have to provision
+  users in Process Focus, and if an employee leaves, they will lose
+  access to your Process Focus instance as soon as their identity is
+  deactivated.
+- **Passkeys**: use if you do not have a central user directory. Passkeys in Process Focus are easier than passwords, and passkeys are resistant to phishing.
+- **API Secrets**: For service-to-service communication.
 
-## Session Management
+Process Focus does not support email-and-password authentication.
 
-Sessions are managed securely with:
+## Identity providers
 
-- JWT tokens for stateless authentication
-- Refresh token rotation
-- Configurable session expiry
+We use the term identity provider for a service that provides
+identities. Google Workspace and Entra are examples of such providers.
+
+Any OAuth2 service should work with Process Focus.

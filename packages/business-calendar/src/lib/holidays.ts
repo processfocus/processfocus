@@ -69,12 +69,12 @@ export type EasterRelativeHoliday = typeof EasterRelativeHoliday.Type
 /**
  * Union of all holiday types.
  */
-export const Holiday = Schema.Union(
+export const Holiday = Schema.Union([
   FixedHoliday,
   NthWeekdayHoliday,
   LastWeekdayHoliday,
   EasterRelativeHoliday,
-)
+])
 export type Holiday = typeof Holiday.Type
 
 /**
@@ -82,7 +82,7 @@ export type Holiday = typeof Holiday.Type
  * Used for caching and display.
  */
 export const HolidayInstance = Schema.Struct({
-  date: Schema.DateTimeUtcFromSelf,
+  date: Schema.DateTimeUtc,
   name: Schema.String,
   rule: Schema.optional(Holiday),
 })

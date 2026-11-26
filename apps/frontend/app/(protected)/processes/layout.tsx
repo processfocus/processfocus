@@ -1,7 +1,8 @@
-"use client"
+import { Suspense } from "react"
+import ProcessesClientLayout from "./client-layout"
 
-import { DraftProcessCollectionProvider } from "@/lib/collections/draft-process-execution-collection-provider"
-import { ProcessCollectionProvider } from "@/lib/collections/process-collection-provider"
+// The authenticated shell can omit this subtree before a session is ready.
+export const instant = false
 
 export default function ProcessesLayout({
   children,
@@ -11,11 +12,8 @@ export default function ProcessesLayout({
   modal: React.ReactNode
 }) {
   return (
-    <ProcessCollectionProvider>
-      <DraftProcessCollectionProvider>
-        {children}
-        {modal}
-      </DraftProcessCollectionProvider>
-    </ProcessCollectionProvider>
+    <Suspense fallback={<p role="status">Loading...</p>}>
+      <ProcessesClientLayout modal={modal}>{children}</ProcessesClientLayout>
+    </Suspense>
   )
 }

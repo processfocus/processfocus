@@ -30,11 +30,13 @@ export function AuthProvider({
   children,
   session,
   expiresAt,
+  googleRevalidationDeadline,
 }: {
   children: ReactNode
   session: Session
   /** Unix timestamp in seconds when the access token expires */
   expiresAt: number
+  googleRevalidationDeadline?: number | undefined
 }) {
   const cacheScope = getSessionCacheScope(session)
   const [refreshedExpiry, setRefreshedExpiry] = useState({
@@ -118,13 +120,16 @@ export function AuthProvider({
   }, [deadline])
   return (
     <AuthContext.Provider value={{ session, expiresAt: currentExpiresAt }}>
-      <TokenRefreshScheduler
-        initialExpiresAt={currentExpiresAt}
-        key={cacheScope}
-        session={session}
-        onRefresh={onRefresh}
-        onInvalidSession={onInvalidSession}
-      />
+      {!session.workload && (
+        <TokenRefreshScheduler
+          initialExpiresAt={currentExpiresAt}
+          key={cacheScope}
+          session={session}
+          googleRevalidationDeadline={googleRevalidationDeadline}
+          onRefresh={onRefresh}
+          onInvalidSession={onInvalidSession}
+        />
+      )}
       {invalidScope === cacheScope ||
       !Number.isFinite(deadline) ||
       expiredDeadline === deadline

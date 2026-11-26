@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto"
 import { Clock, Effect, Option, Schema } from "effect"
 import {
   ProviderUserSessionSchema,
+  ServiceAccountSessionSchema,
   getRealtimeRecipientId,
 } from "@pf/auth-session"
+import { SubscriptionPresenceLease } from "@pf/realtime-client"
 import { CliError } from "../errors"
 
 // WebSocket readyState constants (WebSocket.OPEN may not be available in all runtimes)
@@ -42,6 +44,9 @@ export interface ExecutionSnapshot {
 export interface ExecutionEventSource extends AsyncIterable<ExecutionSnapshot> {
   readonly close: () => Promise<void>
 }
+
+// Transport loss can fall back to persisted status; protocol/auth errors cannot.
+export class ExecutionSubscriptionDisconnected extends Error {}
 
 type ExecutionEventSourceConfig =
   | {
@@ -397,7 +402,7 @@ class GraphqlExecutionSocket {
       readonly accessToken: string
       readonly onExecution: (execution: ExecutionSnapshot) => void
       readonly onError: (error: Error) => void
-      readonly onClose: () => void
+      readonly onClose: (code?: number, reason?: string) => void
       readonly onComplete: () => void
     },
   ) {}
@@ -482,7 +487,12 @@ class GraphqlExecutionSocket {
           reject(normalized)
           return
         }
-        this.config.onError(normalized)
+        this.config.onError(
+          new ExecutionSubscriptionDisconnected(
+            "GraphQL execution subscription transport failed",
+            { cause: normalized },
+          ),
+        )
       })
 
       this.socket.addEventListener("close", (event) => {
@@ -495,7 +505,7 @@ class GraphqlExecutionSocket {
             ),
           )
         }
-        this.config.onClose()
+        this.config.onClose(code, event.reason)
       })
     })
   }
@@ -528,6 +538,7 @@ class GraphqlExecutionSocket {
 }
 
 class AppSyncExecutionSocket {
+  private presence: SubscriptionPresenceLease | null = null
   private socket: WebSocket | null = null
   private subscriptionId: string | null = null
 
@@ -540,8 +551,8 @@ class AppSyncExecutionSocket {
       readonly onExecution: (execution: ExecutionSnapshot) => void
       readonly onError: (error: Error) => void
       // Note: AppSync Events protocol does not send a clean subscription completion
-      // message like graphql-ws does. Closing the connection is treated as an error.
-      readonly onClose: () => void
+      // message like graphql-ws does. Closure is a recoverable transport error.
+      readonly onClose: (code?: number, reason?: string) => void
     },
   ) {}
 
@@ -564,6 +575,20 @@ class AppSyncExecutionSocket {
       ])
 
       let connectionSettled = false
+      this.presence = new SubscriptionPresenceLease({
+        token: this.config.accessToken,
+        httpHost: this.config.appSyncEventsHttpHost,
+        channel: `/rxdb/collection/execution/user/${this.config.recipientId}`,
+        onReady: () => {
+          if (connectionSettled) return
+          connectionSettled = true
+          resolve()
+        },
+        onLost: () => {
+          reject(new Error("Presence lost"))
+          this.socket?.close()
+        },
+      })
 
       this.socket.addEventListener("open", () => {
         this.send({ type: "connection_init" })
@@ -594,10 +619,7 @@ class AppSyncExecutionSocket {
             return
           }
           case "subscribe_success":
-            if (!connectionSettled) {
-              connectionSettled = true
-              resolve()
-            }
+            if (!connectionSettled) void this.presence?.start()
             return
           case "subscribe_error": {
             const firstError = message.errors[0]
@@ -650,10 +672,16 @@ class AppSyncExecutionSocket {
           reject(normalized)
           return
         }
-        this.config.onError(normalized)
+        this.config.onError(
+          new ExecutionSubscriptionDisconnected(
+            "AppSync execution subscription transport failed",
+            { cause: normalized },
+          ),
+        )
       })
 
       this.socket.addEventListener("close", (event) => {
+        void this.presence?.stop()
         const code = readCloseEventCode(event)
         if (!connectionSettled) {
           connectionSettled = true
@@ -663,12 +691,13 @@ class AppSyncExecutionSocket {
             ),
           )
         }
-        this.config.onClose()
+        this.config.onClose(code, event.reason)
       })
     })
   }
 
   disconnect(): void {
+    void this.presence?.stop()
     this.socket?.close()
     this.socket = null
   }
@@ -681,7 +710,7 @@ class AppSyncExecutionSocket {
       channel: `/rxdb/collection/execution/user/${this.config.recipientId}`,
       authorization: {
         host: this.config.appSyncEventsHttpHost,
-        authorization: this.config.accessToken,
+        authorization: this.presence?.authorization || this.config.accessToken,
       },
     })
   }
@@ -713,11 +742,15 @@ const createGraphqlWsExecutionEventSource = async (
       }
       queue.fail(error)
     },
-    onClose: () => {
+    onClose: (code, reason) => {
       if (isClosed) {
         return
       }
-      queue.fail(new Error("GraphQL execution subscription disconnected"))
+      queue.fail(
+        new ExecutionSubscriptionDisconnected(
+          `GraphQL execution subscription disconnected: code=${code ?? "unknown"}${reason ? ` reason=${reason}` : ""}`,
+        ),
+      )
     },
     onComplete: () => {
       if (isClosed) {
@@ -751,7 +784,7 @@ const createAppSyncExecutionEventSource = async (
   // authority. Never substitute config.userId/sub for canonical session facts.
   const invalidToken = () =>
     new Error(
-      "CLI access token has invalid provider-user session claims. Run 'pfcli auth login'.",
+      "CLI access token has invalid session claims. Run 'pfcli auth login'.",
     )
   const parts = config.accessToken.split(".")
   if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2])
@@ -764,14 +797,28 @@ const createAppSyncExecutionEventSource = async (
     throw invalidToken()
   }
   const claims = Schema.decodeUnknownOption(
-    Schema.Struct({
-      mode: Schema.Literal("access"),
-      type: Schema.Literal("providerUser"),
-      properties: ProviderUserSessionSchema,
-      exp: Schema.Number.pipe(Schema.int(), Schema.positive()),
-    }),
+    Schema.Union([
+      Schema.Struct({
+        mode: Schema.Literal("access"),
+        type: Schema.Literal("providerUser"),
+        properties: ProviderUserSessionSchema,
+        exp: Schema.Number.pipe(
+          Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+        ),
+      }),
+      Schema.Struct({
+        mode: Schema.Literal("access"),
+        type: Schema.Literal("user"),
+        properties: ServiceAccountSessionSchema,
+        exp: Schema.Number.pipe(
+          Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+        ),
+      }),
+    ]),
   )(raw)
   if (Option.isNone(claims)) throw invalidToken()
+  if (claims.value.type === "user" && !claims.value.properties.workload)
+    throw invalidToken()
   if (nowMillis >= claims.value.exp * 1000) {
     throw new Error("CLI access token has expired. Run 'pfcli auth login'.")
   }
@@ -797,11 +844,15 @@ const createAppSyncExecutionEventSource = async (
       }
       queue.fail(error)
     },
-    onClose: () => {
+    onClose: (code, reason) => {
       if (isClosed) {
         return
       }
-      queue.fail(new Error("AppSync execution subscription disconnected"))
+      queue.fail(
+        new ExecutionSubscriptionDisconnected(
+          `AppSync execution subscription disconnected: code=${code ?? "unknown"}${reason ? ` reason=${reason}` : ""}`,
+        ),
+      )
     },
   })
 

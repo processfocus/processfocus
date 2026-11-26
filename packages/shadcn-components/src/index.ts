@@ -7,7 +7,17 @@ export {
   type CalendarSlotFieldItem,
   type CalendarSlotFieldProps,
 } from "./lib/calendar-slot-field"
-export { DateField } from "./lib/date-field"
+export {
+  DateField,
+  normalizeDateFieldValue,
+  validateDateField,
+} from "./lib/date-field"
+export {
+  DateTimeDisplay,
+  type DateTimeDisplayMode,
+  type DateTimeDisplayProps,
+  DateTimeDisplayProvider,
+} from "./lib/date-time-display"
 export { FieldSetField } from "./lib/field-set"
 export { FileField } from "./lib/file-field"
 export {
@@ -54,7 +64,12 @@ export {
 } from "./lib/ui/field"
 export { Input } from "./lib/ui/input"
 export { Label } from "./lib/ui/label"
-export { Popover, PopoverContent, PopoverTrigger } from "./lib/ui/popover"
+export {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverTrigger,
+} from "./lib/ui/popover"
 export { Separator } from "./lib/ui/separator"
 // Utilities
 export { cn } from "./lib/utils/utils"

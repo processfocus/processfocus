@@ -289,66 +289,28 @@ export class Step implements StepResource {
 
 export interface PublicLinkPrincipalType {
   readonly uid: EntityRef // type: "PF::PublicLink"
-  readonly todo: EntityRef // type: "PF::Todo"
+  readonly todoId: string
 }
 
 export class PublicLinkPrincipal implements PublicLinkPrincipalType {
   readonly uid: EntityRef
-  readonly todo: EntityRef
+  readonly todoId: string
 
   constructor(todoId: string) {
     this.uid = { type: "PF::PublicLink", id: todoId }
-    this.todo = { type: "PF::Todo", id: todoId }
+    this.todoId = todoId
   }
 }
 
-export interface TodoResource extends Resource {
-  readonly uid: EntityRef // type: "PF::Todo"
-  readonly step?: EntityRef // type: "PF::Step"
-  readonly role?: RoleEntity
-  readonly process?: ProcessEntity
-  readonly orgUnit?: OrgUnitEntity
-  readonly assignedTo?: EntityRef // type: "PF::ProviderUser"
+/** Instance facts resolved from persisted Todos, not client input. */
+export interface CompletionContext {
+  readonly todoId: string
+  readonly assignedToProviderUserEmail?: string | null | undefined
 }
 
-export class TodoRef implements TodoResource {
-  readonly uid: EntityRef
-  readonly step?: EntityRef
-  readonly role?: RoleEntity
-  readonly process?: ProcessEntity
-  readonly orgUnit?: OrgUnitEntity
-  readonly assignedTo?: EntityRef
-
-  constructor(
-    todoId: string,
-    props?: {
-      readonly stepPath: string
-      readonly rolePath?: string | null | undefined
-      readonly processPath: string
-      readonly orgUnitId?: string | null | undefined
-      readonly assignedToProviderUserEmail?: string | null | undefined
-    },
-  ) {
-    this.uid = { type: "PF::Todo", id: todoId }
-    if (props) {
-      this.step = { type: "PF::Step", id: props.stepPath }
-      if (props.rolePath) {
-        this.role = { type: "PF::Role", id: props.rolePath }
-      }
-      this.process = { type: "PF::Process", id: props.processPath }
-      const processPathSegments = props.processPath.split("/").filter(Boolean)
-      this.orgUnit = {
-        type: "PF::OrgUnit",
-        id: props.orgUnitId ?? processPathSegments[0] ?? "",
-      }
-      if (props.assignedToProviderUserEmail) {
-        this.assignedTo = {
-          type: "PF::ProviderUser",
-          id: props.assignedToProviderUserEmail,
-        }
-      }
-    }
-  }
+/** Evidence from the resolved process model, not from a field tag or caller. */
+export interface CronStartContext {
+  readonly cronStart: true
 }
 
 /**
@@ -359,6 +321,7 @@ export class TodoRef implements TodoResource {
 export interface ExecutionResource extends Resource {
   readonly uid: EntityRef // type: "PF::Execution"
   readonly startedBy?: EntityRef // ProviderUser who started
+  readonly startedByServiceAccount?: EntityRef
   readonly startedByRole?: RoleEntity // Role used to start the execution
   readonly process: ProcessEntity
   readonly orgUnits: OrgUnitEntity[] // Org units from completed steps
@@ -380,6 +343,7 @@ export interface ExecutionResource extends Resource {
 export class Execution implements ExecutionResource {
   readonly uid: EntityRef
   readonly startedBy?: EntityRef
+  readonly startedByServiceAccount?: EntityRef
   readonly startedByRole?: RoleEntity
   readonly process: ProcessEntity
   readonly orgUnits: OrgUnitEntity[]
@@ -390,8 +354,14 @@ export class Execution implements ExecutionResource {
     processPath: string,
     orgUnitPaths: readonly string[],
     startedByRolePath?: string | null | undefined,
+    startedByServiceAccountId?: string | null | undefined,
   ) {
     this.uid = { type: "PF::Execution", id }
+    if (startedByServiceAccountId)
+      this.startedByServiceAccount = {
+        type: "PF::ServiceAccount",
+        id: startedByServiceAccountId,
+      }
     if (startedByProviderUserId) {
       this.startedBy = { type: "PF::ProviderUser", id: startedByProviderUserId }
     }
@@ -462,6 +432,7 @@ export class ServiceAccountPrincipal implements ServiceAccountPrincipalType {
 export interface GraphQLFieldResource extends Resource {
   readonly uid: EntityRef // type: "PF::GraphQLField"
   readonly tag: string | undefined
+  readonly step?: StepResource | undefined
 }
 
 /**
@@ -473,7 +444,11 @@ export class GraphQLField implements GraphQLFieldResource {
   readonly uid: EntityRef
   readonly tag: string | undefined
 
-  constructor(fieldName: string, tag?: string) {
+  constructor(
+    fieldName: string,
+    tag?: string,
+    readonly step?: StepResource,
+  ) {
     this.uid = { type: "PF::GraphQLField", id: fieldName }
     this.tag = tag
   }

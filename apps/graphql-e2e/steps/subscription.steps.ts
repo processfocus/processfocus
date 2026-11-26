@@ -12,8 +12,8 @@ import type { TestWorld } from "../support/world"
 // Use async with small delay to allow any pending WebSocket error events to settle
 // before moving to next scenario (prevents unhandled rejections from async errors)
 After(async function (this: TestWorld) {
-  this.unsubscribe()
-  this.unsubscribeAllUsers()
+  await this.unsubscribe()
+  await this.unsubscribeAllUsers()
   // Brief delay to allow pending WebSocket errors to fire
   await new Promise((resolve) => setTimeout(resolve, 50))
 })
@@ -134,8 +134,8 @@ Then(
   },
 )
 
-Then("I unsubscribe", function (this: TestWorld) {
-  this.unsubscribe()
+Then("I unsubscribe", async function (this: TestWorld) {
+  await this.unsubscribe()
 })
 
 // ============ Multi-User Websocket Step Definitions ============
@@ -153,11 +153,12 @@ Given(
   },
 )
 
+// planProviderUsers also recognizes this named-user Given for deployed lookahead.
 Given(
   "{string} is authenticated as provider user {string}",
-  { timeout: 30000 },
+  { timeout: 120000 },
   async function (this: TestWorld, name: string, email: string) {
-    // Use two-step flow: requestProviderUserPermissions mutation then authenticate with email scope
+    // Use the same normal-login credential for HTTP and subscription transport.
     // This gives each user a unique userId for separate subscription channels
     const result = await runAuthenticateAsProviderUser(email)
     if (!result.access_token) {
@@ -215,7 +216,12 @@ Then(
     label: string,
     expectedValue: string,
   ) {
-    await this.waitForUserTodoWithSummary(name, stepName, label, expectedValue)
+    await this.waitForUserTodoWithSummary(
+      name,
+      stepName,
+      label,
+      this.purchaseItem(expectedValue),
+    )
   },
 )
 

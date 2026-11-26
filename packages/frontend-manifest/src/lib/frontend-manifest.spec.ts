@@ -75,61 +75,32 @@ describe("frontend manifest contract", () => {
     ).toThrow("plugins.analytics[0].config.sampleRate must be a finite number")
   })
 
-  it("parses structured embed form definitions and rejects malformed ones", () => {
-    const embedEntry = {
-      stepPath: "/school/enrolment/Submit",
+  it("parses executable embed references and rejects malformed query capabilities", () => {
+    const entry = {
+      stepPath: "/enrolment/Submit",
+      formPath: "/enrolment/Submit",
       processName: "Enrolment",
-      processPath: "/school/enrolment",
-      mutationName: "startSchoolEnrolment",
-      inputTypeName: "SchoolEnrolmentSubmit",
+      processPath: "/enrolment",
+      mutationName: "startEnrolment",
+      inputTypeName: "EnrolmentSubmit",
       totalFields: 1,
-      formDefinition: {
-        components: {
-          name: { _tag: "text", field: "name", label: "Name" },
-        },
-        rules: [],
-      },
-      defaultValues: { name: "" },
-      jsonSchema: { type: "object" },
       sites: ["https://school.example.com"],
       thankYou: "Thanks",
+      lookups: [],
     }
-    const withEmbed = {
-      ...manifest,
-      embed: { entries: [embedEntry] },
+    const manifest = {
+      version: 3,
+      embed: { entries: [entry] },
+      plugins: { analytics: [], formComponents: [] },
     }
-
     expect(
-      parseOrganisationFrontendManifest(withEmbed).embed.entries[0]
-        ?.formDefinition,
-    ).toEqual(embedEntry.formDefinition)
+      parseOrganisationFrontendManifest(manifest).embed.entries[0],
+    ).toEqual(entry)
     expect(() =>
       parseOrganisationFrontendManifest({
-        ...withEmbed,
-        embed: {
-          entries: [
-            {
-              ...embedEntry,
-              formDefinition: { components: {}, rules: {} },
-            },
-          ],
-        },
+        ...manifest,
+        embed: { entries: [{ ...entry, lookups: [{}] }] },
       }),
-    ).toThrow("embed.entries[0].formDefinition.rules must be an array")
-
-    expect(() =>
-      parseOrganisationFrontendManifest({
-        ...withEmbed,
-        embed: {
-          entries: [
-            Object.fromEntries(
-              Object.entries(embedEntry).filter(
-                ([fieldName]) => fieldName !== "formDefinition",
-              ),
-            ),
-          ],
-        },
-      }),
-    ).toThrow("embed.entries[0].formDefinition must be an object")
+    ).toThrow("type is invalid")
   })
 })

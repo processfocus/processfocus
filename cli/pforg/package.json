@@ -20,13 +20,12 @@
     "LICENSE.md"
   ],
   "dependencies": {
-    "effect": "^3.22.2"
+    "effect": "4.1.4"
   },
   "devDependencies": {
-    "@effect/cli": "^0.77.1",
-    "@effect/platform": "^0.97.2",
-    "@effect/platform-node": "^0.108.2",
-    "typescript": "^6.0.3"
+    "@effect/platform-node": "4.1.4",
+    "typescript": "^7.0.2",
+    "usage-spec-effect": "1.0.0"
   },
   "publishConfig": {
     "access": "public",

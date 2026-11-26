@@ -30,10 +30,21 @@ export interface BrowserPluginPreparationArtifact {
   readonly sha256: string
 }
 
+export const BROWSER_FORM_HOST_INTERFACE_VERSION = 1
+
+export interface BrowserFormArtifactEntry {
+  readonly stepPath: string
+  readonly exportName: string
+  readonly hostInterfaceVersion: number
+  readonly path: string
+  readonly sha256: string
+}
+
 export interface BrowserPluginArtifactManifest {
   readonly format: typeof BROWSER_PLUGIN_ARTIFACT_MANIFEST_FORMAT
   readonly version: typeof BROWSER_PLUGIN_ARTIFACT_MANIFEST_VERSION
   readonly plugins: ReadonlyArray<BrowserPluginArtifactEntry>
+  readonly forms?: ReadonlyArray<BrowserFormArtifactEntry>
 }
 
 const ensureRecord = (
@@ -164,6 +175,33 @@ const parseEntry = (
   }
 }
 
+const parseFormEntry = (
+  value: unknown,
+  index: number,
+): BrowserFormArtifactEntry => {
+  const label = `browser artifact manifest.forms[${index}]`
+  const entry = ensureRecord(value, label)
+  const stepPath = ensureNonEmptyString(entry["stepPath"], `${label}.stepPath`)
+  const sha256 = ensureNonEmptyString(entry["sha256"], `${label}.sha256`)
+  if (!/^[0-9a-f]{64}$/.test(sha256))
+    throw new Error(`${label}.sha256 must be a SHA-256 digest`)
+  if (entry["hostInterfaceVersion"] !== BROWSER_FORM_HOST_INTERFACE_VERSION) {
+    throw new Error(
+      `${label} requires an unsupported form host interface version`,
+    )
+  }
+  return {
+    stepPath,
+    exportName: ensureNonEmptyString(
+      entry["exportName"],
+      `${label}.exportName`,
+    ),
+    hostInterfaceVersion: BROWSER_FORM_HOST_INTERFACE_VERSION,
+    path: ensureArtifactPath(entry["path"], stepPath),
+    sha256,
+  }
+}
+
 export const parseBrowserPluginArtifactManifest = (
   value: unknown,
 ): BrowserPluginArtifactManifest => {
@@ -182,6 +220,13 @@ export const parseBrowserPluginArtifactManifest = (
     throw new Error("browser plugin artifact manifest.plugins must be an array")
   }
 
+  const rawForms = manifest["forms"] ?? []
+  if (!Array.isArray(rawForms))
+    throw new Error("browser artifact manifest.forms must be an array")
+  const forms = rawForms.map(parseFormEntry)
+  if (new Set(forms.map((form) => form.stepPath)).size !== forms.length) {
+    throw new Error("browser artifact manifest has duplicate form step paths")
+  }
   const plugins = manifest["plugins"].map(parseEntry)
   const identities = new Set<string>()
   for (const plugin of plugins) {
@@ -197,5 +242,6 @@ export const parseBrowserPluginArtifactManifest = (
     format: BROWSER_PLUGIN_ARTIFACT_MANIFEST_FORMAT,
     version: BROWSER_PLUGIN_ARTIFACT_MANIFEST_VERSION,
     plugins,
+    ...(forms.length > 0 ? { forms } : {}),
   }
 }

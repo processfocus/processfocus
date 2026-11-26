@@ -1,7 +1,7 @@
 import "server-only"
 
-import { FetchHttpClient } from "@effect/platform"
-import { Data, DateTime, Effect, FiberRef, Layer } from "effect"
+import { Data, DateTime, Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/http"
 import { cacheLife, cacheTag } from "next/cache"
 import {
   LocalCedarAuthorizationLive,
@@ -21,7 +21,10 @@ import {
   noFeaturePermissions,
 } from "@/lib/feature-permissions"
 import { fetchCedarPolicies } from "@/lib/graphql/queries"
-import { createServerGraphqlClient } from "@/lib/graphql/server-client"
+import {
+  createServerGraphqlClient,
+  retryGraphqlRead,
+} from "@/lib/graphql/server-client"
 
 export class CedarConfigError extends Data.TaggedError("@pf/CedarConfigError")<{
   readonly message: string
@@ -31,8 +34,8 @@ export class CedarConfigError extends Data.TaggedError("@pf/CedarConfigError")<{
 const FRONTEND_JWT_TOKEN = getFrontendJwt()
 
 /**
- * Fetch Cedar policies. Cached by Next.js — invalidated on deploy or
- * via `revalidateTag("cedar-policies")`.
+ * Fetch Cedar policies. Hosted policy artifacts refresh with a new deployment;
+ * the local runtime's policy watcher invalidates this tag via /api/revalidate.
  */
 async function getCedarPolicies(): Promise<{
   policiesText: readonly string[]
@@ -52,7 +55,7 @@ async function getCedarPolicies(): Promise<{
   console.log("[Cedar] Fetching policies from GraphQL cedarPolicies query")
 
   const client = createServerGraphqlClient(FRONTEND_JWT_TOKEN)
-  const data = await fetchCedarPolicies(client)
+  const data = await retryGraphqlRead(() => fetchCedarPolicies(client))
   if (!data) {
     throw new Error("GraphQL cedarPolicies query returned no data")
   }
@@ -91,10 +94,7 @@ const CedarConfigLayer = Layer.effect(
 /**
  * RequestTime layer with current timestamp.
  */
-const RequestTimeLayer = Layer.effect(
-  RequestTime,
-  Effect.sync(() => FiberRef.unsafeMake(DateTime.unsafeMake(new Date()))),
-)
+const RequestTimeLayer = Layer.effect(RequestTime, DateTime.now)
 
 /**
  * Complete Cedar authorization layer for SSR pages.
@@ -143,7 +143,7 @@ export const checkFeaturePermissions = (
 
     const checkFeature = (action: FeatureAction) =>
       auth.canAccessFeature(principal, app, action).pipe(
-        Effect.catchAll((error) => {
+        Effect.catch((error) => {
           console.error(
             `[Cedar] Authorization check failed for action "${action}":`,
             error,
@@ -192,7 +192,7 @@ export const getFeaturePermissions = async (
 ): Promise<FeaturePermissions> => {
   const effect = checkFeaturePermissions(session).pipe(
     Effect.provide(CedarAuthorizationLayer),
-    Effect.catchAll(() => Effect.succeed(noFeaturePermissions)),
+    Effect.catch(() => Effect.succeed(noFeaturePermissions)),
   )
 
   return Effect.runPromise(effect)

@@ -1,0 +1,180 @@
+---
+title: Deploy your project
+---
+
+## Deploy from GitHub Actions
+
+Your own GitHub repository can deploy to Process Focus Cloud using OpenID
+Connect (OIDC) federation. GitHub supplies a signed assertion for the running job, which
+`pfcli` exchanges for short-lived Process Focus credentials. You do not need
+to store a Process Focus password, client secret, or personal login token in
+GitHub.
+
+### Prepare your project
+
+You need:
+
+- A Process Focus Cloud project that you own, with an existing deployment
+  environment.
+- Your organisation source in a GitHub repository.
+
+In the [Console](https://console.processfocus.com), select your project and
+deployment environment, then open the **Info** tab. Use the value under
+**Environment** for `--env` and the project number in the sentence below the
+site URL for `--project`.
+
+![Console Info tab with the environment name and project number circled](/images/docs/console-project-number-and-environment.png)
+
+Add the CLI to your project's development dependencies. For example, with Bun:
+
+```bash
+bun add --dev --exact @processfocus/cli@next
+```
+
+The workflow below uses Bun and assumes a committed Bun lockfile. Adapt the
+install and run commands if your project uses another package manager. It also
+assumes the organisation is at the repository root; if it is in a subdirectory,
+replace `.` in the deploy command with that path.
+
+### Register the workflow
+
+In the Console, select your project and open **OIDC federation**. Under
+**Register a GitHub Actions identity**, enter these values, replacing the repository with your own:
+
+| Field | Example |
+| --- | --- |
+| Name | `GitHub production deploy` |
+| Repository | `your-account/your-repository` |
+| Branch | `main` |
+| Workflow path | `.github/workflows/deploy.yml` |
+| GitHub Environment (optional) | Leave blank for this example. If the job sets `environment:`, enter that GitHub Environment name. |
+| Events | `workflow_dispatch,push` |
+| Project permissions | `deploy` |
+
+Leave **Enabled** selected. **Project permissions** control which OAuth scopes
+Process Focus Cloud will issue to this workflow for the selected project. They
+are separate from GitHub Actions permissions such as `id-token: write`.
+Grant only `deploy` for this example: `create-environment` and
+`destroy-environment` let a workflow add or remove environments, which this
+workflow doesn't do. You can grant only project permissions you already have.
+
+The registration starts as `pending` and cannot deploy until it has enrolled.
+Expand **Workflow configuration** to find its generated example. Use the
+values from that example, not values copied from another project.
+
+Under your GitHub repository's **Settings → Secrets and variables → Actions →
+Variables**, create these repository variables:
+
+| Variable | Value from the generated example |
+| --- | --- |
+| `PFCLI_BASE_URL` | The `PFCLI_BASE_URL` endpoint |
+| `PFCLI_WORKLOAD_CLIENT_ID` | The federated identity's client ID |
+| `PFCLI_GITHUB_AUDIENCE` | The audience in the **Deploy** step |
+| `PFCLI_ENROLLMENT_AUDIENCE` | The audience in the one-time **Enroll federated identity** step |
+
+The client ID and audiences are configuration values, not client secrets.
+The enrollment audience and permanent deployment audience are different:
+use each only for its corresponding step. Copy the generated endpoint exactly;
+do not substitute the URL of your deployed organisation.
+
+### Enroll and deploy
+
+Save this as `.github/workflows/deploy.yml` on the registered `main` branch.
+Replace `0000-0000-0002` and `prod` with your project number and existing
+Process Focus environment name:
+
+```yaml
+name: Deploy to Process Focus
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: process-focus-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      PFCLI_AUTH_MODE: github-workload
+      PFCLI_BASE_URL: ${{ vars.PFCLI_BASE_URL }}
+      PFCLI_WORKLOAD_CLIENT_ID: ${{ vars.PFCLI_WORKLOAD_CLIENT_ID }}
+      PFCLI_GITHUB_AUDIENCE: ${{ vars.PFCLI_GITHUB_AUDIENCE }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.5"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Run once, then remove this step before the next run.
+      - name: Enroll federated identity
+        run: bun run pfcli workload enroll
+        env:
+          PFCLI_GITHUB_AUDIENCE: ${{ vars.PFCLI_ENROLLMENT_AUDIENCE }}
+
+      - name: Deploy
+        run: bun run pfcli deploy . --project 0000-0000-0002 --env prod
+```
+
+The deploy command's `--env prod` selects the **Process Focus environment**.
+This example does not use a GitHub Environment.
+
+Run the workflow from GitHub's **Actions** tab, selecting the registered branch.
+The one-time enrollment binds the registration to GitHub's signed repository
+and owner IDs. The following deploy step uses the permanent audience to build
+and upload the organisation, then waits for deployment to finish. No
+`pfcli auth login` step is needed.
+
+After successful enrollment, reload **OIDC federation** in the Console
+and check that the status is `enrolled`. Remove the **Enroll federated identity** step
+from the workflow and delete the `PFCLI_ENROLLMENT_AUDIENCE` GitHub variable
+before running it again. Keep the permanent audience for subsequent deployments.
+
+To deploy automatically on pushes after enrollment, add a `push` trigger
+restricted to the registered branch, alongside `workflow_dispatch`:
+
+```yaml
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+```
+
+### Optional: require GitHub deployment gates
+
+To require approvals or restrict deployment branches in GitHub, create a
+GitHub Environment such as `production` under your repository's
+**Settings → Environments** and configure its protection rules. Enter the same
+name in the registration's **GitHub Environment** field and add
+`environment: production` to the `deploy` job alongside `runs-on`. Keep `--env`
+set to your target Process Focus environment; the names do not have to match.
+
+Adding, changing, or removing a GitHub Environment requires enrolling again.
+Use the new enrollment audience from **Workflow configuration**.
+
+### Authentication failures and access changes
+
+If authentication fails, check that `id-token: write` is present and that the
+repository, branch, workflow path, GitHub Environment, and event match the
+registration. If the registration has no GitHub Environment, omit `environment:`
+from the job. Customer OIDC federation registrations support `push`,
+`workflow_dispatch`, and `schedule`, not pull-request events.
+
+Changing those trust settings requires enrollment again. Disabling or removing
+the registration blocks new access and its existing tokens' project access;
+it does not cancel work that has already started.
+
+Project federated identity tokens last at most 15 minutes and have no refresh token.
+Long-running CLI commands obtain fresh GitHub assertions when needed. Keep
+assertions and access tokens out of logs even though they are short-lived.
+If a deployment loses its connection, inspect its execution in the Console
+before retrying: it may still be running.

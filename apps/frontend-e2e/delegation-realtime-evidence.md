@@ -3,8 +3,8 @@
 The #2963 presentation update replaces the banner with profile-menu identity.
 The current lifecycle probe checks the profile trigger for delegated/human
 transitions; “indicator” below describes the historical run. See the
-[profile verification record](../../docs/authentication/delegated-profile-verification.md)
-for current presentation and evidence.
+[Delegated access guide](../../docs/authentication/delegated-access.md)
+for current identity presentation.
 
 Issue: #2902. This record covers the disposable fixture and browser probe, not
 the separate core GraphQL implementation or public runtime activation.

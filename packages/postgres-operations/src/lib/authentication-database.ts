@@ -142,7 +142,7 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
               ),
             )
             .limit(1)
-          return Option.fromNullable(rows[0]?.id)
+          return Option.fromNullishOr(rows[0]?.id)
         }).pipe(mapQueryError("Failed to find recovery invitation")),
       findRootOrgUnit: () =>
         Effect.gen(function* () {
@@ -318,15 +318,12 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
 
       createProviderUser: (input: CreateProviderUserInput) =>
         Effect.gen(function* () {
-          const now = yield* DateTime.now
-
           // First, create the user record
           const userResult = yield* db
             .insert(schema.user)
             .values({
               provider: input.provider,
               sub: input.sub,
-              lastLoggedIn: now,
             })
             .returning()
 
@@ -578,16 +575,6 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
           .returning({ id: schema.passkeyCredential.id })
           .pipe(Effect.map((rows) => rows.length === 1))
           .pipe(mapWriteError("Failed to advance passkey credential counter")),
-
-      updateLastLoggedIn: (userId: string, lastLoggedIn: DateTime.Utc) =>
-        db
-          .update(schema.user)
-          .set({ lastLoggedIn })
-          .where(eq(schema.user.id, userId))
-          .pipe(
-            mapWriteError("Failed to update last logged in"),
-            Effect.asVoid,
-          ),
 
       updateProviderUserProfilePicture: (userId: string, picture: string) =>
         db
@@ -842,7 +829,7 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
             return Option.none<RegistrationSessionExchangeResult>()
           }
 
-          if (DateTime.lessThanOrEqualTo(invitation.expiresAt, now)) {
+          if (DateTime.isLessThanOrEqualTo(invitation.expiresAt, now)) {
             return Option.none<RegistrationSessionExchangeResult>()
           }
 
@@ -1082,12 +1069,34 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
           )
         }).pipe(mapWriteError("Failed to assign provider user roles")),
 
+      enrollProjectWorkload: (clientId, expected, enrolled) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now
+          const rows = yield* db
+            .update(schema.oauthClient)
+            .set({
+              workloadTrust: enrolled,
+              updatedAt: now,
+              updatedBy: `workload-enrollment:${clientId}`,
+            })
+            .where(
+              and(
+                eq(schema.oauthClient.clientId, clientId),
+                eq(schema.oauthClient._deleted, false),
+                eq(schema.oauthClient.workloadTrust, expected),
+              ),
+            )
+            .returning({ id: schema.oauthClient.id })
+          return rows.length === 1
+        }).pipe(mapWriteError("Failed to enroll project workload")),
+
       findAllOAuthClients: () =>
         Effect.gen(function* () {
           const results = yield* db
             .select({
               clientId: schema.oauthClient.clientId,
               secretHash: schema.oauthClient.clientSecretHash,
+              workloadTrust: schema.oauthClient.workloadTrust,
               audience: schema.oauthClient.audience,
             })
             .from(schema.oauthClient)
@@ -1102,6 +1111,7 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
             .select({
               clientId: schema.oauthClient.clientId,
               secretHash: schema.oauthClient.clientSecretHash,
+              workloadTrust: schema.oauthClient.workloadTrust,
               audience: schema.oauthClient.audience,
             })
             .from(schema.oauthClient)
@@ -1136,14 +1146,9 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
           return results.map((r) => r.path)
         }).pipe(mapQueryError("Failed to validate role paths")),
 
-      upsertM2MUser: (
-        clientId: string,
-        lastLoggedIn: DateTime.Utc,
-        options?: { readonly updateLastLoggedIn?: boolean },
-      ) =>
+      upsertM2MUser: (clientId: string, createdAt: DateTime.Utc) =>
         Effect.gen(function* () {
           const M2M_PROVIDER = "client_credentials"
-          const shouldUpdateLastLoggedIn = options?.updateLastLoggedIn !== false
 
           // Try to find existing M2M user
           const existing = yield* db
@@ -1159,17 +1164,6 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
             .limit(1)
 
           if (existing[0]) {
-            if (shouldUpdateLastLoggedIn) {
-              // Update last_logged_in for existing user
-              yield* db
-                .update(schema.user)
-                .set({
-                  lastLoggedIn,
-                  updatedAt: lastLoggedIn,
-                })
-                .where(eq(schema.user.id, existing[0].id))
-            }
-
             return existing[0].id
           }
 
@@ -1179,9 +1173,8 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
             .values({
               provider: M2M_PROVIDER,
               sub: clientId,
-              lastLoggedIn,
-              createdAt: lastLoggedIn,
-              updatedAt: lastLoggedIn,
+              createdAt,
+              updatedAt: createdAt,
               createdBy: "SYSTEM",
               updatedBy: "SYSTEM",
             })
@@ -1189,6 +1182,63 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
 
           return (yield* returnedRow(result)).id
         }).pipe(mapWriteError("Failed to upsert M2M user")),
+
+      prepareRoleSwitch: ({ key, value, expiresAt }) =>
+        db
+          .insert(schema.oauthStorage)
+          .values({
+            oauthKey: key,
+            keyKind: "role-switch",
+            keyValue: value,
+            keyExpiry: expiresAt,
+          })
+          .onConflictDoUpdate({
+            target: schema.oauthStorage.oauthKey,
+            set: { keyValue: value, keyExpiry: expiresAt },
+          })
+          .pipe(Effect.asVoid, mapWriteError("Failed to prepare role switch")),
+      consumeRoleSwitch: (key) =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now
+          const rows = yield* db
+            .delete(schema.oauthStorage)
+            .where(
+              and(
+                eq(schema.oauthStorage.oauthKey, key),
+                gt(schema.oauthStorage.keyExpiry, now),
+              ),
+            )
+            .returning({ value: schema.oauthStorage.keyValue })
+          return rows[0]?.value
+        }).pipe(mapWriteError("Failed to consume role switch")),
+
+      findProviderUserAuthorityVersion: (userId: string) =>
+        Effect.gen(function* () {
+          const owner = yield* db
+            .select()
+            .from(schema.providerUser)
+            .where(eq(schema.providerUser.userId, userId))
+            .orderBy(schema.providerUser.id)
+          const assignments = yield* db
+            .select()
+            .from(schema.providerUserRole)
+            .innerJoin(
+              schema.providerUser,
+              eq(
+                schema.providerUserRole.providerUserId,
+                schema.providerUser.id,
+              ),
+            )
+            .innerJoin(
+              schema.role,
+              eq(schema.providerUserRole.roleId, schema.role.id),
+            )
+            .where(eq(schema.providerUser.userId, userId))
+            .orderBy(schema.providerUserRole.id)
+          return JSON.stringify([owner, assignments])
+        }).pipe(
+          mapQueryError("Failed to read provider user authority version"),
+        ),
 
       findPermittedRolesWithOrgUnit: (userId: string) =>
         Effect.gen(function* () {
@@ -1321,49 +1371,12 @@ export const PostgresAuthenticationDatabaseLive = Layer.effect(
             updatedAt: row.updatedAt,
           })
         }).pipe(mapQueryError("Failed to find permitted client role")),
-
-      findPermittedClientEmail: (clientId: string, email: string) =>
-        Effect.gen(function* () {
-          // Look up oauth_client by clientId, then join permitted_client_email
-          const results = yield* db
-            .select({
-              email: schema.permittedClientEmail.email,
-              updatedAt: schema.permittedClientEmail.updatedAt,
-            })
-            .from(schema.oauthClient)
-            .innerJoin(
-              schema.permittedClientEmail,
-              eq(
-                schema.permittedClientEmail.oauthClientId,
-                schema.oauthClient.id,
-              ),
-            )
-            .where(
-              and(
-                eq(schema.oauthClient.clientId, clientId),
-                eq(schema.permittedClientEmail.email, email),
-                eq(schema.oauthClient._deleted, false),
-                eq(schema.permittedClientEmail._deleted, false),
-              ),
-            )
-            .limit(1)
-
-          const row = results[0]
-          if (!row) {
-            return Option.none()
-          }
-
-          return Option.some({
-            email: row.email,
-            updatedAt: row.updatedAt,
-          })
-        }).pipe(mapQueryError("Failed to find permitted client email")),
     }
   }),
 )
 
 const mapSqlToStorageError = <A, R>(
-  effect: Effect.Effect<A, import("@effect/sql/SqlError").SqlError, R>,
+  effect: Effect.Effect<A, import("effect/sql/SqlError").SqlError, R>,
 ): Effect.Effect<A, StorageError, R> =>
   effect.pipe(
     Effect.mapError((e) => new StorageError({ message: e.message, cause: e })),
@@ -1433,7 +1446,7 @@ export const PostgresOpenAuthStorageServiceLive = Layer.effect(
             const expiryUtc =
               ttl === undefined
                 ? undefined
-                : DateTime.unsafeMake(Date.now() + ttl * 1000)
+                : DateTime.makeUnsafe(Date.now() + ttl * 1000)
 
             yield* db
               .insert(schema.oauthStorage)

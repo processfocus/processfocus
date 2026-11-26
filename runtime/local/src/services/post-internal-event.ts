@@ -1,9 +1,9 @@
+import { Effect, Option } from "effect"
 import {
   type HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from "@effect/platform"
-import { Effect, Option } from "effect"
+} from "effect/http"
 
 /**
  * POST a JSON event to a local GraphQL internal endpoint, optionally

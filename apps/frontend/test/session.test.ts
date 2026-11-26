@@ -11,6 +11,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token",
       refreshToken: "refresh_token",
       oauthState: "oauth_state",
+      googleRevalidation: "google_revalidation",
       passkeyAuthCookies: "passkey_auth_cookies",
       registrationSession: "registration_session",
     })
@@ -21,6 +22,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token",
       refreshToken: "refresh_token",
       oauthState: "oauth_state",
+      googleRevalidation: "google_revalidation",
       passkeyAuthCookies: "passkey_auth_cookies",
       registrationSession: "registration_session",
     })
@@ -31,6 +33,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token",
       refreshToken: "refresh_token",
       oauthState: "oauth_state",
+      googleRevalidation: "google_revalidation",
       passkeyAuthCookies: "passkey_auth_cookies",
       registrationSession: "registration_session",
     })
@@ -41,6 +44,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token_3000",
       refreshToken: "refresh_token_3000",
       oauthState: "oauth_state_3000",
+      googleRevalidation: "google_revalidation_3000",
       passkeyAuthCookies: "passkey_auth_cookies_3000",
       registrationSession: "registration_session_3000",
     })
@@ -51,6 +55,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token_3000",
       refreshToken: "refresh_token_3000",
       oauthState: "oauth_state_3000",
+      googleRevalidation: "google_revalidation_3000",
       passkeyAuthCookies: "passkey_auth_cookies_3000",
       registrationSession: "registration_session_3000",
     })
@@ -61,6 +66,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token",
       refreshToken: "refresh_token",
       oauthState: "oauth_state",
+      googleRevalidation: "google_revalidation",
       passkeyAuthCookies: "passkey_auth_cookies",
       registrationSession: "registration_session",
     })
@@ -71,6 +77,7 @@ describe("getCookieNamesFromHost", () => {
       accessToken: "access_token",
       refreshToken: "refresh_token",
       oauthState: "oauth_state",
+      googleRevalidation: "google_revalidation",
       passkeyAuthCookies: "passkey_auth_cookies",
       registrationSession: "registration_session",
     })

@@ -5,5 +5,4 @@ export {
   LookupProvider,
   type LookupService,
   type LookupSuggestion,
-  dynamicForm,
 } from "@pf/form"

@@ -1,5 +1,5 @@
 // biome-ignore-all lint/style/noNonNullAssertion: test assertions
-import { Either, Schema } from "effect"
+import { Result, Schema } from "effect"
 import { InputValidationError } from "@pf/graphql-schema"
 import { extractValidationErrors } from "../src/lib/resolver-utils"
 import { describe, expect, it } from "bun:test"
@@ -9,13 +9,13 @@ import { describe, expect, it } from "bun:test"
  * Tests the validation logic directly without going through authorization.
  */
 const validateAndExtractErrors = <A, I>(
-  schema: Schema.Schema<A, I, never>,
+  schema: Schema.Codec<A, I, never, never>,
   input: unknown,
 ): InputValidationError => {
-  const result = Schema.decodeUnknownEither(schema, { errors: "all" })(input)
+  const result = Schema.decodeUnknownResult(schema, { errors: "all" })(input)
 
-  if (Either.isLeft(result)) {
-    const errors = extractValidationErrors(result.left)
+  if (Result.isFailure(result)) {
+    const errors = extractValidationErrors(result.failure)
     return new InputValidationError({ errors })
   }
   throw new Error("Expected validation to fail but it succeeded")
@@ -84,7 +84,7 @@ describe("extractValidationErrors", () => {
 
     it("includes meaningful error messages", () => {
       const schema = Schema.Struct({
-        age: Schema.Number.pipe(Schema.positive()),
+        age: Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0))),
       })
 
       const validationError = validateAndExtractErrors(schema, { age: -5 })
@@ -110,9 +110,11 @@ describe("extractValidationErrors", () => {
         min: Schema.Number,
         max: Schema.Number,
       }).pipe(
-        Schema.filter((input) => input.min <= input.max, {
-          message: () => "min must not exceed max",
-        }),
+        Schema.check(
+          Schema.makeFilter((input) => input.min <= input.max, {
+            message: "min must not exceed max",
+          }),
+        ),
       )
 
       const validationError = validateAndExtractErrors(schema, {

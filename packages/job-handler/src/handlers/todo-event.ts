@@ -1,6 +1,6 @@
-import { SqlClient } from "@effect/sql"
 import type { Job } from "@processfocus/runtime"
 import { Effect, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   CompletedJobOperations,
   TODO_EVENT_QUEUE,
@@ -66,7 +66,6 @@ const handleTodoEvent = Effect.fn("todo-event")((job: Job<TodoEventPayload>) =>
     // Keep the database snapshot short; publication must not hold its writer.
     const todosWithSummary = yield* sqlClient.withTransaction(
       Effect.gen(function* () {
-        // Fetch todos from database
         const todos = yield* todoQueries.getTodos(todoIds)
 
         // Handle case where todos don't exist (flow-execution rolled back)
@@ -90,7 +89,6 @@ const handleTodoEvent = Effect.fn("todo-event")((job: Job<TodoEventPayload>) =>
           )
         }
 
-        // Compute summaries for todos before publishing
         const summaryComputation = yield* TodoSummaryComputation
         return yield* summaryComputation.enrichWithSummaries(todos)
       }),

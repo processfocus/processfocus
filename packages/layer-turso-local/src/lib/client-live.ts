@@ -1,25 +1,29 @@
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
-import * as Reactivity from "@effect/experimental/Reactivity"
-import * as Client from "@effect/sql/SqlClient"
-import type { Connection } from "@effect/sql/SqlConnection"
-import { SqlError } from "@effect/sql/SqlError"
-import * as Statement from "@effect/sql/Statement"
 import type { Database } from "@tursodatabase/database"
 import * as Cause from "effect/Cause"
+import type { ConfigError } from "effect/Config"
 import * as Config from "effect/Config"
-import type { ConfigError } from "effect/ConfigError"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as Scope from "effect/Scope"
+import * as Reactivity from "effect/reactivity/Reactivity"
+import type * as Scope from "effect/Scope"
+import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
+import * as Client from "effect/sql/SqlClient"
+import type { Connection } from "effect/sql/SqlConnection"
+import { SqlError, UnknownError } from "effect/sql/SqlError"
+import * as Statement from "effect/sql/Statement"
 import {
   DatabaseConnectionInfo,
   DatabasePathConfig,
+  immediateTransactionRequested,
   isSqlLockError,
+  readSnapshotRequested,
+  withTransactionCommitCallbacks,
 } from "@pf/db-info"
 import { normalizeDatabasePath, toTursoDatabasePath } from "./normalize-path"
 
@@ -34,7 +38,7 @@ const ConnectionInfoLayer = Layer.effect(
   DatabasePathConfig.pipe(Config.map(normalizeDatabasePath)),
 )
 
-const TursoTransaction = Context.GenericTag<
+const TursoTransaction = Context.Service<
   readonly [TursoConnection, counter: number]
 >("@pf/layer-turso-local/TursoTransaction")
 
@@ -52,17 +56,6 @@ export interface TursoClientOptions {
 
 type TursoValue = string | number | bigint | boolean | Uint8Array | null
 type TursoRow = Record<string, TursoValue>
-
-const tursoRowValues = (row: TursoRow): TursoValue[] => {
-  // Turso exposes positional values as stringified numeric keys for values-mode
-  // rows; named keys alone cannot preserve duplicate-column ordering.
-  const values: TursoValue[] = []
-  for (let index = 0; Object.hasOwn(row, String(index)); index++) {
-    values.push(row[String(index)] ?? null)
-  }
-
-  return values.length > 0 ? values : Object.values(row)
-}
 
 const ensureParentDirectory = (path: string): void => {
   // Turso 0.7 multiprocess_wal stats the parent directory for shared WAL
@@ -100,7 +93,9 @@ const makeDatabase = (
       return await connect(path, databaseOptions)
     },
     catch: (cause) =>
-      new SqlError({ cause, message: "Failed to open database" }),
+      new SqlError({
+        reason: new UnknownError({ cause, message: "Failed to open database" }),
+      }),
   })
 
 const closeDatabase = (db: Database): Effect.Effect<void, never> =>
@@ -108,7 +103,7 @@ const closeDatabase = (db: Database): Effect.Effect<void, never> =>
     try: () => db.close(),
     catch: (cause) => cause,
   }).pipe(
-    Effect.catchAll((e) =>
+    Effect.catch((e) =>
       Effect.logWarning("Failed to close Turso connection", Cause.fail(e)),
     ),
   )
@@ -142,7 +137,7 @@ const makeClient = (
           return Effect.void
         }
 
-        return Effect.gen(this, function* () {
+        return Effect.gen({ self: this }, function* () {
           yield* this.runDirect("PRAGMA foreign_keys = ON", [])
           yield* this.runDirect("PRAGMA journal_mode = wal", [])
           const timeout = options?.busy_timeout ?? 1500
@@ -157,30 +152,46 @@ const makeClient = (
         return Effect.tryPromise({
           try: () => this.db.all(sql, [...params]) as Promise<TursoRow[]>,
           catch: (cause) =>
-            new SqlError({ cause, message: "Failed to execute statement" }),
+            new SqlError({
+              reason: new UnknownError({
+                cause,
+                message: "Failed to execute statement",
+              }),
+            }),
         })
       }
 
       private runValuesDirect(sql: string, params: ReadonlyArray<unknown>) {
         return Effect.tryPromise({
-          try: async () =>
-            ((await this.db.all(sql, [...params])) as TursoRow[]).map((row) =>
-              tursoRowValues(row),
-            ),
+          try: async (): Promise<TursoValue[][]> => {
+            const statement = await this.db.prepare(sql)
+            try {
+              // Object rows collapse duplicate names in Turso 0.8. Drizzle
+              // needs every selected column in its original position.
+              return await statement.raw(true).all([...params])
+            } finally {
+              await statement.close()
+            }
+          },
           catch: (cause) =>
-            new SqlError({ cause, message: "Failed to execute statement" }),
+            new SqlError({
+              reason: new UnknownError({
+                cause,
+                message: "Failed to execute statement",
+              }),
+            }),
         })
       }
 
       private runValues(sql: string, params: ReadonlyArray<unknown> = []) {
-        return Effect.gen(this, function* () {
+        return Effect.gen({ self: this }, function* () {
           yield* this.ensurePragmas()
           return yield* this.runValuesDirect(sql, params)
         })
       }
 
       run(sql: string, params: ReadonlyArray<unknown> = []) {
-        return Effect.gen(this, function* () {
+        return Effect.gen({ self: this }, function* () {
           yield* this.ensurePragmas()
           return yield* this.runDirect(sql, params)
         })
@@ -220,10 +231,17 @@ const makeClient = (
         return this.execute(sql, params, transformRows)
       }
 
+      executeValuesUnprepared(sql: string, params: ReadonlyArray<unknown>) {
+        return this.executeValues(sql, params)
+      }
+
       executeStream() {
         return Stream.fail(
           new SqlError({
-            message: "executeStream not implemented for Turso",
+            reason: new UnknownError({
+              cause: undefined,
+              message: "executeStream not implemented for Turso",
+            }),
           }),
         )
       }
@@ -233,8 +251,19 @@ const makeClient = (
       )(function* (this: TursoConnectionImpl) {
         const transactionDb = yield* makeDatabase(path, options)
         const connection = new TursoConnectionImpl(transactionDb, true)
-        yield* connection.ensurePragmas()
-        yield* connection.executeRaw("BEGIN", [])
+        const immediate = yield* immediateTransactionRequested
+        const snapshot = yield* readSnapshotRequested
+        yield* Effect.gen(function* () {
+          yield* connection.ensurePragmas()
+          yield* connection.executeRaw(
+            immediate && !snapshot ? "BEGIN IMMEDIATE" : "BEGIN",
+            [],
+          )
+        }).pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) ? connection.close : Effect.void,
+          ),
+        )
         return connection
       })
 
@@ -268,22 +297,16 @@ const makeClient = (
     }
 
     const connection = new TursoConnectionImpl(rootDb, true)
-    const semaphore = yield* Effect.makeSemaphore(1)
+    const semaphore = yield* Semaphore.make(1)
 
     const withTransaction = Client.makeWithTransaction({
-      transactionTag: TursoTransaction,
+      transactionService: TursoTransaction,
       spanAttributes,
-      acquireConnection: Effect.uninterruptibleMask((restore) =>
-        Scope.make().pipe(
-          Effect.flatMap((scope) =>
-            restore(connection.beginTransaction).pipe(
-              Effect.tap((conn) => Scope.addFinalizer(scope, conn.close)),
-              Effect.map((conn) => [scope, conn] as const),
-              Effect.tapError(() => Scope.close(scope, Exit.void)),
-            ),
-          ),
+      acquireConnection: (restore) =>
+        Effect.acquireRelease(
+          restore(connection.beginTransaction),
+          (conn) => conn.close,
         ),
-      ),
       begin: () => Effect.void,
       savepoint: (conn, id) =>
         conn.executeRaw(`SAVEPOINT effect_sql_${id};`, []),
@@ -306,16 +329,27 @@ const makeClient = (
 
     return Object.assign(
       yield* Client.make({
+        driver: "turso-local",
         acquirer,
         compiler,
         spanAttributes,
       }),
-      { withTransaction },
+      {
+        // Expose the same transaction key used by the custom wrapper/acquirer.
+        transactionService: Context.Service<
+          Client.TransactionConnection,
+          Client.TransactionConnection.Service
+        >(TursoTransaction.key),
+        withTransaction: withTransactionCommitCallbacks(
+          TursoTransaction.key,
+          withTransaction,
+        ),
+      },
     )
   })
 
 const makeBaseTursoLive = (options?: TursoClientOptions) =>
-  Layer.scopedContext(
+  Layer.effectContext(
     Effect.gen(function* () {
       const dbPath = yield* DatabasePathConfig
       const normalizedPath = normalizeDatabasePath(dbPath)

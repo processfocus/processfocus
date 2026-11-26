@@ -11,9 +11,8 @@ import {
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { inspect } from "node:util"
-import { FileSystem } from "@effect/platform"
-import type { SqlError } from "@effect/sql/SqlError"
-import { Console, Data, Effect, Schema } from "effect"
+import { Console, Data, Effect, FileSystem, Schema } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import {
   createClientJwt,
   readFrontendJwt,
@@ -27,6 +26,7 @@ import {
 } from "@pf/db-info"
 import {
   getEffectiveFrontendBaseUrl,
+  readFrontendPort,
   readGraphqlPort,
 } from "@pf/frontend-endpoints/port-files"
 import {
@@ -36,6 +36,10 @@ import {
 import { type MigrationError, OrgLoadError } from "../errors"
 import type { BundledDbImportResult } from "../utils/bundled-db-import"
 import { makeFrontendJwtStorageLayer } from "../utils/frontend-jwt-storage-layer"
+import {
+  type FrontendJwtOptions,
+  validateUrlOption,
+} from "../utils/operator-inputs"
 import { resolveIssuerUrl } from "../utils/resolve-issuer-url"
 import { runBuild } from "./build"
 import { runMigrate } from "./migrate"
@@ -44,7 +48,7 @@ class NotifyError extends Data.TaggedError("NotifyError")<{
   readonly cause: unknown
 }> {}
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, "")
 
@@ -81,7 +85,8 @@ const frontendJwtMatchesExpectedClaims = (
 /**
  * Notifies the GraphQL server that an import completed, so it can
  * push updates to connected frontends via WebSocket subscriptions.
- * Fire-and-forget: failures are logged as warnings but don't fail the import.
+ * Best effort: bound the wait for absent development servers (including dropped
+ * sandbox loopback traffic). Failures warn but don't fail a completed import.
  */
 const notifyImportCompleted = (processPaths: readonly string[]) =>
   Effect.gen(function* () {
@@ -97,14 +102,15 @@ const notifyImportCompleted = (processPaths: readonly string[]) =>
       headers["x-callback-secret"] = secret
     }
 
-    const requestBody = yield* Schema.encode(JsonValue)({ processPaths }).pipe(
-      Effect.mapError((cause) => new NotifyError({ cause })),
-    )
+    const requestBody = yield* Schema.encodeEffect(JsonValue)({
+      processPaths,
+    }).pipe(Effect.mapError((cause) => new NotifyError({ cause })))
 
     const response = yield* Effect.tryPromise({
       try: () =>
         fetch(`${serverUrl}/internal/import-completed`, {
           method: "POST",
+          signal: AbortSignal.timeout(5000),
           headers,
           body: requestBody,
         }),
@@ -123,7 +129,7 @@ const notifyImportCompleted = (processPaths: readonly string[]) =>
 
     yield* Console.log("Frontend notified of changes")
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Console.warn(
         `⚠️  Could not notify frontend: ${formatUnknownError(error)}`,
       ),
@@ -132,22 +138,23 @@ const notifyImportCompleted = (processPaths: readonly string[]) =>
 
 const notifyFrontendDevImportCompleted = (processPaths: readonly string[]) =>
   Effect.gen(function* () {
-    const requestBody = yield* Schema.encode(JsonValue)({ processPaths }).pipe(
-      Effect.mapError((cause) => new NotifyError({ cause })),
-    )
+    const requestBody = yield* Schema.encodeEffect(JsonValue)({
+      processPaths,
+    }).pipe(Effect.mapError((cause) => new NotifyError({ cause })))
     const frontendBaseUrl = getEffectiveFrontendBaseUrl()
 
     yield* Effect.tryPromise({
       try: () =>
         fetch(`${frontendBaseUrl}/api/dev/import-completed`, {
           method: "POST",
+          signal: AbortSignal.timeout(5000),
           headers: { "Content-Type": "application/json" },
           body: requestBody,
         }),
       catch: (cause) => new NotifyError({ cause }),
     })
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Console.warn(
         `⚠️  Could not notify frontend dev event stream: ${formatUnknownError(error)}`,
       ),
@@ -170,7 +177,7 @@ interface ImportWatchEvent {
   readonly path: string
 }
 
-interface ImportWatchPromiseOptions {
+interface ImportWatchPromiseOptions extends FrontendJwtOptions {
   readonly debounceMs?: number
   readonly skipInitialImport?: boolean
   readonly signal?: AbortSignal
@@ -185,7 +192,7 @@ interface ImportWatchPromiseOptions {
   ) => readonly ImportWatchHandle[]
 }
 
-interface ImportCycleOptions {
+interface ImportCycleOptions extends FrontendJwtOptions {
   readonly runMigrations: boolean
   readonly ensureFrontendJwt: boolean
 }
@@ -222,11 +229,26 @@ const runImportInChildProcess = (
   }
 
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, ["run", cliPath, "import", orgPath], {
-      cwd: process.cwd(),
-      env,
-      stdio: "inherit",
-    })
+    const child = spawn(
+      process.execPath,
+      [
+        "run",
+        cliPath,
+        "import",
+        orgPath,
+        ...(options.databasePath === undefined
+          ? []
+          : ["--database-path", options.databasePath]),
+        ...(options.issuerUrl === undefined
+          ? []
+          : ["--issuer-url", options.issuerUrl]),
+      ],
+      {
+        cwd: process.cwd(),
+        env,
+        stdio: "inherit",
+      },
+    )
     const abortChild = () => child.kill("SIGTERM")
 
     if (signal?.aborted) {
@@ -402,6 +424,8 @@ const runImportWatchPromise = async (
     const cycleNumber = cycle
     const startedAt = performance.now()
     const cycleOptions: ImportCycleOptions = {
+      databasePath: options.databasePath,
+      issuerUrl: options.issuerUrl,
       runMigrations: requiresFullImport,
       ensureFrontendJwt: requiresFullImport,
     }
@@ -526,13 +550,11 @@ const extractRootMessage = (cause: unknown): string | undefined => {
   let current: unknown = cause
 
   while (isRecord(current)) {
-    // If we found a message, check if there's a deeper cause
     if ("cause" in current) {
       current = current["cause"]
       continue
     }
 
-    // No more nested causes, return the message if present
     if (typeof current["message"] === "string") {
       return current["message"]
     }
@@ -561,25 +583,37 @@ const ensureDatabaseDirectory = (databasePath: string) =>
     }
   })
 
-const withDatabasePathEnv = <A, E, R>(
+const withImportEnv = <A, E, R>(
   databasePath: string,
   effect: Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
     Effect.sync(() => {
-      const previous = process.env["SQLITE_DATABASE_PATH"]
+      const previous = {
+        SQLITE_DATABASE_PATH: process.env["SQLITE_DATABASE_PATH"],
+        PF_LOCAL_FRONTEND_ORIGIN: process.env["PF_LOCAL_FRONTEND_ORIGIN"],
+      }
       process.env["SQLITE_DATABASE_PATH"] = databasePath
+      // Direct local imports and watch cycles need the same WebAuthn origin as
+      // the Dashboard. Explicit deployment/issuer configuration takes priority.
+      if (
+        isLocalFilePath(databasePath) &&
+        !isDeployArtifactImport() &&
+        !process.env["OAUTH_ISSUER_URL"] &&
+        !process.env["PF_LOCAL_FRONTEND_ORIGIN"]
+      ) {
+        process.env["PF_LOCAL_FRONTEND_ORIGIN"] =
+          `http://localhost:${process.env["FRONTEND_PORT"] || readFrontendPort()}`
+      }
       return previous
     }),
     () => effect,
     (previous) =>
       Effect.sync(() => {
-        if (previous === undefined) {
-          delete process.env["SQLITE_DATABASE_PATH"]
-          return
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key]
+          else process.env[key] = value
         }
-
-        process.env["SQLITE_DATABASE_PATH"] = previous
       }),
   )
 
@@ -713,12 +747,16 @@ const loadBuiltOrgImport = (orgPath: string) =>
  */
 export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
   Effect.gen(function* () {
+    const explicitIssuerUrl =
+      options.issuerUrl === undefined
+        ? undefined
+        : yield* validateUrlOption(options.issuerUrl, "--issuer-url")
     const runMigrations =
       options.runMigrations ?? process.env["PF_IMPORT_SKIP_MIGRATIONS"] !== "1"
     const ensureFrontendJwt =
       options.ensureFrontendJwt ??
       process.env["PF_IMPORT_SKIP_FRONTEND_JWT"] !== "1"
-    const databasePath = resolveDatabasePath(orgPath)
+    const databasePath = options.databasePath ?? resolveDatabasePath(orgPath)
 
     if (!databasePath) {
       // return needed for type narrowing in Effect.gen
@@ -736,10 +774,10 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
 
     // Run system + org migrations before importing.
     // MigrationError is caught here for user-friendly output, then
-    // re-thrown so the command exits non-zero. @effect/cli treats an
+    // re-thrown so the command exits non-zero. effect/cli treats an
     // unhandled tagged error as a silent exit(1).
     if (runMigrations) {
-      yield* runMigrate(orgPath).pipe(
+      yield* runMigrate(orgPath, { databasePath }).pipe(
         Effect.catchTag("MigrationError", (error: MigrationError) =>
           Effect.gen(function* () {
             yield* Console.error(`\n❌ Migration failed: ${error.reason}`)
@@ -758,8 +796,7 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
 
     const openAuthLayer = makeFrontendJwtStorageLayer(databasePath)
 
-    // Import to database
-    yield* withDatabasePathEnv(
+    yield* withImportEnv(
       databasePath,
       dbImport.pipe(
         Effect.tap(({ orgName }) =>
@@ -775,7 +812,7 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
         Effect.tap(() =>
           ensureFrontendJwt
             ? Effect.gen(function* () {
-                const issuerUrl = resolveIssuerUrl()
+                const issuerUrl = explicitIssuerUrl ?? resolveIssuerUrl()
                 const clientId = getClientId()
                 const audience = getAudience()
                 const existing = yield* readFrontendJwt(clientId)
@@ -808,7 +845,7 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
                 yield* Console.log("Frontend JWT stored in database")
               }).pipe(
                 Effect.provide(openAuthLayer),
-                Effect.catchAll((error) =>
+                Effect.catch((error) =>
                   Console.warn(
                     `⚠️  Could not create frontend JWT: ${formatUnknownError(error)}`,
                   ),
@@ -834,7 +871,6 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
 
               const { cause } = error
 
-              // Extract query and params if available (Drizzle error structure)
               const drizzleInfo = extractDrizzleInfo(cause)
               if (drizzleInfo.query) {
                 yield* Console.error(`   Query: ${drizzleInfo.query}`)
@@ -845,7 +881,6 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
                 )
               }
 
-              // Extract the deepest error message from the cause chain
               const rootMessage = extractRootMessage(cause) ?? error.message
               if (rootMessage) {
                 yield* Console.error(`   Error: ${rootMessage}`)

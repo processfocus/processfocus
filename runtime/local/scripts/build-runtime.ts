@@ -34,6 +34,7 @@ const result = await Bun.build({
     resolve(projectRoot, "src/authentication-server/authentication-server.ts"),
     resolve(projectRoot, "src/graphql-server/graphql-server.ts"),
     resolve(projectRoot, "src/job-worker/job-worker.ts"),
+    resolve(projectRoot, "src/job-worker/job-worker-supervisor.ts"),
   ],
   outdir: dist,
   naming: "[name].mjs",

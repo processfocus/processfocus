@@ -1,3 +1,4 @@
+import { buildSchema, graphql } from "graphql"
 import { describe, expect, test } from "vitest"
 import { fetchDependentLookupSuggestions } from "../lib/graphql/dependent-lookup-query"
 
@@ -13,12 +14,22 @@ describe("fetchDependentLookupSuggestions", () => {
         variables?: Record<string, unknown>,
       ): Promise<TResponse> {
         requests.push({ document, variables })
-        if (!document.includes("schoolClassLookup")) {
-          return {} as TResponse
-        }
-        return {
-          schoolClassLookup: [{ value: "class-1", label: "Class 1" }],
-        } as TResponse
+        const result = await graphql({
+          schema: buildSchema(`
+            type LookupItem { value: String!, label: String!, searchText: String }
+            input LookupInput { filter: String, schoolId: String! }
+            type Query { schoolClassLookup(input: LookupInput!, limit: Int): [LookupItem!]! }
+          `),
+          source: document,
+          variableValues: variables,
+          rootValue: {
+            schoolClassLookup: () => [
+              { value: "class-1", label: "Class 1", searchText: "eldest" },
+            ],
+          },
+        })
+        if (result.errors) throw result.errors[0]
+        return result.data as TResponse
       },
     }
 
@@ -28,7 +39,9 @@ describe("fetchDependentLookupSuggestions", () => {
       { input: { filter: "cla", schoolId: "school-1" }, limit: 20 },
     )
 
-    expect(suggestions).toEqual([{ value: "class-1", label: "Class 1" }])
+    expect(suggestions).toEqual([
+      { value: "class-1", label: "Class 1", searchText: "eldest" },
+    ])
     expect(requests).toHaveLength(1)
     expect(requests[0]?.variables).toEqual({
       filter: "cla",

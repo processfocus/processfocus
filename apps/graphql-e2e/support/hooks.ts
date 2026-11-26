@@ -1,6 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import { existsSync, unlinkSync } from "node:fs"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
@@ -10,10 +17,27 @@ import {
   AfterAll,
   Before,
   BeforeAll,
+  BeforeStep,
   setDefaultTimeout,
 } from "@cucumber/cucumber"
+import { renewWorkloadToken } from "./auth-helpers"
 import { prepareLifecycleOrganisation } from "./lifecycle-fixture"
 import { withPausedLocalWorker } from "./local-worker-pause"
+import {
+  beginProviderScenario,
+  disposeProviderUsers,
+  stopProviderUsers,
+} from "./provider-user"
+import { runsInThisEnvironment } from "./scenario-environment"
+import type { TestWorld } from "./world"
+
+BeforeStep(async function (this: TestWorld) {
+  if (this.accessToken)
+    this.accessToken = await renewWorkloadToken(this.accessToken)
+  for (const session of this.userSessions.values()) {
+    session.accessToken = await renewWorkloadToken(session.accessToken)
+  }
+})
 
 // The default cucumber timeout of 5s is too tight for steps that make
 // network calls through CloudFront + Lambda. Set a reasonable default.
@@ -37,7 +61,6 @@ process.on("unhandledRejection", (reason) => {
     return
   }
 
-  // Re-throw non-WebSocket errors
   throw reason
 })
 
@@ -51,11 +74,36 @@ interface Server {
 let authServer: Server | null = null
 let graphqlServer: Server | null = null
 let jobWorker: Server | null = null
+let frontendServer: Server | null = null
+// An unexpected exit can leave other processes sharing the database unhealthy
+// (see https://github.com/tursodatabase/turso/issues/9005). Recover before the
+// next scenario; CI's Cucumber retries rerun the scenario interrupted by a crash.
+let localRuntimeProcessDied = false
+// Exits the fixture itself initiates (restarts, cleanup) are not crashes.
+const intentionalStops = new WeakSet<ChildProcess>()
+const recordUnexpectedExit = ({
+  proc,
+  name,
+  code,
+  signal,
+}: {
+  proc: ChildProcess
+  name: string
+  code: number | null
+  signal: NodeJS.Signals | null
+}) => {
+  if (intentionalStops.has(proc)) return
+  console.warn(
+    `[e2e] ${name} exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "none"})`,
+  )
+  localRuntimeProcessDied = true
+}
 let workerOutput = ""
 export const getLocalWorkerOutput = (): string => workerOutput
 let dbPath: string | null = null
 let lifecycleOrgPath: string | null = null
 const lifecycleActionDirectories = new Set<string>()
+const portReservations = new Set<string>()
 export const createLifecycleControlFile = async (outcome: string) => {
   const dir = await mkdtemp(join(tmpdir(), "pf-lifecycle-action-"))
   lifecycleActionDirectories.add(dir)
@@ -65,6 +113,18 @@ export const createLifecycleControlFile = async (outcome: string) => {
 }
 
 const cleanupLifecycleFiles = async () => {
+  for (const dir of portReservations) {
+    try {
+      await rmdir(dir)
+    } catch (error) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "ENOENT")
+      ) {
+        throw error
+      }
+    }
+    portReservations.delete(dir)
+  }
   for (const dir of lifecycleActionDirectories) {
     await rm(dir, { recursive: true, force: true })
     lifecycleActionDirectories.delete(dir)
@@ -103,6 +163,26 @@ const getAvailablePort = (): Promise<number> => {
   })
 }
 
+// Import needs the auth and Dashboard origins before either server binds.
+// Claim probed ports across workers and keep them claimed through restarts.
+const reserveWorkerPort = async (): Promise<number> => {
+  while (true) {
+    const port = await getAvailablePort()
+    const reservation = join(tmpdir(), `pf-graphql-e2e-port-${port}`)
+    try {
+      await mkdir(reservation)
+      portReservations.add(reservation)
+      return port
+    } catch (error) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "EEXIST")
+      ) {
+        throw error
+      }
+    }
+  }
+}
+
 /**
  * Wait for a server to respond to requests.
  * Accepts any HTTP response (including 401 Unauthorized) as a sign the server is up.
@@ -139,8 +219,8 @@ const waitForServer = (url: string, timeoutMs = 30000): Promise<void> => {
 }
 
 /**
- * Start a server process directly with bun on a specific port.
- * Uses --port flag to specify exact port (server fails if port is in use).
+ * Start a server process directly with bun and return its bound port.
+ * Port 0 lets the OS allocate a port atomically when the child binds.
  */
 const startServerOnPort = (
   name: string,
@@ -148,7 +228,7 @@ const startServerOnPort = (
   port: number,
   args: string[],
   env: Record<string, string>,
-): Promise<void> => {
+): Promise<number> => {
   return new Promise((resolve, reject) => {
     console.log(`[e2e] Starting ${name} on port ${port}...`)
 
@@ -166,7 +246,15 @@ const startServerOnPort = (
       proc,
       name,
       port,
-      restart: () => startServerOnPort(name, scriptPath, port, args, env),
+      restart: async () => {
+        await startServerOnPort(
+          name,
+          scriptPath,
+          server.port ?? port,
+          args,
+          env,
+        )
+      },
     }
     if (name === "auth-server") {
       authServer = server
@@ -175,15 +263,23 @@ const startServerOnPort = (
     }
 
     let resolved = false
+    let startupOutput = ""
 
     proc.stdout?.on("data", (data: Buffer) => {
       const text = data.toString()
       process.stdout.write(`[${name}] ${text}`)
 
-      // Server is ready when it logs "running at"
-      if (!resolved && text.includes("running at")) {
-        resolved = true
-        resolve()
+      // Keep partial chunks until the complete listening address is available.
+      if (!resolved) {
+        startupOutput += text
+        const match = startupOutput.match(
+          /running at http:\/\/[^\s]+:(\d+)(?:\/|\s)/,
+        )
+        if (match?.[1]) {
+          server.port = Number(match[1])
+          resolved = true
+          resolve(server.port)
+        }
       }
     })
 
@@ -198,10 +294,14 @@ const startServerOnPort = (
       }
     })
 
-    proc.on("exit", (code) => {
+    proc.on("exit", (code, signal) => {
       if (!resolved && code !== 0) {
         resolved = true
         reject(new Error(`${name} exited with code ${code}`))
+        return
+      }
+      if (resolved) {
+        recordUnexpectedExit({ proc, name, code, signal })
       }
     })
   })
@@ -261,10 +361,14 @@ const startJobWorker = (
       }
     })
 
-    proc.on("exit", (code) => {
+    proc.on("exit", (code, signal) => {
       if (!resolved && code !== 0) {
         resolved = true
         reject(new Error(`job-worker exited with code ${code}`))
+        return
+      }
+      if (resolved) {
+        recordUnexpectedExit({ proc, name: "job-worker", code, signal })
       }
     })
   })
@@ -277,9 +381,11 @@ const runMigrations = (dbPath: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     console.log("[e2e] Running database migrations...")
 
+    // Workers share an Nx invocation root; run the package script directly so
+    // their separate databases do not register the same nested migration task.
     const proc = spawn(
       "bun",
-      ["scripts/nx-quiet.ts", "run", "@pf/drizzle-sqlite:migrate"],
+      ["run", "--cwd", "packages/drizzle-sqlite", "migrate"],
       {
         env: { ...process.env, SQLITE_DATABASE_PATH: dbPath },
         cwd: WORKSPACE_ROOT,
@@ -308,6 +414,7 @@ const importOrganisation = (
   dbPath: string,
   orgPath: string,
   issuerUrl?: string,
+  frontendOrigin?: string,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
     console.log("[e2e] Importing organisation...")
@@ -319,8 +426,8 @@ const importOrganisation = (
         process.env["GOOGLE_CLIENT_ID"] ?? "ci-google-client-id",
       GOOGLE_CLIENT_SECRET:
         process.env["GOOGLE_CLIENT_SECRET"] ?? "ci-google-client-secret",
-      CI_PIPELINE_SECRET:
-        process.env["CI_PIPELINE_SECRET"] ?? "test-secret-for-e2e",
+      CI_PIPELINE_SECRET: "test-secret-for-e2e",
+      ...(frontendOrigin ? { PF_LOCAL_FRONTEND_ORIGIN: frontendOrigin } : {}),
     }
     if (issuerUrl) {
       env["OAUTH_ISSUER_URL"] = issuerUrl
@@ -397,6 +504,7 @@ const readFrontendJwt = (dbPath: string): Promise<string> => {
  */
 const killServer = (server: Server | null) => {
   if (server?.proc?.pid) {
+    intentionalStops.add(server.proc)
     try {
       process.kill(server.proc.pid, "SIGTERM")
     } catch (err) {
@@ -436,7 +544,7 @@ const cleanupFile = (path: string | null) => {
   }
 }
 
-BeforeAll({ timeout: 120000 }, async () => {
+BeforeAll({ timeout: 240000 }, async () => {
   // Skip local server setup when BASE_URL is provided (testing against external runtime)
   // This includes BASE_URL=http://localhost which reads ports from .graphql-port/.auth-port
   if (process.env["BASE_URL"]) {
@@ -449,10 +557,11 @@ BeforeAll({ timeout: 120000 }, async () => {
   try {
     console.log("[e2e] Starting local runtime for e2e tests...")
 
+    const frontendPort = await reserveWorkerPort()
+    const frontendOrigin = `http://localhost:${frontendPort}`
     lifecycleOrgPath = await prepareLifecycleOrganisation(WORKSPACE_ROOT)
     DEMO_ORG_PATH = lifecycleOrgPath
 
-    // Create unique temp database
     const timestamp = Date.now()
     const randomSuffix = Math.random().toString(36).substring(2, 8)
     dbPath = join(tmpdir(), `test-e2e-${timestamp}-${randomSuffix}.db`)
@@ -460,14 +569,9 @@ BeforeAll({ timeout: 120000 }, async () => {
     workerStateFile = `${dbPath}.worker-state.json`
     console.log(`[e2e] Using database: ${dbPath}`)
 
-    // Get available ports for auth and graphql servers upfront
-    const authPort = await getAvailablePort()
-    const graphqlPort = await getAvailablePort()
-    console.log(
-      `[e2e] Allocated ports - auth: ${authPort}, graphql: ${graphqlPort}`,
-    )
+    // Auth needs its issuer URL before importing the organisation.
+    const authPort = await reserveWorkerPort()
 
-    // Run migrations on empty database
     await runMigrations(dbPath)
 
     // Import the demo organisation (also runs custom org migrations)
@@ -476,15 +580,16 @@ BeforeAll({ timeout: 120000 }, async () => {
       dbPath,
       DEMO_ORG_PATH,
       `http://localhost:${authPort}`,
+      frontendOrigin,
     )
 
     const frontendJwtToken = await readFrontendJwt(dbPath)
 
-    // Set up CI_PIPELINE_SECRET for auth
-    const ciSecret = process.env["CI_PIPELINE_SECRET"] ?? "test-secret-for-e2e"
+    const ciSecret = "test-secret-for-e2e"
+    process.env["PF_AUTH_MODE"] = "local-dummy"
 
     // Start authentication server with explicit port
-    // Use ci@example.com for dummy provider - must have a matching invitation in the org
+    // User journeys register and sign in through the configured Passkey provider.
     await startServerOnPort(
       "auth-server",
       "runtime/local/src/authentication-server/authentication-server.ts",
@@ -493,21 +598,20 @@ BeforeAll({ timeout: 120000 }, async () => {
       {
         SQLITE_DATABASE_PATH: dbPath,
         CI_PIPELINE_SECRET: ciSecret,
-        PF_BYPASS_AUTH: "ci@example.com",
+        PF_BYPASS_AUTH: "",
+        FRONTEND_BASE_URL: frontendOrigin,
         PF_ORG: DEMO_ORG_PATH,
-        PF_AUTH_SKIP_M2M_LAST_LOGGED_IN_UPDATE:
-          process.env["PF_AUTH_SKIP_M2M_LAST_LOGGED_IN_UPDATE"] ?? "true",
       },
     )
     console.log(`[e2e] Auth server running on port ${authPort}`)
 
-    // Start GraphQL server with explicit port
+    // Bind an OS-assigned port; probing then closing a socket races other workers.
     // Pass OAUTH_ISSUER_URL so graphql server knows where auth server is
     // Pass INTERNAL_API_SECRET for internal API communication from job worker
-    await startServerOnPort(
+    const graphqlPort = await startServerOnPort(
       "graphql-server",
       "runtime/local/src/graphql-server/graphql-server.ts",
-      graphqlPort,
+      0,
       ["--org", DEMO_ORG_PATH],
       {
         SQLITE_DATABASE_PATH: dbPath,
@@ -516,11 +620,11 @@ BeforeAll({ timeout: 120000 }, async () => {
         OAUTH_ISSUER_URL: `http://localhost:${authPort}`,
         PF_ORG: DEMO_ORG_PATH,
         E2E_SKIP_DELAYS: process.env["E2E_SKIP_DELAYS"] ?? "true",
+        FRONTEND_BASE_URL: frontendOrigin,
       },
     )
     console.log(`[e2e] GraphQL server running on port ${graphqlPort}`)
 
-    // Wait for GraphQL server to be ready
     console.log("[e2e] Waiting for GraphQL server to be ready...")
     await waitForServer(`http://localhost:${graphqlPort}/graphql`)
 
@@ -545,7 +649,6 @@ BeforeAll({ timeout: 120000 }, async () => {
     )
     console.log("[e2e] Job worker started")
 
-    // Set environment variables for tests to use
     process.env["GRAPHQL_ENDPOINT"] = `http://localhost:${graphqlPort}/graphql`
     process.env["AUTH_URL"] = `http://localhost:${authPort}`
     process.env["CI_PIPELINE_SECRET"] = ciSecret
@@ -553,6 +656,59 @@ BeforeAll({ timeout: 120000 }, async () => {
     process.env["FRONTEND_JWT_TOKEN"] = frontendJwtToken
     process.env["PF_LOCAL_QUEUE_PAUSE_FILE"] = workerPauseFile
     process.env["PF_LOCAL_QUEUE_STATE_FILE"] = workerStateFile
+    process.env["FRONTEND_BASE_URL"] = frontendOrigin
+
+    const proc = spawn(
+      "node",
+      [
+        "node_modules/next/dist/bin/next",
+        "start",
+        "--port",
+        String(frontendPort),
+      ],
+      {
+        cwd: join(WORKSPACE_ROOT, "apps/frontend"),
+        env: {
+          ...process.env,
+          NODE_ENV: "production",
+          PF_ORG: DEMO_ORG_PATH,
+          OAUTH_ISSUER_URL: `http://localhost:${authPort}`,
+          JWKS_URI: `http://localhost:${authPort}/.well-known/jwks.json`,
+          REVALIDATE_SECRET: ciSecret,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    )
+    proc.stdout?.on("data", (data: Buffer) =>
+      process.stdout.write(`[frontend] ${data}`),
+    )
+    proc.stderr?.on("data", (data: Buffer) =>
+      process.stderr.write(`[frontend] ${data}`),
+    )
+    frontendServer = {
+      proc,
+      name: "frontend",
+      restart: async () => {
+        throw new Error("Frontend restart is not part of runtime recovery")
+      },
+    }
+    await waitForServer(`${frontendOrigin}/login`, 120_000)
+    // The generic Dashboard build was bootstrapped against a different issuer.
+    // Invalidate its build-time login metadata through the normal local seam.
+    const revalidated = await fetch(`${frontendOrigin}/api/revalidate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: `access_token_${frontendPort}=${frontendJwtToken}`,
+      },
+      body: JSON.stringify({
+        path: "/login",
+        tag: "login-page",
+        secret: ciSecret,
+      }),
+    })
+    if (!revalidated.ok)
+      throw new Error("Could not refresh Dashboard login metadata")
 
     console.log("[e2e] Local runtime started successfully!")
   } catch (err) {
@@ -560,6 +716,7 @@ BeforeAll({ timeout: 120000 }, async () => {
     killServer(authServer)
     killServer(graphqlServer)
     killServer(jobWorker)
+    killServer(frontendServer)
     cleanupFile(workerPauseFile)
     cleanupFile(workerStateFile)
     cleanupDatabase(dbPath)
@@ -580,11 +737,11 @@ AfterAll({ timeout: 10000 }, async () => {
   killServer(authServer)
   killServer(graphqlServer)
   killServer(jobWorker)
+  killServer(frontendServer)
 
   // Give processes time to clean up
   await new Promise((resolve) => setTimeout(resolve, 1000))
 
-  // Clean up temp database
   cleanupFile(workerPauseFile)
   cleanupFile(workerStateFile)
   cleanupDatabase(dbPath)
@@ -592,6 +749,31 @@ AfterAll({ timeout: 10000 }, async () => {
 
   console.log("[e2e] Cleanup complete!")
 })
+
+// An earlier step may have failed while its unused Passkey was still enrolling.
+After({ timeout: 120_000 }, ({ pickle }) => disposeProviderUsers(pickle.id))
+AfterAll({ timeout: 120_000 }, stopProviderUsers)
+
+const isProcessDead = (server: Server): boolean =>
+  server.proc.exitCode !== null || server.proc.signalCode !== null
+
+const stopServer = (server: Server): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    if (isProcessDead(server)) {
+      resolve()
+      return
+    }
+    intentionalStops.add(server.proc)
+    const timer = setTimeout(() => {
+      server.proc.kill("SIGKILL")
+      reject(new Error(`${server.name} did not stop within 10 seconds`))
+    }, 10_000)
+    server.proc.once("exit", () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    server.proc.kill("SIGTERM")
+  })
 
 // Restart only the three processes owned by this disposable fixture. Keep the
 // same database, queue rows, ports, signing keys and accepted execution IDs.
@@ -602,22 +784,32 @@ export const restartLocalRuntime = async (): Promise<void> => {
     )
   }
   const servers = [jobWorker, graphqlServer, authServer]
-  await withPausedLocalWorker(async () => {
-    for (const server of servers) {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          server.proc.kill("SIGKILL")
-          reject(new Error(`${server.name} did not stop within 10 seconds`))
-        }, 10_000)
-        server.proc.once("exit", () => {
-          clearTimeout(timer)
-          resolve()
-        })
-        server.proc.kill("SIGTERM")
-      })
-    }
+  const restartAll = async () => {
+    for (const server of servers) await stopServer(server)
+    // Clear the old crash before spawning replacements, so a new crash during
+    // startup remains recorded for the next scenario attempt.
+    localRuntimeProcessDied = false
     for (const server of [...servers].reverse()) await server.restart()
-  })
+  }
+  try {
+    if (isProcessDead(jobWorker)) {
+      // A crashed worker cannot acknowledge the pause protocol and cannot have
+      // background jobs in flight, so restart without the pause handshake.
+      console.warn("[e2e] Job worker is not running; restarting without pause")
+      await restartAll()
+    } else {
+      await withPausedLocalWorker(restartAll)
+    }
+    if (
+      localRuntimeProcessDied ||
+      [authServer, graphqlServer, jobWorker].some(isProcessDead)
+    ) {
+      throw new Error("Local runtime process died during restart")
+    }
+  } catch (error) {
+    localRuntimeProcessDied = true
+    throw error
+  }
   console.log(`[e2e] Restarted auth, GraphQL and worker against ${dbPath}`)
 }
 
@@ -645,8 +837,9 @@ After({ tags: "@without-waiting-lifecycle", timeout: 60_000 }, async () => {
   }
 })
 
-Before({ tags: "@localhost-only" }, () => {
-  if (process.env["BASE_URL"]) return "skipped"
+Before(({ pickle }) => {
+  if (!runsInThisEnvironment(pickle)) return "skipped"
+  beginProviderScenario(pickle.id)
   return undefined
 })
 
@@ -659,6 +852,11 @@ Before({ timeout: 60_000 }, async ({ pickle }) => {
   const skipDelays = lifecycle ? "false" : originalSkipDelays
   if ((process.env["E2E_SKIP_DELAYS"] ?? "true") !== skipDelays) {
     process.env["E2E_SKIP_DELAYS"] = skipDelays
+    await restartLocalRuntime()
+  } else if (localRuntimeProcessDied) {
+    console.warn(
+      "[e2e] Local runtime process died since the last scenario; restarting before this scenario",
+    )
     await restartLocalRuntime()
   }
 })

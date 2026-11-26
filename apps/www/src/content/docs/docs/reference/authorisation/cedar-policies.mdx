@@ -1,0 +1,381 @@
+---
+title: Cedar policies
+description: Cedar policy structure, login permissions, and provider user identities.
+---
+
+A Cedar policy specifies:
+
+- **Effect**: whether to permit or forbid a request.
+- **Principal**: who is making the request.
+- **Action**: what they want to do.
+- **Resource**: what they want to act on.
+
+A policy can also include `when` and `unless` conditions that determine when
+it applies.
+
+## Authorise frontend login
+
+This Cedar policy permits the login action for all authenticated users:
+
+```cedar
+permit (
+    principal is PF::ProviderUser,
+    action == PF::Action::"login",
+    resource is PF::Application
+);
+```
+
+This policy only grants permission to user identities, it does not
+grant login access to system identities.
+
+This policy permits the login action for just a single user:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"foo@example.com",
+    action == PF::Action::"login",
+    resource is PF::Application
+);
+```
+
+This policy forbids user `foo@example.com` from logging in, even if
+another policy permits it:
+
+```cedar
+forbid (
+    principal == PF::ProviderUser::"foo@example.com",
+    action == PF::Action::"login",
+    resource is PF::Application
+);
+```
+
+An explicit forbid will always win over a permit.
+
+## Provider user identities
+
+Cedar identifies a provider user as `PF::ProviderUser` using their stable login
+email as the entity ID. Use that email when referring to a provider user in
+custom policies and durable authorisation configuration.
+
+## Permissions for a role
+
+This policy permits provider users in the `/Administrator` role to administer
+users:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Administrator",
+    action == PF::Action::"administerUsers",
+    resource is PF::Application
+);
+```
+
+## Role identities
+
+Cedar identifies a role as `PF::Role` using its full path as the entity ID.
+Quote the path when referring to a role, for example
+`PF::Role::"/Administrator"`. The `in` operator matches a principal that belongs
+to that role.
+
+## When statements
+
+A Cedar policy can have an optional `when` clause to limit when it permits or denies an action:
+
+```cedar
+permit (
+    principal is PF::ProviderUser,
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+when {
+    principal has roles &&
+    !principal.roles.isEmpty()
+};
+```
+
+This policy permits provider users (`PF::ProviderUser`) with at least
+one role to log in to an application. The default Process Focus policy uses
+the same role requirement for provider users and delegations.
+
+## Unless statements
+
+Unless statements are the reverse of `when`. This is the same policy
+as above, but we no longer need the negation. Users can login, unless
+they have no roles:
+
+```cedar
+permit (
+    principal is PF::ProviderUser,
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+when {
+    principal has roles
+}
+unless {
+    principal.roles.isEmpty()
+};
+```
+
+A single Cedar policy can contain both when and unlesss expressions.
+
+## Properties in when and unless statements
+
+The when and unless conditions above referred to an attribute of the
+principal. Conditions can also refer to attributes of the resource, or
+to a special `context` variable.
+
+For example, this policy permits provider users to download files they own.
+The `owner` attribute of the file resource identifies its provider user:
+
+```cedar
+permit (
+    principal is PF::ProviderUser,
+    action == PF::Action::"download",
+    resource is PF::File
+)
+when {
+    resource.owner == principal
+};
+```
+
+A `when` expression must be true for the policy to match; an
+`unless` expression must be false. If a policy has multiple conditions, every
+`when` must be true and every `unless` must be false.
+
+Context adds properties that neither belong to a principal or
+resource, but to the request itself. For example:
+
+```cedar
+permit (
+    principal is PF::ProviderUser,
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+unless {
+    context.environment == "prod"
+};
+```
+
+This policy permits login unless the environment is `prod` (production).
+Use your actual production environment name. Other policies can still permit
+login in production.
+
+For the full syntax and condition expressions, see the [Cedar policy language
+reference](https://docs.cedarpolicy.com/policies/syntax-policy.html#term-parc-context).
+
+## Local versus deployed policies
+
+Use `context.runtimeMode` to distinguish local development from a project
+deployed to the cloud. It is `"local"` for local runtime components,
+`"deployed"` for deployed components, and `"unknown"` when the runtime identity
+is unavailable.
+
+For example, this policy permits Alice to log in only during local development:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"alice@example.com",
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+when {
+    context.runtimeMode == "local"
+};
+```
+
+Unless:
+
+```cedar
+permit (
+    principal == PF::ProviderUser::"alice@example.com",
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+unless {
+    context.runtimeMode == "deployed"
+};
+```
+
+## Using request time
+
+Use `context.requestTime.toTime()` for local hours and `context.weekday` for
+the local day of the week. Both use the server's local timezone, configured
+through `TZ` from the organisation's business calendar.
+
+For example, this policy forbids login on weekends, even if another policy
+permits it:
+
+```cedar
+forbid (
+    principal is PF::ProviderUser,
+    action == PF::Action::"login",
+    resource is PF::Application
+)
+when {
+    ["saturday", "sunday"].contains(context.weekday)
+};
+```
+
+Although `context.requestTime` contains local time, Cedar only handles UTC
+datetimes. Process Focus appends `Z` to the local wall-clock time without
+converting it to UTC. This lets you compare local hours without handling
+daylight saving or UTC conversion in the policy.
+
+For example, this policy permits accounts managers to complete a purchase
+approval from 9am inclusive until 5pm exclusive:
+
+```cedar
+permit (
+    principal in PF::Role::"/finance/manager",
+    action == PF::Action::"complete",
+    resource == PF::Step::"/finance/purchase-request/Manager approval"
+)
+when {
+    context.requestTime.toTime() >= duration("9h") &&
+    context.requestTime.toTime() < duration("17h")
+};
+```
+
+Replace the role and step path with those used by your organisation.
+
+### Block approvals outside business hours
+
+Other policies can still permit the step outside these hours. To block
+approval outside these hours even when another policy permits it, add a
+`forbid`:
+
+```cedar
+forbid (
+    principal,
+    action == PF::Action::"complete",
+    resource == PF::Step::"/finance/purchase-request/Manager approval"
+)
+when {
+    context.requestTime.toTime() < duration("9h") ||
+    context.requestTime.toTime() >= duration("17h")
+};
+```
+
+## Making custom Cedar policies available to your organisation
+
+Put your rules in a `.cedar` file, such as `cedar/custom.cedar`, in your
+organisation package. See [Custom Cedar permissions](/docs/reference/authorisation/custom-cedar-permissions/)
+for how to register the file with `PoliciesConfig` and apply the changes.
+
+## Context
+
+The `context` record contains information about an authorisation request. Use
+its attributes in `when` and `unless` conditions. All requests include:
+
+| Attribute | Type | Description |
+| --- | --- | --- |
+| `context.requestTime` | `datetime` | The request time in the server's local timezone. Cedar receives the local wall-clock time encoded with a `Z` suffix; it is not a UTC conversion. |
+| `context.weekday` | `String` | The weekday of the same local date as `context.requestTime`, using the organisation business calendar's configured timezone: `"monday"`, `"tuesday"`, `"wednesday"`, `"thursday"`, `"friday"`, `"saturday"`, or `"sunday"`. It can differ from the UTC weekday. |
+| `context.runtimeMode` | `String` | `"local"`, `"deployed"`, or `"unknown"` when the runtime identity is unavailable. |
+| `context.stage` | `String` | The exact Process Focus stage name from `PF_STAGE`, or `""` when unavailable. |
+| `context.environment` | `String` | The exact Process Focus environment name from `PF_ENV`, or `""` when unavailable. |
+
+Stage and environment values only apply in cloud deployments. Local
+runtimes leave these values empty unless `PF_STAGE` and `PF_ENV` are
+explicitly supplied. For environment-specific policies, see [Cedar
+policies in the
+cloud](/docs/cloud/cedar-policies/#permission-for-a-specific-environment).
+
+### Completion context
+
+The `complete` and `publicCompletionCorrection` actions target a `PF::Step`.
+For existing work, the runtime also supplies instance-specific context from
+the Todo:
+
+| Attribute | Type | Description |
+| --- | --- | --- |
+| `context.todoId` | `String` | The ID of the Todo being completed or corrected. Absent when starting a process. |
+| `context.assignedTo` | `PF::ProviderUser` | The directly assigned user, identified by stable login email. Absent when the Todo is unassigned or the request starts a process. |
+
+Use `context has assignedTo` before reading the optional assignee. The default
+role policy requires the step's role and respects direct assignments; a custom
+permit can grant additional access.
+
+### Public completion links
+
+A public link grants access to one Todo, even when other Todos belong to the
+same step. This default policy compares the Todo ID from the verified link
+with the Todo being completed:
+
+```cedar
+permit (
+    principal is PF::PublicLink,
+    action == PF::Action::"complete",
+    resource is PF::Step
+)
+when {
+    context has todoId &&
+    principal.todoId == context.todoId
+};
+```
+
+The runtime supplies the Step and context from the actual work item. Clients
+cannot choose these authorisation facts. Link expiry, recipient checks, and
+whether the Todo is still available are also checked by the runtime.
+
+## Principals
+
+The built-in Cedar schema recognises these principal types. Each action
+specifies which principal types it accepts.
+
+| Type | Description |
+| --- | --- |
+| `PF::ProviderUser` | A user identity, identified by its stable login email. |
+| `PF::Delegation` | A separate identity acting on behalf of a provider user. |
+| `PF::ServiceAccount` | A system identity with assigned roles. |
+| `PF::PublicLink` | A public-link identity associated with a Todo, used for the `complete` action. |
+
+## Resources
+
+The built-in Cedar schema recognises these resource types. Each action
+specifies which resource types it accepts.
+
+| Type | Description |
+| --- | --- |
+| `PF::Application` | The application as a whole, for login and application-level permissions. |
+| `PF::Process` | A process definition. |
+| `PF::Step` | A step in a process, used for both process starts and completion of its Todos. |
+| `PF::FormField` | An individual form field, for field modification permissions. |
+| `PF::Execution` | An execution of a process. |
+| `PF::List` | A list, for viewing, creating, updating, or deleting entries. |
+| `PF::File` | A file, for download or deletion. |
+| `PF::GraphQLField` | A GraphQL query, mutation, or subscription field. |
+| `PF::Role` | A role whose permissions are being requested. |
+| `PF::ProviderUser` | A user whose permissions are being requested, who is being represented, or whose delegation tokens are being managed. |
+| `PF::Delegation` | A delegation being renamed, replaced, or revoked. |
+
+Policies written for the former `PF::Todo` resource must target `PF::Step`
+instead. Compare the Step directly rather than reading `resource.step`, and
+read `context.assignedTo` instead of `resource.assignedTo`. Existing Step
+permits and forbids now apply when completing Todos for that Step too.
+Rebuild the organisation and restart the runtime after updating the schema
+and policies.
+
+## Generated process mutations
+
+Ordinary generated start mutations and generated Form Todo completion mutations
+have `@processPermission`. After authenticating the caller, the runtime checks
+`complete` on the resolved start Step or the Step of the actual Todo. The
+completion command still checks that the Todo matches the mutation's Step and
+applies assignment rules. Form field-write permissions still apply.
+
+When upgrading, move any `PF::GraphQLField` forbids you rely on for these
+mutations to `complete` forbids on `PF::Step`. Use `context has todoId` to
+distinguish Todo completion from a start on the same Step. A field forbid no
+longer vetoes a marked mutation; a matching Step forbid still wins. Remove
+redundant field permits once the Step policies are in place. Rebuild the
+organisation's generated schema and restart the runtime.
+
+Cron-tagged start mutations still require both field and Step permission.
+The built-in scheduler grant requires `context.cronStart`, which the start
+command supplies for a system start with a cron schedule. If a scheduler
+integration needs to start a non-cron process, it needs an explicit `complete`
+grant on that process's start Step.
+Lookups and other unmarked fields still require field permission, even when
+they have `@step` metadata.

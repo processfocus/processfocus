@@ -37,10 +37,9 @@ export type AwsFunctionStepProps<
   readonly functionName: string
 }
 
-// Lazily cached Lambda client at module level
 let lambdaClient: LambdaClient | undefined
 
-const JsonValue = Schema.parseJson(Schema.Unknown)
+const JsonValue = Schema.fromJsonString(Schema.Unknown)
 
 function getLambdaClient(): LambdaClient {
   if (!lambdaClient) {
@@ -113,10 +112,10 @@ export class AwsFunctionStep<
   execute(
     input: TInput,
   ): Effect.Effect<InferSchemaType<TOutput>, AwsFunctionError, unknown> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const client = getLambdaClient()
 
-      const payloadJson = yield* Schema.encode(JsonValue)(input).pipe(
+      const payloadJson = yield* Schema.encodeEffect(JsonValue)(input).pipe(
         Effect.mapError(
           (cause) =>
             new AwsFunctionError({
@@ -156,7 +155,6 @@ export class AwsFunctionStep<
         })
       }
 
-      // Parse the response payload as JSON
       if (!response.Payload || response.Payload.length === 0) {
         return yield* new AwsFunctionError({
           message: `Lambda function "${this.functionName}" returned empty response`,
@@ -172,7 +170,9 @@ export class AwsFunctionStep<
         },
       )
 
-      const result = yield* Schema.decodeUnknown(JsonValue)(responseText).pipe(
+      const result = yield* Schema.decodeUnknownEffect(JsonValue)(
+        responseText,
+      ).pipe(
         Effect.map((value) => value as InferSchemaType<TOutput>),
         Effect.mapError(
           (error) =>

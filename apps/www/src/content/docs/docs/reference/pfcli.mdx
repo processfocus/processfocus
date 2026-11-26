@@ -1,0 +1,44 @@
+---
+title: pfcli
+description: Command-line options and environment variable fallbacks.
+---
+
+`pfcli` builds and imports organisations and manages cloud projects. Run
+`pfcli --help` or `pfcli <command> --help` for the available commands and
+options.
+
+## Command options
+
+Pass an organisation directory directly to local commands. For example:
+
+```bash
+pfcli import ./my-org --database-path ./data.db --issuer-url http://localhost:4020
+pfcli invitation registration-link ./my-org --email alice@example.com --frontend-url http://localhost:3000
+```
+
+Use `--database-path` for a local database outside the organisation's default
+`db/pf.db`. `--issuer-url` sets the frontend JWT issuer. `--frontend-url` sets
+the local registration link's HTTP(S) origin, including its port if needed.
+For a different Console endpoint, use `pfcli auth login --base-url <url>`.
+Use each command's help to check which options it accepts.
+
+## Environment variables
+
+Some commands also accept environment variables as fallbacks. Explicit options
+take precedence: for example, `--database-path` overrides
+`SQLITE_DATABASE_PATH`, `--issuer-url` overrides `OAUTH_ISSUER_URL`, and
+`--frontend-url` overrides `FRONTEND_BASE_URL`, `BASE_URL`, and
+`NEXT_PUBLIC_FRONTEND_URL`. Without a frontend URL override, the local
+registration-link command discovers the frontend port or falls back to 3000.
+
+For a stage secret, avoid putting its value in command arguments, which can be
+exposed in shell history or process listings. Instead, set an environment
+variable using your secret manager and pass its name as a bare key:
+
+```bash
+# Set GOOGLE_CLIENT_SECRET in your environment using your secret manager.
+pfcli config set --project 0000-0000-0002 --stage Production --secret GOOGLE_CLIENT_SECRET
+```
+
+The command reads the exported variable and fails if it is unset. Handle
+environment variables carefully and keep secret values out of logs.

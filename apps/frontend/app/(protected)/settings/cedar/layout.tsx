@@ -1,6 +1,9 @@
 import type { ReactNode } from "react"
 import { AuthorizationTabs } from "./authorization-tabs"
 
+// The authenticated shell can omit this subtree before a session is ready.
+export const instant = false
+
 export default function AuthorizationLayout({
   children,
 }: {

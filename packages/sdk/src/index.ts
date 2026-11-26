@@ -53,8 +53,6 @@ export {
   Form,
   type FormEmbedConfig,
   type FormPublicCompletionConfig,
-  FormRuleSelf,
-  type FormRuleTargetTree,
   type FormStepProps,
   LookupFieldNotFoundError,
   type PublicCompletionCorrectionConfig,

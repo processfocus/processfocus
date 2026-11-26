@@ -36,15 +36,12 @@ export const deepMerge = (
 
     const targetValue = result[key]
 
-    // Check if both values are plain objects (not arrays, not null)
     if (isPlainObject(sourceValue) && isPlainObject(targetValue)) {
-      // Recursively merge objects
       result[key] = deepMerge(
         targetValue as Record<string, unknown>,
         sourceValue as Record<string, unknown>,
       )
     } else {
-      // Overwrite with source value (primitives, arrays, null)
       result[key] = sourceValue
     }
   }

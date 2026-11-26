@@ -1,3 +1,4 @@
+export * from "./lib/audit"
 export {
   PostgresAuthenticationDatabaseLive,
   PostgresOpenAuthStorageServiceLive,

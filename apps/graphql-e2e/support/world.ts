@@ -1,10 +1,6 @@
 import { World, setWorldConstructor } from "@cucumber/cucumber"
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-} from "@effect/platform"
 import { Data, Effect, Schedule } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
 import {
   type Client as WsClient,
   createClient as createWsClient,
@@ -46,6 +42,7 @@ import {
 } from "@pf/frontend-endpoints/port-files"
 import { type Client, createClient } from "../generated"
 import { AppSyncEventsClient } from "./appsync-events-client"
+import { renewWorkloadToken } from "./auth-helpers"
 import { isGraphqlMutation, withPausedLocalWorker } from "./local-worker-pause"
 import { getAppSyncRecipientId } from "./realtime-recipient"
 import { websocketEventWaitMs } from "./subscription-timeouts"
@@ -274,6 +271,13 @@ export class TestWorld extends World {
   // Cross-user subscription error state
   crossUserSubscriptionError: Error | null = null
 
+  // Purchase orders survive execution cleanup; each scenario/retry needs its own items.
+  readonly purchaseItemNamespace = crypto.randomUUID()
+
+  purchaseItem(value: string): string {
+    return value.replaceAll("{purchase}", this.purchaseItemNamespace)
+  }
+
   // Purchase order list test state
   purchaseOrderListCount: number | undefined = undefined
 
@@ -287,9 +291,12 @@ export class TestWorld extends World {
   getClient(): Client {
     return createClient({
       url: getEffectiveGraphqlEndpoint(),
-      headers: this.accessToken
-        ? { Authorization: `Bearer ${this.accessToken}` }
-        : {},
+      headers: async () =>
+        this.accessToken
+          ? {
+              Authorization: `Bearer ${await renewWorkloadToken(this.accessToken)}`,
+            }
+          : {},
     })
   }
 
@@ -303,6 +310,8 @@ export class TestWorld extends World {
     variables?: Record<string, unknown>,
   ): Promise<T> {
     const accessToken = this.accessToken
+      ? await renewWorkloadToken(this.accessToken)
+      : null
 
     const effect = Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
@@ -320,7 +329,7 @@ export class TestWorld extends World {
           `Bearer ${accessToken}`,
         )
       }
-      request = HttpClientRequest.bodyUnsafeJson(request, { query, variables })
+      request = HttpClientRequest.bodyJsonUnsafe(request, { query, variables })
 
       const response = yield* client.execute(request).pipe(Effect.scoped)
       const body = yield* response.json
@@ -352,8 +361,8 @@ export class TestWorld extends World {
     })
 
     // Retry schedule: 100ms initial delay, exponential backoff, max 3 retries
-    const retrySchedule = Schedule.exponential("100 millis").pipe(
-      Schedule.intersect(Schedule.recurs(3)),
+    const retrySchedule = Schedule.exponential("100 millis").pipe((schedule) =>
+      Schedule.max([schedule, Schedule.recurs(3)]),
     )
 
     const effectWithRetry = effect.pipe(
@@ -399,7 +408,6 @@ export class TestWorld extends World {
         // Handle connection errors gracefully
         on: {
           error: (err) => {
-            // Convert various error types to Error with proper message
             const error = TestWorld.toError(err)
             console.log("[subscription] Error:", error.message)
             // Only set error if we haven't already cleaned up
@@ -462,8 +470,7 @@ export class TestWorld extends World {
     query: string,
     variables?: Record<string, unknown>,
   ): Promise<void> {
-    // Clean up any existing subscription
-    this.unsubscribe()
+    await this.unsubscribe()
     this.subscriptionEvents = []
     this.subscriptionError = null
 
@@ -566,7 +573,7 @@ export class TestWorld extends World {
   /**
    * Unsubscribe from current subscription and close WebSocket client.
    */
-  unsubscribe(): void {
+  async unsubscribe(): Promise<void> {
     if (this.subscriptionCleanup) {
       this.subscriptionCleanup()
       this.subscriptionCleanup = null
@@ -576,7 +583,7 @@ export class TestWorld extends World {
       this.wsClient = null
     }
     if (this.appSyncClient) {
-      this.appSyncClient.disconnect()
+      await this.appSyncClient.disconnect()
       this.appSyncClient = null
     }
   }
@@ -588,7 +595,6 @@ export class TestWorld extends World {
    * @param timeoutMs Timeout in milliseconds (default 5000)
    */
   async waitForEvents(count: number, timeoutMs = 5000): Promise<void> {
-    // Already have enough events
     if (this.subscriptionEvents.length >= count) return
     if (this.subscriptionError) throw this.subscriptionError
 
@@ -614,7 +620,6 @@ export class TestWorld extends World {
           this.eventNotifier = null
           resolve()
         }
-        // Otherwise keep waiting for next notification
       }
 
       this.eventNotifier = checkEvents
@@ -630,12 +635,11 @@ export class TestWorld extends World {
    * @param query GraphQL subscription query
    * @param variables Optional variables
    */
-  trySubscribe<T = unknown>(
+  async trySubscribe<T = unknown>(
     query: string,
     variables?: Record<string, unknown>,
-  ): void {
-    // Clean up any existing subscription
-    this.unsubscribe()
+  ): Promise<void> {
+    await this.unsubscribe()
     this.subscriptionEvents = []
     this.subscriptionError = null
 
@@ -709,7 +713,6 @@ export class TestWorld extends World {
    * @param timeoutMs Timeout in milliseconds (default 5000)
    */
   async waitForSubscriptionError(timeoutMs = 5000): Promise<void> {
-    // Already have an error
     if (this.subscriptionError) return
 
     return new Promise((resolve, _reject) => {
@@ -725,7 +728,6 @@ export class TestWorld extends World {
           this.errorNotifier = null
           resolve()
         }
-        // Otherwise keep waiting for next notification
       }
 
       this.errorNotifier = checkError
@@ -836,10 +838,8 @@ export class TestWorld extends World {
   ): Promise<void> {
     const session = this.getUserSession(name)
 
-    // Clean up any existing subscription of this type
-    this.unsubscribeUserFromType(name, type)
+    await this.unsubscribeUserFromType(name, type)
 
-    // Create fresh subscription state
     const state = this.createSubscriptionState()
     session.subscriptions[type] = state
 
@@ -1179,14 +1179,12 @@ export class TestWorld extends World {
     }
     let resolved = false
 
-    // Check if todo already exists
     const checkForTodo = (): boolean => {
       if (!this.userSessions.has(name)) return false
       const todos = this.getUserTodoDocuments(name)
       return todos.some((todo) => todo.stepName === stepName)
     }
 
-    // Already have the todo
     if (checkForTodo()) return
 
     return new Promise((resolve, reject) => {
@@ -1207,7 +1205,6 @@ export class TestWorld extends World {
         )
       }, timeoutMs)
 
-      // Called when websocket event arrives
       const onEvent = () => {
         if (resolved) return
         if (!this.userSessions.has(name)) {
@@ -1229,7 +1226,6 @@ export class TestWorld extends World {
           state.eventNotifier = null
           resolve()
         }
-        // If todo not found yet, keep waiting for next event
       }
 
       state.eventNotifier = onEvent
@@ -1259,7 +1255,6 @@ export class TestWorld extends World {
     }
     let resolved = false
 
-    // Check if todo already exists with expected summary
     const checkForTodo = (): boolean => {
       if (!this.userSessions.has(name)) return false
       const todos = this.getUserTodoDocuments(name)
@@ -1272,7 +1267,6 @@ export class TestWorld extends World {
       )
     }
 
-    // Already have the todo
     if (checkForTodo()) return
 
     return new Promise((resolve, reject) => {
@@ -1293,7 +1287,6 @@ export class TestWorld extends World {
         )
       }, timeoutMs)
 
-      // Called when websocket event arrives
       const onEvent = () => {
         if (resolved) return
         if (!this.userSessions.has(name)) {
@@ -1315,7 +1308,6 @@ export class TestWorld extends World {
           state.eventNotifier = null
           resolve()
         }
-        // If todo not found yet, keep waiting for next event
       }
 
       state.eventNotifier = onEvent
@@ -1343,7 +1335,6 @@ export class TestWorld extends World {
     }
     let resolved = false
 
-    // Check if todo already exists with the summary label present
     const checkForTodo = (): boolean => {
       if (!this.userSessions.has(name)) return false
       const todos = this.getUserTodoDocuments(name)
@@ -1354,7 +1345,6 @@ export class TestWorld extends World {
       )
     }
 
-    // Already have the todo
     if (checkForTodo()) return
 
     return new Promise((resolve, reject) => {
@@ -1375,7 +1365,6 @@ export class TestWorld extends World {
         )
       }, timeoutMs)
 
-      // Called when websocket event arrives
       const onEvent = () => {
         if (resolved) return
         if (!this.userSessions.has(name)) {
@@ -1397,7 +1386,6 @@ export class TestWorld extends World {
           state.eventNotifier = null
           resolve()
         }
-        // If todo not found yet, keep waiting for next event
       }
 
       state.eventNotifier = onEvent
@@ -1425,7 +1413,6 @@ export class TestWorld extends World {
     }
     let resolved = false
 
-    // Check if process update already exists with expected activeInstances
     const checkForProcess = (): boolean => {
       if (!this.userSessions.has(name)) return false
       const processes = this.getUserProcessDocuments(name)
@@ -1437,7 +1424,6 @@ export class TestWorld extends World {
       )
     }
 
-    // Already have the process update
     if (checkForProcess()) return
 
     return new Promise((resolve, reject) => {
@@ -1458,7 +1444,6 @@ export class TestWorld extends World {
         )
       }, timeoutMs)
 
-      // Called when websocket event arrives
       const onEvent = () => {
         if (resolved) return
         if (!this.userSessions.has(name)) {
@@ -1480,7 +1465,6 @@ export class TestWorld extends World {
           state.eventNotifier = null
           resolve()
         }
-        // If process not found yet, keep waiting for next event
       }
 
       state.eventNotifier = onEvent
@@ -1506,7 +1490,6 @@ export class TestWorld extends World {
     }
     let resolved = false
 
-    // Check if execution already exists with status "Running"
     const checkForExecution = (): boolean => {
       if (!this.userSessions.has(name)) return false
       const executions = this.getUserExecutionDocuments(name)
@@ -1516,7 +1499,6 @@ export class TestWorld extends World {
       )
     }
 
-    // Already have the execution
     if (checkForExecution()) return
 
     return new Promise((resolve, reject) => {
@@ -1537,7 +1519,6 @@ export class TestWorld extends World {
         )
       }, timeoutMs)
 
-      // Called when websocket event arrives
       const onEvent = () => {
         if (resolved) return
         if (!this.userSessions.has(name)) {
@@ -1559,7 +1540,6 @@ export class TestWorld extends World {
           state.eventNotifier = null
           resolve()
         }
-        // If execution not found yet, keep waiting for next event
       }
 
       state.eventNotifier = onEvent
@@ -1573,7 +1553,6 @@ export class TestWorld extends World {
    * @param waitMs Wait time in milliseconds (default 4000)
    */
   async assertNoUserTodos(name: string, waitMs = 4000): Promise<void> {
-    // Wait the minimum time
     await new Promise((resolve) => setTimeout(resolve, waitMs))
 
     const todos = this.getUserTodoDocuments(name)
@@ -1591,7 +1570,6 @@ export class TestWorld extends World {
    * @param waitMs Wait time in milliseconds (default 4000)
    */
   async assertNoUserProcessUpdates(name: string, waitMs = 4000): Promise<void> {
-    // Wait the minimum time
     await new Promise((resolve) => setTimeout(resolve, waitMs))
 
     const processes = this.getUserProcessDocuments(name)
@@ -1636,10 +1614,10 @@ export class TestWorld extends World {
    * @param name User identifier
    * @param type Subscription type
    */
-  unsubscribeUserFromType(
+  async unsubscribeUserFromType(
     name: string,
     type: "todo" | "process" | "execution",
-  ): void {
+  ): Promise<void> {
     const session = this.userSessions.get(name)
     if (!session) return
 
@@ -1655,7 +1633,7 @@ export class TestWorld extends World {
       state.wsClient = null
     }
     if (state.appSyncClient) {
-      state.appSyncClient.disconnect()
+      await state.appSyncClient.disconnect()
       state.appSyncClient = null
     }
     delete session.subscriptions[type]
@@ -1665,21 +1643,21 @@ export class TestWorld extends World {
    * Unsubscribe a named user and close all their WebSocket clients.
    * @param name User identifier
    */
-  unsubscribeUser(name: string): void {
+  async unsubscribeUser(name: string): Promise<void> {
     const session = this.userSessions.get(name)
     if (!session) return
 
     for (const type of ["todo", "process", "execution"] as const) {
-      this.unsubscribeUserFromType(name, type)
+      await this.unsubscribeUserFromType(name, type)
     }
   }
 
   /**
    * Unsubscribe all named users and close their WebSocket clients.
    */
-  unsubscribeAllUsers(): void {
+  async unsubscribeAllUsers(): Promise<void> {
     for (const name of this.userSessions.keys()) {
-      this.unsubscribeUser(name)
+      await this.unsubscribeUser(name)
     }
     this.userSessions.clear()
   }
@@ -1730,17 +1708,17 @@ export class TestWorld extends World {
         httpHost,
         channel,
         accessToken,
-        onEvent: () => {
+        onEvent: async () => {
           // If we receive events, subscription succeeded (unexpected security issue)
           if (resolved) return
           resolved = true
           console.log(
             `[AppSync] User "${subscriberName}" unexpectedly received event on ${channel}`,
           )
-          client.disconnect()
+          await client.disconnect()
           resolve(null)
         },
-        onError: (err) => {
+        onError: async (err) => {
           // Guard against double resolution (connect().catch may also fire)
           if (resolved) return
           resolved = true
@@ -1748,31 +1726,31 @@ export class TestWorld extends World {
             `[AppSync] User "${subscriberName}" received error on ${channel}: ${err.message}`,
           )
           // Error during subscription - this is expected for authorization failure
-          client.disconnect()
+          await client.disconnect()
           resolve(err)
         },
       })
 
       client
         .connect()
-        .then(() => {
+        .then(async () => {
           // Connection succeeded - subscription was not rejected
           if (resolved) return
           resolved = true
           console.log(
             `[AppSync] User "${subscriberName}" unexpectedly connected to ${channel}`,
           )
-          client.disconnect()
+          await client.disconnect()
           resolve(null)
         })
-        .catch((err: unknown) => {
+        .catch(async (err: unknown) => {
           // Connection rejected - this is the expected authorization failure
           if (resolved) return
           resolved = true
           console.log(
             `[AppSync] User "${subscriberName}" connection rejected for ${channel}: ${err instanceof Error ? err.message : String(err)}`,
           )
-          client.disconnect()
+          await client.disconnect()
           resolve(err instanceof Error ? err : new Error(String(err)))
         })
     })

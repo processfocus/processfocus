@@ -6,7 +6,7 @@ import {
   resolveInvoiceContact,
 } from "./contact-resolution"
 import {
-  type XeroInvoiceError,
+  XeroInvoiceError,
   xeroAuthError,
   xeroDeploymentError,
   xeroIdempotencyConflictError,
@@ -29,7 +29,6 @@ import {
 import {
   type CalendarDate,
   type CurrencyCode,
-  type ExactMoney,
   type IssueAuthorisedSalesInvoiceInput,
   type IssuedSalesInvoice,
   type ProductSku,
@@ -41,7 +40,11 @@ import {
   decodeIssuedSalesInvoice,
   reconcileExistingInvoices,
 } from "./invoice-reconciliation"
-import { centsToMoney, inclusiveTaxCents, moneyToCents } from "./money"
+import {
+  centsToMoney,
+  inclusiveTaxCents,
+  invoiceLinesTotalCents,
+} from "./money"
 import { XeroInvoice } from "./xero-invoice"
 
 export type XeroItemTaxType = "NONE" | "OUTPUT"
@@ -49,15 +52,19 @@ export type XeroItemTaxType = "NONE" | "OUTPUT"
 export interface XeroTestItem {
   readonly itemCode: ProductSku | string
   readonly name: string
+  readonly description?: string
   readonly taxType: XeroItemTaxType
   readonly taxPercent: 0 | 15
 }
 
 export interface XeroTestAddress {
   readonly addressType: "STREET" | "POBOX" | "DELIVERY"
-  readonly line1: string
+  readonly attentionTo?: string
+  readonly line1?: string
   readonly line2?: string
-  readonly city: string
+  readonly line3?: string
+  readonly line4?: string
+  readonly city?: string
   readonly region?: string
   readonly postalCode?: string
   readonly country?: string
@@ -73,7 +80,7 @@ export interface XeroTestContact {
 export interface XeroTestInvoiceLine {
   readonly itemCode: string
   readonly description: string
-  readonly quantity: "1"
+  readonly quantity: string
   readonly unitAmount: string
 }
 
@@ -91,6 +98,7 @@ export interface XeroTestInvoice {
   readonly status: XeroTestInvoiceStatus
   readonly currency: CurrencyCode
   readonly reference: string
+  readonly internalNotes?: readonly string[]
   readonly date: CalendarDate | string
   readonly dueDate: CalendarDate | string
   readonly lineAmountTypes: "Inclusive"
@@ -124,7 +132,8 @@ export interface SeedXeroTestInvoice {
   readonly type?: XeroTestInvoiceType
   readonly status?: XeroTestInvoiceStatus
   readonly itemCode: string
-  readonly unitAmount: ExactMoney | string
+  readonly description?: string
+  readonly unitAmount: string
   readonly total: string
   readonly totalTax: string
   readonly subTotal: string
@@ -225,15 +234,7 @@ const nextGuid = (kind: "contact" | "invoice", sequence: number): string => {
 }
 
 const cloneAddress = (address: XeroTestAddress): XeroTestAddress => ({
-  addressType: address.addressType,
-  line1: address.line1,
-  ...(address.line2 !== undefined && { line2: address.line2 }),
-  city: address.city,
-  ...(address.region !== undefined && { region: address.region }),
-  ...(address.postalCode !== undefined && {
-    postalCode: address.postalCode,
-  }),
-  ...(address.country !== undefined && { country: address.country }),
+  ...address,
 })
 
 const cloneContact = (contact: XeroTestContact): XeroTestContact => ({
@@ -245,6 +246,7 @@ const cloneContact = (contact: XeroTestContact): XeroTestContact => ({
 
 const cloneInvoice = (invoice: XeroTestInvoice): XeroTestInvoice => ({
   ...invoice,
+  ...(invoice.internalNotes && { internalNotes: [...invoice.internalNotes] }),
   lines: invoice.lines.map((line) => ({ ...line })),
 })
 
@@ -260,12 +262,26 @@ const shippingToStreet = (shipping: ShippingAddress): XeroTestAddress => ({
   ...(shipping.country !== undefined && { country: shipping.country }),
 })
 
-const replaceStreetAddress = (
+const hasBillingAddress = (addresses: readonly XeroTestAddress[]): boolean =>
+  addresses.some(
+    ({ addressType, ...content }) =>
+      addressType === "POBOX" &&
+      Object.values(content).some((value) => (value?.trim().length ?? 0) > 0),
+  )
+
+const updateAddresses = (
   addresses: readonly XeroTestAddress[],
   street: XeroTestAddress,
 ): readonly XeroTestAddress[] => [
-  ...addresses.filter((address) => address.addressType !== "STREET"),
+  ...addresses.filter(
+    (address) =>
+      address.addressType !== "STREET" &&
+      (address.addressType !== "POBOX" || hasBillingAddress(addresses)),
+  ),
   street,
+  ...(!hasBillingAddress(addresses)
+    ? [{ ...street, addressType: "POBOX" as const }]
+    : []),
 ]
 
 const toResolved = (contact: XeroTestContact): ResolvedXeroContact => ({
@@ -283,10 +299,11 @@ const toReconcilable = (invoice: XeroTestInvoice): ReconcilableInvoice => ({
   date: String(invoice.date),
   dueDate: String(invoice.dueDate),
   contactId: invoice.contactId,
-  itemCode: invoice.lines[0]?.itemCode ?? "",
-  unitAmount: invoice.lines[0]?.unitAmount ?? "",
+  lines: invoice.lines.map((line) => ({
+    ...line,
+    quantity: Number(line.quantity),
+  })),
   total: invoice.total,
-  lineCount: invoice.lines.length,
 })
 
 interface StoredIdempotencyRecord {
@@ -360,6 +377,10 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
   const contacts: XeroTestContact[] = []
   const invoices: XeroTestInvoice[] = []
   const idempotencyRecords = new Map<string, StoredIdempotencyRecord>()
+  const rejectedInvoiceWrites = new Map<
+    string,
+    { readonly error: XeroInvoiceError; readonly storedAt: number }
+  >()
   const pendingTimeouts = new Set<XeroIdempotencyOperation>()
   const scriptedFailures: XeroScriptedFailure[] = []
   const pendingCommitFailures = new Map<
@@ -501,6 +522,10 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         name,
         email: input.customer.email,
         street: shippingToStreet(input.shippingAddress),
+        billing: {
+          ...shippingToStreet(input.shippingAddress),
+          addressType: "POBOX",
+        },
       }
       const replayed = yield* replayOrConflict(
         idempotencyKey,
@@ -520,7 +545,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         contactId: allocateContactId(),
         name,
         email: input.customer.email,
-        addresses: [shippingToStreet(input.shippingAddress)],
+        addresses: updateAddresses([], shippingToStreet(input.shippingAddress)),
       }
       contacts.push(contact)
       const resolved = toResolved(contact)
@@ -550,16 +575,34 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
     resolved: ResolvedXeroContact,
     input: IssueAuthorisedSalesInvoiceInput,
     idempotencyKey: string,
+    name: string,
   ): Effect.Effect<ResolvedXeroContact, XeroInvoiceError> =>
     Effect.gen(function* () {
+      const index = contacts.findIndex(
+        (candidate) => candidate.contactId === resolved.contactId,
+      )
+      const existing = index >= 0 ? contacts[index] : undefined
+      if (existing === undefined || index < 0) {
+        return yield* xeroValidationError("Xero contact was not found")
+      }
+      const defaultBilling = !hasBillingAddress(existing.addresses)
+      const writeKey = defaultBilling
+        ? `${idempotencyKey}:billing-default`
+        : idempotencyKey
       const body = {
         contactId: resolved.contactId,
-        name: input.customer.name,
+        name,
         email: input.customer.email,
         street: shippingToStreet(input.shippingAddress),
+        ...(defaultBilling && {
+          billing: {
+            ...shippingToStreet(input.shippingAddress),
+            addressType: "POBOX",
+          },
+        }),
       }
       const replayed = yield* replayOrConflict(
-        idempotencyKey,
+        writeKey,
         "POST",
         "/Contacts",
         body,
@@ -569,26 +612,18 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         return replayed
       }
       yield* consumeRateBudget()
-      const index = contacts.findIndex(
-        (candidate) => candidate.contactId === resolved.contactId,
-      )
-      const existing = index >= 0 ? contacts[index] : undefined
-      if (existing === undefined || index < 0) {
-        return yield* xeroValidationError("Xero contact was not found")
-      }
       const nameTaken = contacts.some(
         (candidate) =>
-          candidate.name === input.customer.name &&
-          candidate.contactId !== existing.contactId,
+          candidate.name === name && candidate.contactId !== existing.contactId,
       )
       if (nameTaken) {
         return yield* xeroValidationError(XERO_CONTACT_NAME_MUST_BE_UNIQUE)
       }
       const updated: XeroTestContact = {
         contactId: existing.contactId,
-        name: input.customer.name,
+        name,
         email: input.customer.email,
-        addresses: replaceStreetAddress(
+        addresses: updateAddresses(
           existing.addresses,
           shippingToStreet(input.shippingAddress),
         ),
@@ -598,7 +633,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
       return yield* commitWrite(
         "contact.update",
         {
-          key: idempotencyKey,
+          key: writeKey,
           method: "POST",
           target: "/Contacts",
           fingerprint: xeroIdempotencyFingerprint({
@@ -615,6 +650,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
 
   const createStoredInvoice = (
     input: IssueAuthorisedSalesInvoiceInput,
+    lines: readonly XeroTestInvoiceLine[],
     contactId: string,
     inclusiveCents: number,
     taxCents: number,
@@ -629,8 +665,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         dueDate: input.dueDate,
         currency: input.currency,
         reference: input.reference,
-        itemCode: input.productSku,
-        unitAmount: input.agreedPrice,
+        lines: lines.map(({ description: _description, ...line }) => line),
       }
       const replayed = yield* replayOrConflict(
         idempotencyKey,
@@ -656,15 +691,8 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         dueDate: input.dueDate,
         lineAmountTypes: "Inclusive",
         contactId,
-        lines: [
-          {
-            itemCode: input.productSku,
-            description: input.productSku,
-            quantity: "1",
-            unitAmount: input.agreedPrice,
-          },
-        ],
-        total: input.agreedPrice,
+        lines,
+        total: centsToMoney(inclusiveCents),
         totalTax: centsToMoney(taxCents),
         subTotal: centsToMoney(inclusiveCents - taxCents),
       }
@@ -672,6 +700,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
       const issued = yield* decodeIssuedSalesInvoice(
         invoice.invoiceId,
         invoice.invoiceNumber,
+        toReconcilable(invoice).lines,
       )
       return yield* commitWrite(
         "invoice.create",
@@ -699,7 +728,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
     CurrentStepJobContext
   > =>
     Effect.gen(function* () {
-      const { todoId } = yield* CurrentStepJobContext
+      const { todoId, externalWriteAttemptId } = yield* CurrentStepJobContext
       yield* consumeScriptedFailure(IMMEDIATE_FAILURE_KINDS)
       const contactId = yield* resolveInvoiceContact(
         {
@@ -714,33 +743,75 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         todoId,
       )
 
-      const item = items.find(
-        (candidate) => candidate.itemCode === input.productSku,
-      )
-      if (item === undefined) {
-        return yield* xeroUnknownItemCodeError(input.productSku)
-      }
-
-      const existing = findStoredByReference(input.reference).map(
-        toReconcilable,
-      )
+      const existing = invoices
+        .filter(
+          (invoice) =>
+            invoice.reference === input.reference ||
+            invoice.reference === input.legacyReference,
+        )
+        .map(toReconcilable)
       const reconciled = yield* reconcileExistingInvoices(
         existing,
         input,
         contactId,
       )
-      if (reconciled !== undefined) {
-        return reconciled
+      if (reconciled !== undefined) return reconciled
+      if (input.recoveryOnly) {
+        return yield* xeroValidationError(
+          "No existing invoice found; a customer-facing reference is required before creation",
+        )
       }
 
-      const inclusiveCents = yield* moneyToCents(input.agreedPrice)
-      const taxCents = inclusiveTaxCents(inclusiveCents, item.taxPercent)
+      const invoiceKey = xeroIdempotencyKey(
+        externalWriteAttemptId ?? todoId,
+        "invoice.create",
+      )
+      const rejection = rejectedInvoiceWrites.get(invoiceKey)
+      if (
+        rejection !== undefined &&
+        nowMs - rejection.storedAt < XERO_IDEMPOTENCY_RETENTION_MS
+      ) {
+        return yield* rejection.error
+      }
+      const lines: XeroTestInvoiceLine[] = []
+      let taxCents = 0
+      for (const line of input.lines) {
+        const item = items.find(
+          (candidate) => candidate.itemCode === line.productSku,
+        )
+        if (item === undefined) {
+          const original = xeroUnknownItemCodeError(line.productSku)
+          const error = new XeroInvoiceError({
+            ...original,
+            message: original.message,
+            externalWriteRejected: true,
+          })
+          rejectedInvoiceWrites.set(invoiceKey, { error, storedAt: nowMs })
+          return yield* error
+        }
+        if (!item.description?.trim()) {
+          return yield* xeroValidationError(
+            `Product SKU ${line.productSku} has no sales description`,
+          )
+        }
+        lines.push({
+          itemCode: line.productSku,
+          description: item.description,
+          quantity: String(line.quantity),
+          unitAmount: line.unitAmount,
+        })
+        const lineCents = Number(invoiceLinesTotalCents([line]))
+        taxCents += inclusiveTaxCents(lineCents, item.taxPercent)
+      }
+
+      const inclusiveCents = Number(invoiceLinesTotalCents(input.lines))
       const issued = yield* createStoredInvoice(
         input,
+        lines,
         contactId,
         inclusiveCents,
         taxCents,
-        xeroIdempotencyKey(todoId, "invoice.create"),
+        invoiceKey,
       )
 
       yield* Effect.log("Issued Xero Sales Invoice").pipe(
@@ -750,12 +821,30 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
           invoiceNumber: issued.invoiceNumber,
           customerName: input.customer.name,
           customerEmail: input.customer.email,
-          productSku: input.productSku,
+          productSkus: input.lines.map((line) => line.productSku),
         }),
       )
 
       return issued
     }).pipe(
+      Effect.tap((issued) =>
+        Effect.sync(() => {
+          if (input.internalNote === undefined) return
+          const index = invoices.findIndex(
+            (invoice) => invoice.invoiceId === issued.invoiceId,
+          )
+          const invoice = invoices[index]
+          if (invoice && !invoice.internalNotes?.includes(input.internalNote)) {
+            invoices[index] = {
+              ...invoice,
+              internalNotes: [
+                ...(invoice.internalNotes ?? []),
+                input.internalNote,
+              ],
+            }
+          }
+        }),
+      ),
       Effect.tapError((error) =>
         Effect.logWarning("Xero Sales Invoice failed").pipe(
           Effect.annotateLogs({
@@ -806,7 +895,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
         lines: [
           {
             itemCode: invoice.itemCode,
-            description: invoice.itemCode,
+            description: invoice.description ?? invoice.itemCode,
             quantity: "1",
             unitAmount: invoice.unitAmount,
           },
@@ -881,6 +970,7 @@ export const makeXeroInvoiceTestPlugin = (): XeroInvoiceTestPlugin => {
       contacts.length = 0
       invoices.length = 0
       idempotencyRecords.clear()
+      rejectedInvoiceWrites.clear()
       pendingTimeouts.clear()
       scriptedFailures.length = 0
       pendingCommitFailures.clear()

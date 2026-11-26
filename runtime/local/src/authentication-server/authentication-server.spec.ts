@@ -1,19 +1,28 @@
-import { FetchHttpClient, HttpApp } from "@effect/platform"
-import { Effect, Layer, Schedule } from "effect"
-import { buildFrontendClients, createAuthenticationServer } from "@pf/auth-api"
+import { ConfigProvider, DateTime, Effect, Layer, Schedule } from "effect"
+import { FetchHttpClient, HttpEffect } from "effect/http"
+import { LocalAuditLive } from "@pf/audit/local"
+import {
+  buildFrontendClients,
+  createAuthenticationFetchHandler,
+  createAuthenticationServer,
+  createClientJwt,
+} from "@pf/auth-api"
 import {
   LocalCedarAuthorizationLive,
   LocalCedarConfigStatic,
 } from "@pf/auth-local-cedar"
 import * as schema from "@pf/drizzle-sqlite"
+import { SettingsQueries } from "@pf/graphql-db-operations"
 import { type IssuerClient, hashClientSecret } from "@pf/openauth"
 import {
   DatabaseTest,
   TypedSqliteDrizzle,
 } from "@pf/service-drizzle-sqlite/test"
 import {
+  SqliteAuditPersistenceLive,
   SqliteAuthenticationDatabaseLive,
   SqliteOpenAuthStorageServiceLive,
+  SqliteSettingsQueriesLive,
 } from "@pf/sqlite-operations"
 import { serveWithPortFallback } from "../server-utils"
 import { beforeAll, describe, expect, it } from "bun:test"
@@ -21,7 +30,6 @@ import { beforeAll, describe, expect, it } from "bun:test"
 // Base port for authentication server tests (different from graphql server tests)
 const BASE_TEST_PORT = 14200
 
-// Test clients for authentication server
 let testClients: IssuerClient[]
 
 beforeAll(async () => {
@@ -65,6 +73,10 @@ const createTestLayers = () => {
   )
 
   return Layer.mergeAll(
+    LocalAuditLive.pipe(
+      Layer.provide(SqliteAuditPersistenceLive),
+      Layer.provide(DatabaseTest),
+    ),
     StorageLayer,
     FetchHttpClient.layer,
     LocalCedarAuthorizationLive.pipe(Layer.provide(LocalCedarConfigStatic())),
@@ -83,7 +95,7 @@ const startAuthServer = (port: number) =>
 
     // Convert HttpApp to web handler using the runtime from createAuthenticationServer
     // which has all required services (KeyManagement, Encryption, Storage, etc.)
-    const webHandler = HttpApp.toWebHandlerRuntime(runtime)(app)
+    const webHandler = createAuthenticationFetchHandler(app, runtime, "local")
     const fetchHandler = (req: Request) => webHandler(req)
 
     const server = yield* serveWithPortFallback(port, {
@@ -95,8 +107,8 @@ const startAuthServer = (port: number) =>
       Effect.tryPromise(() =>
         fetch(`http://localhost:${server.port}/.well-known/jwks.json`),
       ),
-      Schedule.exponential("50 millis").pipe(
-        Schedule.compose(Schedule.recurs(10)),
+      Schedule.exponential("50 millis").pipe((schedule) =>
+        Schedule.max([schedule, Schedule.recurs(10)]),
       ),
     )
 
@@ -116,21 +128,17 @@ describe("Authentication Server", () => {
           // Insert test OAuth provider (required for createAuthenticationServer)
           yield* insertTestOAuthProvider
 
-          // Start server and get the actual server instance
           const server = yield* Effect.acquireRelease(
             startAuthServer(testPort),
             (server) => Effect.promise(() => server.stop()),
           )
 
-          // Verify the server is running on expected port
           expect(server.port).toBe(testPort)
 
-          // Make request to JWKS endpoint
           const response = yield* Effect.tryPromise(() =>
             fetch(`http://localhost:${server.port}/.well-known/jwks.json`),
           )
 
-          // Parse and verify response
           const jwks = yield* Effect.tryPromise(() => response.json())
 
           expect(response.status).toBe(200)
@@ -171,7 +179,6 @@ describe("Authentication Server", () => {
             (server) => Effect.promise(() => server.stop()),
           )
 
-          // Second server should be on the next port
           expect(secondServer.port).toBe(testPort + 1)
 
           // Verify both servers are responding
@@ -199,7 +206,7 @@ describe("Authentication Server", () => {
   )
 
   it(
-    "should recognize dynamically inserted OAuth client immediately",
+    "recognizes dynamic OAuth clients without changing machine last-login fallback",
     async () => {
       const testPort = BASE_TEST_PORT + 10
 
@@ -216,7 +223,10 @@ describe("Authentication Server", () => {
           })
 
           // Convert HttpApp to web handler using the runtime from createAuthenticationServer
-          const webHandler = HttpApp.toWebHandlerRuntime(runtime)(app)
+          const webHandler = HttpEffect.toWebHandlerWith<
+            never,
+            Effect.Services<typeof app>
+          >(runtime)(app)
           const fetchHandler = (req: Request) => webHandler(req)
 
           const server = yield* Effect.acquireRelease(
@@ -230,8 +240,8 @@ describe("Authentication Server", () => {
             Effect.tryPromise(() =>
               fetch(`http://localhost:${server.port}/.well-known/jwks.json`),
             ),
-            Schedule.exponential("50 millis").pipe(
-              Schedule.compose(Schedule.recurs(10)),
+            Schedule.exponential("50 millis").pipe((schedule) =>
+              Schedule.max([schedule, Schedule.recurs(10)]),
             ),
           )
 
@@ -246,6 +256,13 @@ describe("Authentication Server", () => {
             clientId: "dynamic-m2m-client",
             clientSecretHash: secretHash,
             audience: "graphql-api",
+          })
+
+          const createdAt = DateTime.makeUnsafe(0)
+          yield* db.insert(schema.user).values({
+            provider: "client_credentials",
+            sub: "dynamic-m2m-client",
+            createdAt,
           })
 
           // Verify immediate recognition without server restart
@@ -265,77 +282,141 @@ describe("Authentication Server", () => {
           expect(tokenResponse.status).toBe(200)
           const tokenData = yield* Effect.tryPromise(() => tokenResponse.json())
           expect(tokenData.access_token).toBeDefined()
+          const users = yield* (yield* SettingsQueries).queryAllUsers(1, 10)
+          expect(users.totalCount).toBe(1)
+          expect(users.items[0]!.lastLoggedIn.getTime()).toBe(0)
+          expect(yield* db.select().from(schema.auditEvent)).toEqual([])
         }),
       )
 
-      await Effect.runPromise(testProgram.pipe(Effect.provide(TestLayer)))
+      await Effect.runPromise(
+        testProgram.pipe(
+          Effect.provide(
+            SqliteSettingsQueriesLive.pipe(Layer.provideMerge(TestLayer)),
+          ),
+        ),
+      )
     },
     { timeout: 10000 },
   )
 
-  it("buildFrontendClients returns no clients in production", async () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    const originalOpenauthClients = process.env["OPENAUTH_CLIENTS"]
-    const originalOauthClientId = process.env["OAUTH_CLIENT_ID"]
+  it.each([
+    ["production", undefined, 0],
+    ["development", undefined, 1],
+    ["development", "", 1],
+    ["development", "[]", 0],
+    ["", undefined, 0],
+    [undefined, undefined, 0],
+  ])(
+    "frontend defaults for NODE_ENV=%s OPENAUTH_CLIENTS=%s",
+    async (nodeEnv, clients, count) => {
+      const result = await Effect.runPromise(
+        buildFrontendClients().pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({
+                NODE_ENV: nodeEnv,
+                OPENAUTH_CLIENTS: clients,
+              }),
+            ),
+          ),
+        ),
+      )
+      expect(result).toHaveLength(count)
+      if (count) {
+        expect(result[0]?.tokenEndpointAuthMethod).toBe("client_jwt")
+        expect(result[0]?.redirectUris).toEqual([
+          "http://localhost/api/auth/callback",
+        ])
+        expect(result[0]?.secretHash).toBeUndefined()
+      }
+    },
+  )
 
-    process.env["NODE_ENV"] = "production"
-    delete process.env["OPENAUTH_CLIENTS"]
-    delete process.env["OAUTH_CLIENT_ID"]
+  it.each(["production", "development", "", undefined])(
+    "dummy provider production restriction uses ConfigProvider (%s)",
+    async (nodeEnv) => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          createAuthenticationServer({
+            dummyConfig: {},
+            clients: testClients,
+          }).pipe(
+            Effect.match({
+              onFailure: (error) => error._tag,
+              onSuccess: () => "allowed",
+            }),
+            Effect.provide(createTestLayers()),
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({ NODE_ENV: nodeEnv }),
+              ),
+            ),
+          ),
+        ),
+      )
+      expect(result).toBe(
+        nodeEnv === "production" ? "ProviderConfigurationError" : "allowed",
+      )
+    },
+  )
 
-    try {
-      const clients = await buildFrontendClients()
-      expect(clients).toEqual([])
-    } finally {
-      if (originalNodeEnv === undefined) delete process.env["NODE_ENV"]
-      else process.env["NODE_ENV"] = originalNodeEnv
-
-      if (originalOpenauthClients === undefined)
-        delete process.env["OPENAUTH_CLIENTS"]
-      else process.env["OPENAUTH_CLIENTS"] = originalOpenauthClients
-
-      if (originalOauthClientId === undefined)
-        delete process.env["OAUTH_CLIENT_ID"]
-      else process.env["OAUTH_CLIENT_ID"] = originalOauthClientId
-    }
-  })
-
-  it("buildFrontendClients creates a client_jwt frontend client in development", async () => {
-    const originalNodeEnv = process.env["NODE_ENV"]
-    const originalOpenauthClients = process.env["OPENAUTH_CLIENTS"]
-    const originalOauthClientId = process.env["OAUTH_CLIENT_ID"]
-    const originalOauthAudience = process.env["OAUTH_AUDIENCE"]
-
-    process.env["NODE_ENV"] = "development"
-    delete process.env["OPENAUTH_CLIENTS"]
-    delete process.env["OAUTH_CLIENT_ID"]
-    process.env["OAUTH_AUDIENCE"] = "graphql-api"
-
-    try {
-      const clients = await buildFrontendClients()
-      expect(clients).toEqual([
-        {
-          id: "frontend",
-          redirectUris: ["http://localhost/api/auth/callback"],
-          audience: "graphql-api",
-          tokenEndpointAuthMethod: "client_jwt",
-        },
-      ])
-      expect(clients[0]?.secretHash).toBeUndefined()
-    } finally {
-      if (originalNodeEnv === undefined) delete process.env["NODE_ENV"]
-      else process.env["NODE_ENV"] = originalNodeEnv
-
-      if (originalOpenauthClients === undefined)
-        delete process.env["OPENAUTH_CLIENTS"]
-      else process.env["OPENAUTH_CLIENTS"] = originalOpenauthClients
-
-      if (originalOauthClientId === undefined)
-        delete process.env["OAUTH_CLIENT_ID"]
-      else process.env["OAUTH_CLIENT_ID"] = originalOauthClientId
-
-      if (originalOauthAudience === undefined)
-        delete process.env["OAUTH_AUDIENCE"]
-      else process.env["OAUTH_AUDIENCE"] = originalOauthAudience
-    }
-  })
+  it.each(["development", "production", "", undefined])(
+    "client JWT loopback port restriction uses the captured ConfigProvider (%s)",
+    async (nodeEnv) => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const clientId = "frontend"
+            const token = yield* createClientJwt({
+              clientId,
+              issuerUrl: "http://localhost:3000",
+              audience: "graphql-api",
+            })
+            const { app, runtime } = yield* createAuthenticationServer({
+              clients: [
+                {
+                  id: clientId,
+                  redirectUris: [],
+                  tokenEndpointAuthMethod: "client_jwt",
+                },
+              ],
+            })
+            const handler = HttpEffect.toWebHandlerWith<
+              never,
+              Effect.Services<typeof app>
+            >(runtime)(app)
+            const response = yield* Effect.promise(() =>
+              handler(
+                new Request("http://localhost:3001/oauth/token", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    Authorization: `Bearer ${token}`,
+                    Host: "localhost:3001",
+                  },
+                  body: new URLSearchParams({
+                    grant_type: "client_credentials",
+                    client_id: clientId,
+                  }),
+                }),
+              ),
+            )
+            expect(response.status).toBe(nodeEnv === "development" ? 200 : 401)
+            if (nodeEnv !== "development") {
+              const body = yield* Effect.promise(() => response.json())
+              expect(body.error).toBe("invalid_client")
+            }
+          }).pipe(
+            Effect.provide(createTestLayers()),
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({ NODE_ENV: nodeEnv }),
+              ),
+            ),
+          ),
+        ),
+      )
+    },
+  )
 })

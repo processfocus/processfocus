@@ -32,7 +32,7 @@ Then(
       timeout: 15000,
     })
     await expect(
-      frame.locator('[role="group"]', { hasText: "First number" }),
+      frame.getByRole("textbox", { name: "First number", exact: true }),
     ).toBeVisible({ timeout: 15000 })
   },
 )
@@ -42,17 +42,16 @@ When(
   async ({ page }, first: string, second: string) => {
     const frame = page.frameLocator(EMBED_IFRAME_SELECTOR)
 
+    // The shared executable-schema renderer emits nested fieldsets without an
+    // explicit role attribute, so fields are addressed by accessible name.
     await frame
-      .locator('[role="group"]', { hasText: "Email" })
-      .locator("input")
+      .getByRole("textbox", { name: "Email", exact: true })
       .fill("embedded-calculator@example.com")
     await frame
-      .locator('[role="group"]', { hasText: "First number" })
-      .locator("input")
+      .getByRole("textbox", { name: "First number", exact: true })
       .fill(first)
     await frame
-      .locator('[role="group"]', { hasText: "Second number" })
-      .locator("input")
+      .getByRole("textbox", { name: "Second number", exact: true })
       .fill(second)
   },
 )

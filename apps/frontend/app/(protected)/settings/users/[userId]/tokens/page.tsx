@@ -4,6 +4,8 @@ import { listDelegations } from "@/app/(protected)/act-on-behalf/actions"
 import { DelegationsClient } from "@/app/(protected)/act-on-behalf/delegations-client"
 import { BasePage } from "@/lib/effect/runtime"
 
+export const instant = false
+
 // The issuer authorizes this selected owner and each operation independently.
 // Inspection permission never implies permission to issue or replace a secret.
 export default BasePage.build(

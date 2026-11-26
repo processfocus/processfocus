@@ -4,14 +4,12 @@ import { join } from "node:path"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, test } from "vitest"
-import { FormComponentType } from "@pf/form-client-representation/types"
 import { buildEmbedScriptSrc } from "../app/api/embed/test-host/route"
 import EmbedLayout from "../app/embed/layout"
 import { isPublicPath } from "../lib/auth/config"
 import {
   type EmbedManifestEntry,
   buildEmbedFrameAncestorsPolicy,
-  collectEmbedLookupDefinitions,
   findEmbedLookupDefinitionByField,
   findEmbedLookupDefinitionByQueryName,
   findEmbedManifestEntryForPath,
@@ -20,7 +18,6 @@ import {
 } from "../lib/embed-manifest"
 import { isAllowedEmbedOrigin } from "../lib/embed-request-origin"
 import type { FrontendManifest } from "../lib/frontend-manifest"
-import { parseFrontendManifest } from "../lib/frontend-manifest"
 import { clearFrontendManifestCache } from "../lib/frontend-manifest-store"
 
 const entry: EmbedManifestEntry = {
@@ -30,9 +27,8 @@ const entry: EmbedManifestEntry = {
   mutationName: "startEnrolmentEnquiry",
   inputTypeName: "EnrolmentEnquirySubmitEnquiry",
   totalFields: 2,
-  formDefinition: null,
-  defaultValues: null,
-  jsonSchema: null,
+  formPath: "/enrolment-enquiry/Submit enquiry",
+  lookups: [],
   sites: ["https://school.example.com", "https://www.school.example.com"],
   thankYou: "Thanks",
 }
@@ -131,63 +127,6 @@ describe("embed routes", () => {
     expect(findEmbedManifestEntryForPath([entry], "/missing")).toBeUndefined()
   })
 
-  test("parses only the structured form definition into the embed consumer", () => {
-    const structuredRule = {
-      condition: {
-        _tag: "blank",
-        value: { _tag: "field", path: ["name"] },
-      },
-      effects: [{ target: ["details"], state: { disabled: true } }],
-    }
-    const parsed = parseFrontendManifest({
-      version: 3,
-      embed: {
-        entries: [
-          {
-            ...entry,
-            formDefinition: {
-              components: {
-                name: { _tag: "text", field: "name", label: "Name" },
-                details: {
-                  _tag: "text",
-                  field: "details",
-                  label: "Details",
-                },
-              },
-              rules: [structuredRule],
-            },
-          },
-        ],
-      },
-      plugins: { analytics: [], formComponents: [] },
-    })
-    const parsedEntry = parsed.embed.entries[0]
-
-    expect(parsedEntry?.formDefinition?.rules).toEqual([structuredRule])
-    expect(parsedEntry?.formDefinition?.components["name"]).toMatchObject({
-      label: "Name",
-    })
-  })
-
-  test("rejects malformed structured definitions before iframe rendering", () => {
-    expect(() =>
-      parseFrontendManifest({
-        version: 3,
-        embed: {
-          entries: [
-            {
-              ...entry,
-              formDefinition: { components: { name: [] }, rules: [] },
-            },
-          ],
-        },
-        plugins: { analytics: [], formComponents: [] },
-      }),
-    ).toThrow(
-      "embed.entries[0].formDefinition must be a valid client form definition",
-    )
-  })
-
   test("builds an encoded embed helper src", () => {
     const url = new URL(
       buildEmbedScriptSrc({
@@ -266,69 +205,31 @@ describe("embed routes", () => {
     ).toBe(false)
   })
 
-  test("collects allowed embed lookup operations from definition components", () => {
-    const formDefinition = {
-      components: {
-        campusId: {
-          _tag: FormComponentType.Lookup,
-          field: "campusId",
-          label: "Campus",
-        },
-        details: {
-          _tag: FormComponentType.FieldSet,
-          label: "Details",
-          children: {
-            classId: {
-              _tag: FormComponentType.Lookup,
-              field: "details.classId",
-              label: "Class",
-              dependencies: ["campusId"],
-              queryName: "lookupSchoolEnrolmentSubmitEnquiryClassId",
-            },
-          },
-        },
-      },
-      rules: [],
-    } as const
-
-    expect(collectEmbedLookupDefinitions(formDefinition)).toEqual([
+  test("restricts lookups to the manifest capability list", () => {
+    const lookups = [
       {
-        type: FormComponentType.Lookup,
+        type: "lookup",
         field: "campusId",
         normalizedField: "campusId",
         dependencies: [],
       },
       {
-        type: FormComponentType.Lookup,
+        type: "lookup",
         field: "details.classId",
         normalizedField: "classId",
         dependencies: ["campusId"],
-        queryName: "lookupSchoolEnrolmentSubmitEnquiryClassId",
+        queryName: "lookupClass",
       },
-    ])
-
+    ] as const
+    expect(findEmbedLookupDefinitionByField(lookups, "campusId")).toEqual(
+      lookups[0],
+    )
+    expect(findEmbedLookupDefinitionByField(lookups, "classId")).toBeUndefined()
     expect(
-      findEmbedLookupDefinitionByField(formDefinition, "campusId"),
-    ).toEqual({
-      type: FormComponentType.Lookup,
-      field: "campusId",
-      normalizedField: "campusId",
-      dependencies: [],
-    })
-    expect(
-      findEmbedLookupDefinitionByField(formDefinition, "classId"),
+      findEmbedLookupDefinitionByField(lookups, "privateField"),
     ).toBeUndefined()
     expect(
-      findEmbedLookupDefinitionByQueryName(
-        formDefinition,
-        "lookupSchoolEnrolmentSubmitEnquiryClassId",
-      ),
-    ).toEqual({
-      type: FormComponentType.Lookup,
-      field: "details.classId",
-      normalizedField: "classId",
-      dependencies: ["campusId"],
-      queryName: "lookupSchoolEnrolmentSubmitEnquiryClassId",
-    })
+      findEmbedLookupDefinitionByQueryName(lookups, "lookupClass"),
+    ).toEqual(lookups[1])
   })
 })

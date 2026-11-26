@@ -88,13 +88,10 @@ const buildAST = (cst: CstNode) =>
  */
 export const parse = (source: string): Effect.Effect<Program, ParseError[]> =>
   Effect.gen(function* () {
-    // Tokenize
     const tokens = yield* tokenize(source)
 
-    // Parse to CST
     const cst = yield* parseTokens(tokens)
 
-    // Build AST
     const rawAst = yield* buildAST(cst).pipe(
       Effect.mapError((error) => [error]),
     )

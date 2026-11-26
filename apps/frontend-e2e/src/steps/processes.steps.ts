@@ -28,21 +28,6 @@ Then("I should see the mobile processes catalog", async ({ page }) => {
 })
 
 When(
-  "I open the {string} process from the mobile catalog row",
-  async ({ page }, processName: string) => {
-    const processCard = page
-      .locator("article", {
-        has: page.getByRole("heading", { name: processName, exact: true }),
-      })
-      .first()
-    // Click the visible "Start" link with the process name (not the invisible row link)
-    await processCard
-      .getByRole("link", { name: new RegExp(`^Start ${processName}$`) })
-      .click()
-  },
-)
-
-When(
   "I start the {string} process from the mobile catalog action",
   async ({ page }, processName: string) => {
     const processRow = page

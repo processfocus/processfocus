@@ -10,8 +10,8 @@
  * @packageDocumentation
  */
 
-import { HttpMiddleware, HttpServerResponse } from "@effect/platform"
 import { Effect } from "effect"
+import { HttpMiddleware, HttpServerResponse } from "effect/http"
 
 /**
  * Default security headers applied to all responses.

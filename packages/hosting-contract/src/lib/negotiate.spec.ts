@@ -32,10 +32,10 @@ describe("hosting contract negotiation", () => {
         format: "processfocus/hosting-contract",
         version: 1,
         major: 1,
-        capabilities: ["auth", "billing"],
+        capabilities: ["projects", "auth"],
       }),
     )
-    expect(manifest.capabilities).toEqual(["auth"])
+    expect(manifest.capabilities).toEqual(["projects"])
   })
 
   it("rejects a non-string capability entry", async () => {
@@ -79,7 +79,7 @@ describe("hosting contract negotiation", () => {
     const manifest = await Effect.runPromise(
       parseHostingContractManifest({
         ...CONFORMANCE_MANIFEST,
-        capabilities: ["auth", "projects"],
+        capabilities: ["projects"],
       }),
     )
     const error = await decode(assertHostingCapability(manifest, "deploy"))

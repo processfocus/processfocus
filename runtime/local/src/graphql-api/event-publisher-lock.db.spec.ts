@@ -1,14 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import * as SqlClient from "@effect/sql/SqlClient"
-import { DateTime, Effect, FiberRef, Layer, Scope } from "effect"
+import { DateTime, Effect, Layer } from "effect"
+import * as SqlClient from "effect/sql/SqlClient"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   CompletedJobOperations,
   FlowExecutionOperations,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import {
   EXECUTION_EVENT_QUEUE,
@@ -72,7 +71,7 @@ for (const queue of [
       form: () => ({}),
     })
     process.start(start).next(review).end()
-    const now = DateTime.unsafeMake("2026-09-08T07:41:38Z")
+    const now = DateTime.makeUnsafe("2026-09-08T07:41:38Z")
     const database = DatabaseTestFile(filename)
     const orgLayer = OrganisationProviderTest(org)
     const layers = Layer.mergeAll(
@@ -84,11 +83,8 @@ for (const queue of [
         Layer.provide(SqliteGraphqlDbOperationsLive),
         Layer.provide(orgLayer),
       ),
-      Layer.succeed(RequestTime, FiberRef.unsafeMake(now)),
-      Layer.succeed(
-        UserDetails,
-        FiberRef.unsafeMake<UserDetailsValue>({ by: "TEST", id: null }),
-      ),
+      Layer.succeed(RequestTime, now),
+      Layer.succeed(UserDetails, { by: "TEST", id: null }),
     ).pipe(Layer.provideMerge(database))
 
     try {
@@ -99,13 +95,9 @@ for (const queue of [
             // Match AWS's ordinary transaction mode, using a real SQLite connection.
             Object.assign(sql, {
               withTransaction: SqlClient.makeWithTransaction({
-                transactionTag: SqlClient.TransactionConnection,
+                transactionService: sql.transactionService,
                 spanAttributes: [],
-                acquireConnection: Effect.gen(function* () {
-                  const scope = yield* Scope.make()
-                  const connection = yield* Scope.extend(sql.reserve, scope)
-                  return [scope, connection] as const
-                }),
+                acquireConnection: (restore) => restore(sql.reserve),
                 begin: (connection) =>
                   connection.executeUnprepared(
                     "BEGIN IMMEDIATE",

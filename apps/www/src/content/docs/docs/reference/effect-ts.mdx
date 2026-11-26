@@ -1,0 +1,31 @@
+---
+title: Effect TS
+---
+
+Process Focus is written using [Effect
+TS](https://effect.website/). Effect TS is a particular way of writing
+TypeScript. Code is constructed with effects. Each
+[effect](https://effect.website/docs/v4/getting-started/the-effect-type)
+is a value that fully describes a program, including its success
+value, its possible errors, and its requirements. Because programs are
+values, they compose: retries, timeouts, concurrency, resource
+handling, and tracing are operators you apply, not architectures you
+rebuild.
+
+Effect code is TypeScript, but looks a little different.
+
+This is Effect code:
+
+```typescript
+import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const name = yield* Effect.succeed("world")
+  yield* Effect.log("Hello, " + name + "!")
+})
+
+Effect.runPromise(program)
+```
+
+It's beyond the scope of this guide to teach Effect TS, and besides,
+your agent will know how to write this properly.

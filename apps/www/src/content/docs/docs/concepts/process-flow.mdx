@@ -1,0 +1,28 @@
+---
+title: Process flow
+description: How connections and conditions determine which steps run.
+---
+
+A process flow connects [steps](/docs/concepts/steps/) and defines what can
+happen next. The [process](/docs/concepts/processes/) defines the possible
+paths. A particular execution follows the paths whose conditions are met.
+
+## Sequences and branches
+
+Use a sequence when work always follows the same order. For example, a
+warehouse receives an order, packs it, and confirms dispatch.
+
+Use a condition when the next step depends on information from earlier steps.
+In the demo’s **Purchase Request** process, an Employee submits the request
+and a Manager approves it. Requests of $1,000 or more also need Procurement
+approval. Requests below $1,000 skip that step. Both paths rejoin at the
+system steps that generate and save the purchase order, then Procurement
+makes the purchase.
+
+The demo Dashboard groups these steps into swimlanes for Employee, Manager,
+Procurement, and System. Select the diagram to see it at full size.
+
+[![Demo Purchase Request workflow with four swimlanes. The Manager’s approval branches based on the request value, and both paths rejoin before the system generates the purchase order.](/images/docs/purchase-request-workflow.png)](/images/docs/purchase-request-workflow.png)
+
+See [Process Visualisation](/docs/frontend/visualisation/) for more on reading
+these paths in a workflow diagram.

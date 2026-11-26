@@ -1,17 +1,27 @@
-import { SqlClient } from "@effect/sql"
+import type { Job } from "@processfocus/runtime"
+import { EnqueueError, JobAttempt, QueueService } from "@processfocus/runtime"
 import { and, eq, sql } from "drizzle-orm"
 import {
+  ConfigProvider,
   DateTime,
+  Deferred,
   Duration,
   Schema as ES,
   Effect,
   type Effect as EffectType,
   Exit,
-  FiberRef,
+  Fiber,
   Layer,
+  Logger,
   Option,
+  References,
+  Result,
 } from "effect"
-import { readSnapshotRequested } from "@pf/db-info"
+import { SqlClient } from "effect/sql"
+import {
+  readSnapshotRequested,
+  withTransactionCommitCallbacks,
+} from "@pf/db-info"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   BusinessCalendarQueries,
@@ -20,7 +30,6 @@ import {
   FlowExecutionOperations,
   NOTIFICATION_DELIVERY_QUEUE,
   SYSTEM_STEP_EXECUTION_QUEUE,
-  ScheduledFlowOperations,
   StepCompletionOperations,
   TODO_EVENT_QUEUE,
   UserDetails,
@@ -31,9 +40,6 @@ import {
   EXECUTION_EVENT_QUEUE,
   type NotificationDeliveryPayload,
   PROCESS_EVENT_QUEUE,
-  completeAsyncSystemStep,
-  failAsyncSystemStep,
-  failTerminalSystemStep,
   flowExecutionHandler,
   systemStepExecutionHandler,
 } from "@pf/job-handler"
@@ -43,6 +49,7 @@ import {
   ConditionEvaluator,
   ExecutionFailureNotifications,
   Form,
+  LongDurationDispatcher,
   NodeStep,
   Organisation,
   OrganisationProviderTest,
@@ -56,8 +63,13 @@ import {
   makeSystemStepExecutor,
   normalizePath,
 } from "@pf/process"
-import type { Job } from "@pf/queue-service"
-import { EnqueueError, QueueService } from "@pf/queue-service"
+import {
+  completeAsyncSystemStep,
+  completeDeliveredSystemStep,
+  executeDeliveredSystemStep,
+  failAsyncSystemStep,
+  failTerminalSystemStep,
+} from "@pf/process-execution/worker"
 import { RequestTime } from "@pf/request-time"
 import {
   DatabaseTest,
@@ -124,12 +136,14 @@ const createMockQueueService = (options?: {
         })
         return `mock-job-${enqueuedJobs.length}`
       }),
-    enqueueWithDelay: () => Effect.dieMessage("not used"),
+    enqueueWithDelay: () => Effect.die("not used"),
     rawClaim: () => Effect.succeed(Option.none()),
-    acknowledge: () => Effect.dieMessage("not used"),
-    fail: () => Effect.dieMessage("not used"),
-    extendVisibility: () => Effect.dieMessage("not used"),
-    getStats: () => Effect.dieMessage("not used"),
+    rawClaimBatch: () => Effect.succeed([]),
+    acknowledgeBatch: () => Effect.succeed([]),
+    acknowledge: () => Effect.die("not used"),
+    fail: () => Effect.die("not used"),
+    extendVisibility: () => Effect.die("not used"),
+    getStats: () => Effect.die("not used"),
   })
   return { layer, enqueuedJobs }
 }
@@ -140,6 +154,7 @@ const makeTestOrg = (
     AuthorTaggedError,
     unknown
   >,
+  longDuration = false,
 ) => {
   const org = new Organisation({ name: "TestOrg" })
   const employee = new Role(org, "employee", { name: "Employee" })
@@ -158,6 +173,7 @@ const makeTestOrg = (
   const system = new NodeStep(process, "system", {
     name: "System",
     purpose: "System step",
+    longDuration,
     input: () => Effect.succeed({}),
     output: {},
     execute: () => executeEffect,
@@ -302,15 +318,12 @@ const createTestLayers = (
     createMockQueueService(queueOptions)
   const RequestTimeLive = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
-  const UserDetailsLive = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "TEST_USER",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsLive = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "TEST_USER",
+  } as UserDetailsValue)
   const ConditionEvaluatorLive = Layer.succeed(
     ConditionEvaluator,
     makeConditionEvaluator(org),
@@ -336,6 +349,10 @@ const createTestLayers = (
   )
 
   const layers = Layer.mergeAll(
+    Layer.effect(
+      ConfigProvider.ConfigProvider,
+      Effect.sync(() => ConfigProvider.fromEnv()),
+    ),
     RequestTimeLive,
     UserDetailsLive,
     ConditionEvaluatorLive,
@@ -618,7 +635,7 @@ const insertProviderUser = (params: {
       id: params.userId,
       provider: "test",
       sub: params.email,
-      lastLoggedIn: now,
+      createdAt: now,
     })
 
     const [firstName, ...rest] = params.name.split(" ")
@@ -728,12 +745,192 @@ const makeExecutionFailureNotificationsOrg = (props?: {
   return { org, operator, backup }
 }
 
+const captureStepFailure = (message = "System step execution failed") => {
+  const records: { level: string; fields: unknown }[] = []
+  const layer = Logger.layer([
+    Logger.map(Logger.formatStructured, (entry) => {
+      if (Array.isArray(entry.message) && entry.message[0] === message) {
+        records.push({ level: entry.level, fields: entry.message[1] })
+      }
+    }),
+  ])
+  return { records, layer }
+}
+
 describe("System Step Execution Handler", () => {
+  it("validates delivered output against the persisted Todo's authored schema before completing it", async () => {
+    const { org } = makeForEachSystemStepOrg()
+    const { layers, enqueuedJobs } = createTestLayers(org)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* storeOrganisation(org)
+        const { todoIds } = yield* insertExecutionWithForEachSystemTodos
+        const operations = yield* StepCompletionOperations
+        const command = { todoId: todoIds[0], jobId: "delivered-output" }
+        const rejected = yield* completeDeliveredSystemStep({
+          ...command,
+          output: { recipient: 42 },
+        }).pipe(Effect.result)
+        expect(Result.isFailure(rejected)).toBe(true)
+        if (Result.isFailure(rejected)) {
+          expect(rejected.failure._tag).toBe("OutputValidationError")
+        }
+        expect(
+          (yield* operations.queryTodoForCompletionById(command.todoId))
+            ?.completed,
+        ).toBe(false)
+        expect(enqueuedJobs).toHaveLength(0)
+        yield* completeDeliveredSystemStep({
+          ...command,
+          output: { recipient: "first" },
+        })
+        expect(
+          (yield* operations.queryTodoForCompletionById(command.todoId))
+            ?.completed,
+        ).toBe(true)
+      }).pipe(Effect.provide(layers)),
+    )
+  })
+
+  it("executes an already-launched action and recovers committed dispatch without relaunching or repeating the action", async () => {
+    let actions = 0
+    let launches = 0
+    const { org } = makeTestOrg(
+      Effect.sync(() => {
+        actions++
+        return {}
+      }),
+      true,
+    )
+    const { layers, enqueuedJobs } = createTestLayers(org, {
+      queueInTransaction: false,
+      failEnqueueAttempts: [1],
+    })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* storeOrganisation(org)
+        const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
+        const now = yield* DateTime.now
+        yield* systemStepExecutionHandler.handle({
+          jobId: "launch",
+          queue: SYSTEM_STEP_EXECUTION_QUEUE,
+          payload: { todoId, stepPath },
+          attempts: 1,
+          maxAttempts: 5,
+          availableAt: now,
+          lockedUntil: now,
+        })
+        expect(launches).toBe(1)
+        expect(actions).toBe(0)
+        const run = executeDeliveredSystemStep({
+          todoId,
+          jobId: `fargate:${todoId}`,
+        })
+        expect(Result.isFailure(yield* run.pipe(Effect.result))).toBe(true)
+        const operations = yield* StepCompletionOperations
+        expect(
+          (yield* operations.queryTodoForCompletionById(todoId))?.completed,
+        ).toBe(true)
+        yield* run
+        yield* run
+        expect(actions).toBe(1)
+        expect(launches).toBe(1)
+        expect(
+          enqueuedJobs.filter((job) => job.queue === FLOW_EXECUTION_QUEUE),
+        ).toHaveLength(1)
+      }).pipe(
+        Effect.provide(layers),
+        Effect.provideService(LongDurationDispatcher, {
+          dispatch: () =>
+            Effect.sync(() => {
+              launches++
+            }),
+        }),
+      ) as Effect.Effect<void>,
+    )
+  })
+
+  for (const outcome of ["committed", "failed", "stale"] as const) {
+    for (const level of ["Info", "Debug"] as const) {
+      it(`reports execution separately from persisted completion (${level}, ${outcome})`, async () => {
+        const { org } = makeTestOrg(Effect.succeed({ greeting: "hello" }))
+        const { layers } = createTestLayers(org, {
+          failEnqueueAttempts: outcome === "failed" ? [1] : [],
+        })
+        const messages: unknown[][] = []
+        const logger = Logger.make((entry) => {
+          if (Array.isArray(entry.message)) messages.push(entry.message)
+        })
+        const program = Effect.gen(function* () {
+          yield* storeOrganisation(org)
+          const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
+          const todo = yield* loadTodoInfo(todoId)
+          const now = yield* DateTime.now
+          const result = yield* systemStepExecutionHandler
+            .handle({
+              jobId: "job-completion-diagnostics",
+              queue: SYSTEM_STEP_EXECUTION_QUEUE,
+              payload: { todoId, stepPath },
+              attempts: 1,
+              maxAttempts: 5,
+              availableAt: now,
+              lockedUntil: now,
+            })
+            .pipe(Effect.result)
+          expect(Result.isFailure(result)).toBe(outcome === "failed")
+          const correlation = {
+            jobId: "job-completion-diagnostics",
+            todoId,
+            stepPath,
+            processExecutionId: todo.processExecutionId,
+          }
+          expect(messages).toContainEqual([
+            "System-step-execution job resolved execution",
+            correlation,
+          ])
+          expect(messages).toContainEqual([
+            "System step execution returned; completion pending",
+            expect.objectContaining(correlation),
+          ])
+          expect(
+            messages.some(([message]) => message === "Executing system step"),
+          ).toBe(level === "Debug")
+          const committed = messages.filter(
+            ([message]) => message === "System step completion committed",
+          )
+          expect(committed).toHaveLength(outcome === "committed" ? 1 : 0)
+          if (outcome === "committed") {
+            expect(committed[0]?.[1]).toEqual(
+              expect.objectContaining(correlation),
+            )
+          }
+          const completedJobs = yield* CompletedJobOperations
+          expect(
+            yield* completedJobs.isJobCompleted(
+              SYSTEM_STEP_EXECUTION_QUEUE,
+              "job-completion-diagnostics",
+            ),
+          ).toBe(outcome === "committed")
+        })
+        await Effect.runPromise(
+          program.pipe(
+            Effect.provide(layers),
+            Effect.provide(Logger.layer([logger])),
+            Effect.provideService(References.MinimumLogLevel, level),
+            Effect.provideService(JobAttempt, {
+              isCurrent: Effect.succeed(outcome !== "stale"),
+            }),
+          ),
+        )
+      })
+    }
+  }
+
   it("snapshots handler inputs and calendars but releases snapshots before execution and writes", async () => {
     const observed: string[] = []
     const { org } = makeTestOrg(
       Effect.gen(function* () {
-        expect(yield* FiberRef.get(readSnapshotRequested)).toBe(false)
+        expect(yield* readSnapshotRequested).toBe(false)
         observed.push("execute")
         return {}
       }),
@@ -751,7 +948,7 @@ describe("System Step Execution Handler", () => {
         effect: Effect.Effect<A, E, R>,
       ) =>
         Effect.gen(function* () {
-          expect(yield* FiberRef.get(readSnapshotRequested)).toBe(snapshot)
+          expect(yield* readSnapshotRequested).toBe(snapshot)
           observed.push(name)
           return yield* effect
         })
@@ -795,6 +992,7 @@ describe("System Step Execution Handler", () => {
   })
 
   it("records failure on last attempt", async () => {
+    const failureLog = captureStepFailure()
     const { org } = makeTestOrg(
       Effect.fail({ _tag: "TestFailure", message: "boom" }),
     )
@@ -816,7 +1014,19 @@ describe("System Step Execution Handler", () => {
         lockedUntil: now,
       }
 
-      yield* systemStepExecutionHandler.handle(job)
+      yield* systemStepExecutionHandler
+        .handle(job)
+        .pipe(Effect.provide(failureLog.layer))
+      expect(failureLog.records).toEqual([
+        {
+          level: "ERROR",
+          fields: expect.objectContaining({
+            attempts: 5,
+            isTerminal: true,
+            failureReason: expect.stringContaining("boom"),
+          }),
+        },
+      ])
 
       const db = yield* TypedSqliteDrizzle
       const rows = yield* db
@@ -855,6 +1065,7 @@ describe("System Step Execution Handler", () => {
   })
 
   it("enqueues onError flow execution on terminal failure", async () => {
+    const failureLog = captureStepFailure()
     const { org } = makeOnErrorTestOrg(
       Effect.fail({ _tag: "Retryable", message: "boom" }),
     )
@@ -876,7 +1087,19 @@ describe("System Step Execution Handler", () => {
         lockedUntil: now,
       }
 
-      yield* systemStepExecutionHandler.handle(job)
+      yield* systemStepExecutionHandler
+        .handle(job)
+        .pipe(Effect.provide(failureLog.layer))
+      expect(failureLog.records).toEqual([
+        {
+          level: "WARN",
+          fields: expect.objectContaining({
+            attempts: 5,
+            isTerminal: true,
+            failureReason: expect.stringContaining("boom"),
+          }),
+        },
+      ])
 
       const flowExecutionJob = enqueuedJobs.find(
         (queuedJob) => queuedJob.queue === FLOW_EXECUTION_QUEUE,
@@ -1311,7 +1534,88 @@ describe("System Step Execution Handler", () => {
     )
   })
 
+  it.each([false, true])(
+    "ignores a stale terminal timeout after manual restart (rejected write: %s)",
+    async (rejectedWrite) => {
+      const started = await Effect.runPromise(Deferred.make<void>())
+      const release = await Effect.runPromise(Deferred.make<void>())
+      let calls = 0
+      const { org } = makeTestOrg(
+        Effect.gen(function* () {
+          calls++
+          if (calls === 1) {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+            return yield* Effect.fail({
+              _tag: "Timeout",
+              message: "old attempt timed out",
+              retryable: true,
+            })
+          }
+          return yield* Effect.fail({
+            _tag: "Validation",
+            message: "write rejected",
+            retryable: false,
+            externalWriteRejected: rejectedWrite,
+          })
+        }),
+      )
+      const { layers } = createTestLayers(org)
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* storeOrganisation(org)
+          const { todoId, stepPath, processExecutionId } =
+            yield* insertExecutionWithSystemTodo
+          const now = yield* DateTime.now
+          const job: Job<{ todoId: string; stepPath: string }> = {
+            jobId: "stale-timeout",
+            queue: SYSTEM_STEP_EXECUTION_QUEUE,
+            payload: { todoId, stepPath },
+            attempts: 1,
+            maxAttempts: 1,
+            availableAt: now,
+            lockedUntil: now,
+          }
+          const oldDelivery = yield* Effect.forkChild(
+            systemStepExecutionHandler.handle(job),
+          )
+          yield* Deferred.await(started)
+          yield* systemStepExecutionHandler.handle({
+            ...job,
+            jobId: "confirmed-rejection",
+          })
+          const operations = yield* StepCompletionOperations
+          const failed = yield* operations.queryTodoById(todoId)
+          if (rejectedWrite) expect(failed?.externalWriteAttemptId).toBeString()
+          else expect(failed?.externalWriteAttemptId).toBeNull()
+          const sqlClient = yield* SqlClient.SqlClient
+          yield* sqlClient.withTransaction(
+            Effect.gen(function* () {
+              yield* operations.clearTodoFailures([todoId], "manual-restart")
+              yield* operations.clearProcessExecutionFinished(
+                processExecutionId,
+              )
+            }),
+          )
+          yield* operations.clearTodoFailures([todoId], "duplicate-restart")
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(oldDelivery)
+          const active = yield* operations.queryTodoById(todoId)
+          expect(active?.failureReason).toBeNull()
+          expect(active?.externalWriteAttemptId).toBe(
+            failed?.externalWriteAttemptId,
+          )
+          expect(active?.restartAttemptId).toBe("manual-restart")
+          expect(
+            (yield* queryExecutionFailure(processExecutionId))?.finishedAt,
+          ).toBeNull()
+        }).pipe(Effect.provide(layers)),
+      )
+    },
+  )
+
   it("re-raises errors when retries remain", async () => {
+    const failureLog = captureStepFailure()
     const { org } = makeTestOrg(
       Effect.fail({ _tag: "TestFailure", message: "retry" }),
     )
@@ -1333,8 +1637,22 @@ describe("System Step Execution Handler", () => {
         lockedUntil: now,
       }
 
-      const exit = yield* Effect.exit(systemStepExecutionHandler.handle(job))
+      const exit = yield* Effect.exit(
+        systemStepExecutionHandler
+          .handle(job)
+          .pipe(Effect.provide(failureLog.layer)),
+      )
       expect(Exit.isFailure(exit)).toBe(true)
+      expect(failureLog.records).toEqual([
+        {
+          level: "WARN",
+          fields: expect.objectContaining({
+            attempts: 1,
+            isTerminal: false,
+            failureReason: expect.stringContaining("retry"),
+          }),
+        },
+      ])
 
       const db = yield* TypedSqliteDrizzle
       const rows = yield* db
@@ -1780,40 +2098,18 @@ describe("System Step Execution Handler", () => {
 
     const program = Effect.gen(function* () {
       yield* storeOrganisation(org)
-      const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
+      const { todoId } = yield* insertExecutionWithSystemTodo
       const todoInfo = yield* loadTodoInfo(todoId)
-
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const calendarQueries = yield* BusinessCalendarQueries
-      const sqlClient = yield* SqlClient.SqlClient
 
       const didFail = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Resend reported email.failed for the primary recipient",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
       expect(didFail.didFail).toBe(true)
 
       const didComplete = yield* completeAsyncSystemStep({
         todoId,
-        stepPath,
         output: { emailId: "re_email_123" },
-        todoInfo,
-        isForEach: false,
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        calendarQueries,
-        sqlClient,
       })
       expect(didComplete).toBe(true)
 
@@ -1853,41 +2149,16 @@ describe("System Step Execution Handler", () => {
 
     const program = Effect.gen(function* () {
       yield* storeOrganisation(org)
-      const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
+      const { todoId } = yield* insertExecutionWithSystemTodo
       const todoInfo = yield* loadTodoInfo(todoId)
-
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const calendarQueries = yield* BusinessCalendarQueries
-      const sqlClient = yield* SqlClient.SqlClient
 
       const firstCompletion = yield* completeAsyncSystemStep({
         todoId,
-        stepPath,
         output: { emailId: "re_email_123" },
-        todoInfo,
-        isForEach: false,
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        calendarQueries,
-        sqlClient,
       })
       const duplicateCompletion = yield* completeAsyncSystemStep({
         todoId,
-        stepPath,
         output: { emailId: "re_email_123" },
-        todoInfo,
-        isForEach: false,
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        calendarQueries,
-        sqlClient,
       })
 
       expect(firstCompletion).toBe(true)
@@ -1924,38 +2195,15 @@ describe("System Step Execution Handler", () => {
 
     const program = Effect.gen(function* () {
       yield* storeOrganisation(org)
-      const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
-      const todoInfo = yield* loadTodoInfo(todoId)
-
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const calendarQueries = yield* BusinessCalendarQueries
-      const sqlClient = yield* SqlClient.SqlClient
+      const { todoId } = yield* insertExecutionWithSystemTodo
 
       const didComplete = yield* completeAsyncSystemStep({
         todoId,
-        stepPath,
         output: { emailId: "re_email_123" },
-        todoInfo,
-        isForEach: false,
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        calendarQueries,
-        sqlClient,
       })
       const didFail = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Resend reported email.failed for the primary recipient",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(didComplete).toBe(true)
@@ -1990,34 +2238,15 @@ describe("System Step Execution Handler", () => {
     const program = Effect.gen(function* () {
       yield* storeOrganisation(org)
       const { todoId } = yield* insertExecutionWithSystemTodo
-      const todoInfo = yield* loadTodoInfo(todoId)
-
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const sqlClient = yield* SqlClient.SqlClient
 
       const firstFailure = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Resend reported email.failed for the primary recipient",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
       const duplicateFailure = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason:
           "Resend reported email.bounced for the primary recipient",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(firstFailure.didFail).toBe(true)
@@ -2041,21 +2270,9 @@ describe("System Step Execution Handler", () => {
       const { todoId } = yield* insertExecutionWithSystemTodo
       const todoInfo = yield* loadTodoInfo(todoId)
 
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const sqlClient = yield* SqlClient.SqlClient
-
       const didFail = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Resend reported email.failed for the primary recipient",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(didFail.didFail).toBe(true)
@@ -2146,24 +2363,12 @@ describe("System Step Execution Handler", () => {
     const program = Effect.gen(function* () {
       yield* storeOrganisation(org)
       const { todoId } = yield* insertExecutionWithSystemTodo
-      const todoInfo = yield* loadTodoInfo(todoId)
-
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const sqlClient = yield* SqlClient.SqlClient
+      const _todoInfo = yield* loadTodoInfo(todoId)
 
       const didFail = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Retryable async callback failed",
         errorTag: "Retryable",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(didFail.didFail).toBe(true)
@@ -2232,21 +2437,9 @@ describe("System Step Execution Handler", () => {
       const { todoId } = yield* insertExecutionWithSystemTodo
       const todoInfo = yield* loadTodoInfo(todoId)
 
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const sqlClient = yield* SqlClient.SqlClient
-
       const didFail = yield* failAsyncSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Resend reported email.failed for the primary recipient",
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(didFail).toEqual({ didFail: true, scheduledFlowId: null })
@@ -2291,27 +2484,13 @@ describe("System Step Execution Handler", () => {
       const { todoId } = yield* insertExecutionWithSystemTodo
       const todoInfo = yield* loadTodoInfo(todoId)
 
-      const completedJobOps = yield* CompletedJobOperations
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const sqlClient = yield* SqlClient.SqlClient
-
       const didFail = yield* failTerminalSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Step failed.",
         completedJob: {
-          ops: completedJobOps,
           namespace: "docker-step-complete",
           jobId: "project:build-1",
         },
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(didFail).toEqual({
@@ -2366,27 +2545,13 @@ describe("System Step Execution Handler", () => {
       const { todoId } = yield* insertExecutionWithSystemTodo
       const todoInfo = yield* loadTodoInfo(todoId)
 
-      const completedJobOps = yield* CompletedJobOperations
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const sqlClient = yield* SqlClient.SqlClient
-
       const didFail = yield* failTerminalSystemStep({
         todoId,
-        processExecutionId: todoInfo.processExecutionId,
         failureReason: "Step failed.",
         completedJob: {
-          ops: completedJobOps,
           namespace: "docker-step-complete",
           jobId: "project:build-2",
         },
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        sqlClient,
       })
 
       expect(didFail.didFail).toBe(true)
@@ -2529,45 +2694,20 @@ describe("System Step Execution Handler", () => {
 
     const program = Effect.gen(function* () {
       yield* storeOrganisation(org)
-      const { todoIds, stepPath, processStateId } =
+      const { todoIds, processStateId } =
         yield* insertExecutionWithForEachSystemTodos
       const [firstTodoId, secondTodoId] = todoIds
 
-      const firstTodoInfo = yield* loadTodoInfo(firstTodoId)
-      const secondTodoInfo = yield* loadTodoInfo(secondTodoId)
-
-      const queueService = yield* QueueService
-      const stepCompletionOps = yield* StepCompletionOperations
-      const flowExecutionOps = yield* FlowExecutionOperations
-      const scheduledFlowOps = yield* ScheduledFlowOperations
-      const calendarQueries = yield* BusinessCalendarQueries
-      const sqlClient = yield* SqlClient.SqlClient
+      const _firstTodoInfo = yield* loadTodoInfo(firstTodoId)
+      const _secondTodoInfo = yield* loadTodoInfo(secondTodoId)
 
       const firstCompletion = yield* completeAsyncSystemStep({
         todoId: firstTodoId,
-        stepPath,
         output: { recipient: "first@example.com" },
-        todoInfo: firstTodoInfo,
-        isForEach: true,
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        calendarQueries,
-        sqlClient,
       })
       const secondCompletion = yield* completeAsyncSystemStep({
         todoId: secondTodoId,
-        stepPath,
         output: { recipient: "second@example.com" },
-        todoInfo: secondTodoInfo,
-        isForEach: true,
-        queueService,
-        stepCompletionOps,
-        scheduledFlowOps,
-        flowExecutionOps,
-        calendarQueries,
-        sqlClient,
       })
 
       expect(firstCompletion).toBe(true)
@@ -2692,80 +2832,129 @@ describe("System Step Execution Handler", () => {
     )
   })
 
-  it("executes a started system step and schedules downstream flow evaluation", async () => {
-    const { org } = makeStartSystemStepOrg(
-      Effect.succeed({ greeting: "hello" }),
-    )
-    const { layers: TestLayers, enqueuedJobs } = createTestLayers(org)
-
-    const program = Effect.gen(function* () {
-      yield* storeOrganisation(org)
-      const { processExecutionId, stepId, stepPath } =
-        yield* insertExecutionForStartSystemStep
-
-      const now = yield* DateTime.now
-      const job: Job<{
-        startsProcess: true
-        processExecutionId: string
-        stepId: string
-        stepPath: string
-      }> = {
-        jobId: "job-test-start-system-001",
-        queue: SYSTEM_STEP_EXECUTION_QUEUE,
-        payload: {
-          startsProcess: true,
-          processExecutionId,
-          stepId,
-          stepPath,
-        },
-        attempts: 1,
-        maxAttempts: 5,
-        availableAt: now,
-        lockedUntil: now,
-      }
-
-      yield* systemStepExecutionHandler.handle(job)
-
-      const db = yield* TypedSqliteDrizzle
-      const states = yield* db
-        .select({ state: schema.processState.state })
-        .from(schema.processState)
-        .where(eq(schema.processState.id, "pst-test-start-system-001"))
-        .limit(1)
-
-      expect(states[0]?.state).toEqual({ greeting: "hello" })
-
-      const scheduledFlows = yield* db
-        .select({
-          processExecutionId: schema.scheduledFlow.processExecutionId,
-          sourceStepId: schema.scheduledFlow.sourceStepId,
-        })
-        .from(schema.scheduledFlow)
-        .where(eq(schema.scheduledFlow.processExecutionId, processExecutionId))
-
-      expect(scheduledFlows).toEqual([
-        { processExecutionId, sourceStepId: stepId },
-      ])
-      const completedJobOps = yield* CompletedJobOperations
-      const isCompleted = yield* completedJobOps.isJobCompleted(
-        SYSTEM_STEP_EXECUTION_QUEUE,
-        `start-${processExecutionId}`,
+  for (const rollback of [false, true]) {
+    it(`executes a started system step with provisional downstream scheduling (outer rollback=${rollback})`, async () => {
+      const { org } = makeStartSystemStepOrg(
+        Effect.succeed({ greeting: "hello" }),
       )
-      expect(isCompleted).toBe(true)
+      const { layers: TestLayers, enqueuedJobs } = createTestLayers(org)
 
-      const queues = enqueuedJobs.map((queuedJob) => queuedJob.queue)
-      expect(queues).toContain(FLOW_EXECUTION_QUEUE)
-      expect(queues).toContain(PROCESS_EVENT_QUEUE)
-      expect(queues).toContain(EXECUTION_EVENT_QUEUE)
-      expect(queues).not.toContain(TODO_EVENT_QUEUE)
+      const program = Effect.gen(function* () {
+        yield* storeOrganisation(org)
+        const { processExecutionId, stepId, stepPath } =
+          yield* insertExecutionForStartSystemStep
+
+        const now = yield* DateTime.now
+        const job: Job<{
+          startsProcess: true
+          processExecutionId: string
+          stepId: string
+          stepPath: string
+        }> = {
+          jobId: "job-test-start-system-001",
+          queue: SYSTEM_STEP_EXECUTION_QUEUE,
+          payload: {
+            startsProcess: true,
+            processExecutionId,
+            stepId,
+            stepPath,
+          },
+          attempts: 1,
+          maxAttempts: 5,
+          availableAt: now,
+          lockedUntil: now,
+        }
+
+        const messages: unknown[] = []
+        const logger = Logger.make((entry) => {
+          if (Array.isArray(entry.message)) messages.push(entry.message[0])
+        })
+        const sqlClient = yield* SqlClient.SqlClient
+        const withCommitCallbacks = {
+          ...sqlClient,
+          withTransaction: withTransactionCommitCallbacks(
+            sqlClient.transactionService.key,
+            sqlClient.withTransaction,
+          ),
+        }
+        const result = yield* withCommitCallbacks
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* systemStepExecutionHandler
+                .handle(job)
+                .pipe(
+                  Effect.provide(Logger.layer([logger])),
+                  Effect.provideService(
+                    SqlClient.SqlClient,
+                    withCommitCallbacks,
+                  ),
+                )
+              // The handler's nested transaction returned, but the outer one is open.
+              expect(messages).toContain(
+                "Staged flow after start system step completion (provisional until outer commit)",
+              )
+              expect(messages).not.toContain(
+                "Flow scheduled after start system step completion",
+              )
+              expect(messages).toContain(
+                "Start system step execution returned; completion pending",
+              )
+              expect(messages).not.toContain(
+                "Start system step completion committed",
+              )
+              if (rollback) return yield* Effect.fail("later outer rollback")
+            }),
+          )
+          .pipe(Effect.result)
+        expect(Result.isFailure(result)).toBe(rollback)
+        expect(
+          messages.includes("Start system step completion committed"),
+        ).toBe(!rollback)
+
+        const db = yield* TypedSqliteDrizzle
+        const states = yield* db
+          .select({ state: schema.processState.state })
+          .from(schema.processState)
+          .where(eq(schema.processState.id, "pst-test-start-system-001"))
+          .limit(1)
+
+        expect(states[0]?.state).toEqual(rollback ? {} : { greeting: "hello" })
+
+        const scheduledFlows = yield* db
+          .select({
+            processExecutionId: schema.scheduledFlow.processExecutionId,
+            sourceStepId: schema.scheduledFlow.sourceStepId,
+          })
+          .from(schema.scheduledFlow)
+          .where(
+            eq(schema.scheduledFlow.processExecutionId, processExecutionId),
+          )
+
+        expect(scheduledFlows).toEqual(
+          rollback ? [] : [{ processExecutionId, sourceStepId: stepId }],
+        )
+        const completedJobOps = yield* CompletedJobOperations
+        const isCompleted = yield* completedJobOps.isJobCompleted(
+          SYSTEM_STEP_EXECUTION_QUEUE,
+          `start-${processExecutionId}`,
+        )
+        expect(isCompleted).toBe(!rollback)
+
+        const queues = enqueuedJobs.map((queuedJob) => queuedJob.queue)
+        expect(queues).toContain(FLOW_EXECUTION_QUEUE)
+        expect(queues).toContain(PROCESS_EVENT_QUEUE)
+        expect(queues).toContain(EXECUTION_EVENT_QUEUE)
+        expect(queues).not.toContain(TODO_EVENT_QUEUE)
+      })
+
+      await Effect.runPromise(
+        Effect.provide(program, TestLayers) as Effect.Effect<void>,
+      )
     })
-
-    await Effect.runPromise(
-      Effect.provide(program, TestLayers) as Effect.Effect<void>,
-    )
-  })
+  }
 
   it("marks started system step executions failed on terminal failure", async () => {
+    const failureLog = captureStepFailure("Start system step execution failed")
     const { org } = makeStartSystemStepOrg(
       Effect.fail({ _tag: "TestFailure", message: "boom" }),
     )
@@ -2797,7 +2986,19 @@ describe("System Step Execution Handler", () => {
         lockedUntil: now,
       }
 
-      yield* systemStepExecutionHandler.handle(job)
+      yield* systemStepExecutionHandler
+        .handle(job)
+        .pipe(Effect.provide(failureLog.layer))
+      expect(failureLog.records).toEqual([
+        {
+          level: "ERROR",
+          fields: expect.objectContaining({
+            attempts: 5,
+            isTerminal: true,
+            failureReason: expect.stringContaining("boom"),
+          }),
+        },
+      ])
 
       const db = yield* TypedSqliteDrizzle
       const executions = yield* db
@@ -2842,6 +3043,7 @@ describe("System Step Execution Handler", () => {
   })
 
   it("re-raises started system step failures while retries remain", async () => {
+    const failureLog = captureStepFailure("Start system step execution failed")
     const { org } = makeStartSystemStepOrg(
       Effect.fail({ _tag: "TestFailure", message: "retry" }),
     )
@@ -2873,8 +3075,22 @@ describe("System Step Execution Handler", () => {
         lockedUntil: now,
       }
 
-      const exit = yield* Effect.exit(systemStepExecutionHandler.handle(job))
+      const exit = yield* Effect.exit(
+        systemStepExecutionHandler
+          .handle(job)
+          .pipe(Effect.provide(failureLog.layer)),
+      )
       expect(Exit.isFailure(exit)).toBe(true)
+      expect(failureLog.records).toEqual([
+        {
+          level: "WARN",
+          fields: expect.objectContaining({
+            attempts: 1,
+            isTerminal: false,
+            failureReason: expect.stringContaining("retry"),
+          }),
+        },
+      ])
 
       const db = yield* TypedSqliteDrizzle
       const executions = yield* db
@@ -2925,6 +3141,10 @@ describe("System Step Execution Handler", () => {
       await Effect.runPromise(
         Effect.gen(function* () {
           yield* storeOrganisation(org)
+          // Import notifications are unrelated to this operation's outbox.
+          const importJobs = yield* (yield* TypedSqliteDrizzle)
+            .select({ id: schema.jobQueue.id })
+            .from(schema.jobQueue)
           const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
           const now = yield* DateTime.now
           const job: Job<{ todoId: string; stepPath: string }> = {
@@ -2939,8 +3159,8 @@ describe("System Step Execution Handler", () => {
 
           const first = yield* systemStepExecutionHandler
             .handle(job)
-            .pipe(Effect.either)
-          expect(first._tag).toBe("Left")
+            .pipe(Effect.result)
+          expect(first._tag).toBe("Failure")
 
           const db = yield* TypedSqliteDrizzle
           const scheduledBeforeRetry = yield* db
@@ -2950,7 +3170,7 @@ describe("System Step Execution Handler", () => {
             .select({ payload: schema.jobQueue.jobPayload })
             .from(schema.jobQueue)
           expect(scheduledBeforeRetry).toHaveLength(1)
-          expect(outboxBeforeRetry).toHaveLength(1)
+          expect(outboxBeforeRetry).toHaveLength(importJobs.length + 1)
 
           const flowExecutionOps = yield* FlowExecutionOperations
           expect(
@@ -3000,7 +3220,7 @@ describe("System Step Execution Handler", () => {
           expect(executions).toBe(1)
           expect(
             yield* db.select({ id: schema.jobQueue.id }).from(schema.jobQueue),
-          ).toEqual([])
+          ).toEqual(importJobs)
           expect(
             yield* db
               .select({ id: schema.scheduledFlow.id })
@@ -3044,6 +3264,10 @@ describe("System Step Execution Handler", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* storeOrganisation(org)
+        // Import notifications are unrelated to this operation's outbox.
+        const importJobs = yield* (yield* TypedSqliteDrizzle)
+          .select({ id: schema.jobQueue.id })
+          .from(schema.jobQueue)
         const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
         const now = yield* DateTime.now
         const job: Job<{ todoId: string; stepPath: string }> = {
@@ -3057,9 +3281,9 @@ describe("System Step Execution Handler", () => {
         }
 
         expect(
-          (yield* systemStepExecutionHandler.handle(job).pipe(Effect.either))
+          (yield* systemStepExecutionHandler.handle(job).pipe(Effect.result))
             ._tag,
-        ).toBe("Left")
+        ).toBe("Failure")
         yield* systemStepExecutionHandler.handle({ ...job, attempts: 6 })
 
         const db = yield* TypedSqliteDrizzle
@@ -3070,7 +3294,7 @@ describe("System Step Execution Handler", () => {
         expect(todos[0]?.failureReason).toContain("terminal")
         expect(
           yield* db.select({ id: schema.jobQueue.id }).from(schema.jobQueue),
-        ).toEqual([])
+        ).toEqual(importJobs)
         expect(
           yield* db
             .select({ id: schema.scheduledFlow.id })
@@ -3108,6 +3332,10 @@ describe("System Step Execution Handler", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* storeOrganisation(org)
+        // Import notifications are unrelated to this operation's outbox.
+        const importJobs = yield* (yield* TypedSqliteDrizzle)
+          .select({ id: schema.jobQueue.id })
+          .from(schema.jobQueue)
         const { processExecutionId, stepId, stepPath } =
           yield* insertExecutionForStartSystemStep
         const now = yield* DateTime.now
@@ -3132,15 +3360,15 @@ describe("System Step Execution Handler", () => {
         }
 
         expect(
-          (yield* systemStepExecutionHandler.handle(job).pipe(Effect.either))
+          (yield* systemStepExecutionHandler.handle(job).pipe(Effect.result))
             ._tag,
-        ).toBe("Left")
+        ).toBe("Failure")
         yield* systemStepExecutionHandler.handle({ ...job, attempts: 6 })
 
         const db = yield* TypedSqliteDrizzle
         expect(
           yield* db.select({ id: schema.jobQueue.id }).from(schema.jobQueue),
-        ).toEqual([])
+        ).toEqual(importJobs)
         expect(
           yield* db
             .select({ id: schema.scheduledFlow.id })
@@ -3168,36 +3396,21 @@ describe("System Step Execution Handler", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* storeOrganisation(org)
-        const { todoId, stepPath } = yield* insertExecutionWithSystemTodo
-        const todoInfo = yield* loadTodoInfo(todoId)
-        const queueService = yield* QueueService
-        const stepCompletionOps = yield* StepCompletionOperations
-        const scheduledFlowOps = yield* ScheduledFlowOperations
-        const flowExecutionOps = yield* FlowExecutionOperations
-        const calendarQueries = yield* BusinessCalendarQueries
-        const sqlClient = yield* SqlClient.SqlClient
+        // Import notifications are unrelated to this operation's outbox.
+        const importJobs = yield* (yield* TypedSqliteDrizzle)
+          .select({ id: schema.jobQueue.id })
+          .from(schema.jobQueue)
+        const { todoId } = yield* insertExecutionWithSystemTodo
         const complete = () =>
-          completeAsyncSystemStep({
-            todoId,
-            stepPath,
-            output: { emailId: "email-1" },
-            todoInfo,
-            isForEach: false,
-            queueService,
-            stepCompletionOps,
-            scheduledFlowOps,
-            flowExecutionOps,
-            calendarQueries,
-            sqlClient,
-          })
+          completeAsyncSystemStep({ todoId, output: { emailId: "email-1" } })
 
-        expect((yield* complete().pipe(Effect.either))._tag).toBe("Left")
+        expect((yield* complete().pipe(Effect.result))._tag).toBe("Failure")
         expect(yield* complete()).toBe(true)
 
         const db = yield* TypedSqliteDrizzle
         expect(
           yield* db.select({ id: schema.jobQueue.id }).from(schema.jobQueue),
-        ).toEqual([])
+        ).toEqual(importJobs)
         expect(
           yield* db
             .select({ id: schema.scheduledFlow.id })
@@ -3224,33 +3437,25 @@ describe("System Step Execution Handler", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* storeOrganisation(org)
+        // Import notifications are unrelated to this operation's outbox.
+        const importJobs = yield* (yield* TypedSqliteDrizzle)
+          .select({ id: schema.jobQueue.id })
+          .from(schema.jobQueue)
         const { todoId } = yield* insertExecutionWithSystemTodo
-        const todoInfo = yield* loadTodoInfo(todoId)
-        const queueService = yield* QueueService
-        const stepCompletionOps = yield* StepCompletionOperations
-        const scheduledFlowOps = yield* ScheduledFlowOperations
-        const flowExecutionOps = yield* FlowExecutionOperations
-        const sqlClient = yield* SqlClient.SqlClient
         const fail = () =>
           failAsyncSystemStep({
             todoId,
-            processExecutionId: todoInfo.processExecutionId,
             failureReason: "async terminal failure",
-            queueService,
-            stepCompletionOps,
-            scheduledFlowOps,
-            flowExecutionOps,
-            sqlClient,
           })
 
-        expect((yield* fail().pipe(Effect.either))._tag).toBe("Left")
+        expect((yield* fail().pipe(Effect.result))._tag).toBe("Failure")
         const recovered = yield* fail()
         expect(recovered.didFail).toBe(true)
 
         const db = yield* TypedSqliteDrizzle
         expect(
           yield* db.select({ id: schema.jobQueue.id }).from(schema.jobQueue),
-        ).toEqual([])
+        ).toEqual(importJobs)
         expect(
           yield* db
             .select({ id: schema.scheduledFlow.id })

@@ -1,5 +1,6 @@
+import { readConfiguration } from "@processfocus/runtime"
 import { Construct, type IConstruct } from "constructs"
-import { Config } from "effect"
+import { ConfigProvider, Effect } from "effect"
 import { FRONTEND_PLUGIN_HOST_INTERFACE_VERSION } from "@pf/frontend-plugin-host"
 import type {
   OrganisationBrowserPluginArtifactProvider,
@@ -9,31 +10,16 @@ import type {
   OrganisationFrontendPluginManifestProvider,
 } from "@pf/process/organisation-frontend-plugin-manifest"
 import { buildPostHogFrontendClientPluginManifest } from "./frontend-client-plugin-manifest"
+import type { makePostHogConfiguration } from "./posthog-configuration"
 
-export interface PostHogProps {
-  /**
-   * The PostHog project API key (phc_...).
-   * Can be an Effect Config for runtime resolution.
-   */
-  readonly apiKey: string | Config.Config<string>
-  /**
-   * The PostHog ingestion host
-   * (e.g. "https://us.i.posthog.com").
-   * Must be a valid http(s) URL.
-   */
-  readonly host: string
-  /**
-   * Explicitly override whether PostHog is enabled.
-   *
-   * When omitted, PostHog uses the environment default: enabled outside local
-   * development and disabled when `NODE_ENV === "development"`.
-   *
-   * Set to `true` to enable PostHog everywhere, including local development.
-   * Set to `false` to disable PostHog everywhere, even if the frontend manifest
-   * contains a PostHog analytics entry.
-   */
-  readonly enabled?: boolean
-}
+export type PostHogProps =
+  | { readonly configuration: ReturnType<typeof makePostHogConfiguration> }
+  | {
+      readonly apiKey: string
+      readonly host: string
+      /** Defaults to disabled in local development. */
+      readonly enabled?: boolean
+    }
 
 const ensureNonEmptyString = (value: string, field: string): string => {
   const normalized = value.trim()
@@ -72,21 +58,34 @@ export class PostHog
   readonly isFrontendClientPluginManifestProvider = true as const
   readonly isBrowserPluginArtifactProvider = true as const
   readonly frontendManifestPluginCategory?: OrganisationFrontendManifestPluginCategory
-  readonly apiKey: string | Config.Config<string>
+  readonly apiKey: string
   readonly host: string
   readonly enabled: boolean | undefined
 
   constructor(scope: IConstruct, id: string, props: PostHogProps) {
     super(scope, id)
 
-    this.apiKey = Config.isConfig(props.apiKey)
-      ? props.apiKey
-      : ensureNonEmptyString(props.apiKey, "apiKey")
-    this.host = normalizeHost(props.host)
-    this.enabled = props.enabled
+    const values =
+      "configuration" in props
+        ? Effect.runSync(
+            readConfiguration(props.configuration).pipe(
+              Effect.provideService(
+                ConfigProvider.ConfigProvider,
+                ConfigProvider.fromEnv(),
+              ),
+            ),
+          )
+        : props
+    this.apiKey =
+      "configuration" in props && values.apiKey === ""
+        ? ""
+        : ensureNonEmptyString(values.apiKey, "apiKey")
+    this.host = this.apiKey === "" ? "" : normalizeHost(values.host)
+    this.enabled = values.enabled
     if (
-      props.enabled === true ||
-      (props.enabled !== false && process.env["NODE_ENV"] !== "development")
+      this.apiKey !== "" &&
+      (this.enabled === true ||
+        (this.enabled !== false && process.env["NODE_ENV"] !== "development"))
     ) {
       this.frontendManifestPluginCategory = "analytics"
     }

@@ -21,7 +21,7 @@ export const SqliteCleanupOperationsLive = Layer.effect(
       cleanupExecutions: () =>
         Effect.gen(function* () {
           // Delete in order respecting foreign key constraints:
-          // 1. public_completion_invitation_attempt (references to_do)
+          // 1. public_completion_invitation_attempt and task_deadline (reference to_do)
           // 2. to_do (references process_execution)
           // 3. scheduled_flow (references process_execution)
           // 4. job_queue (contains execution-related jobs)
@@ -30,6 +30,7 @@ export const SqliteCleanupOperationsLive = Layer.effect(
           // 7. process_state (base of execution data)
 
           yield* db.delete(schema.publicCompletionInvitationAttempt)
+          yield* db.delete(schema.taskDeadline)
 
           const todos = yield* db
             .select({ id: schema.toDo.id })
@@ -49,7 +50,6 @@ export const SqliteCleanupOperationsLive = Layer.effect(
           const jobsDeleted = jobs.length
           yield* db.delete(schema.jobQueue)
 
-          // Delete all completed job records
           yield* db.delete(schema.completedJob)
 
           const executions = yield* db

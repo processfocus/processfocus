@@ -3,9 +3,10 @@
   "compilerOptions": {
     "outDir": "./out-tsc/bun",
     "types": ["node", "bun"],
-    "rootDir": "."
+    "rootDir": ".."
   },
   "include": [
+    "../runtime/test/batch-contract.ts",
     "vite.config.ts",
     "vite.config.mts",
     "vitest.config.ts",

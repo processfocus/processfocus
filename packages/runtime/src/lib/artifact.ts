@@ -1,4 +1,8 @@
 import { Data, Effect } from "effect"
+import {
+  type ConfigurationContract,
+  parseConfigurationContract,
+} from "./configuration.js"
 
 export const RUNTIME_ARTIFACT_FORMAT = "processfocus/runtime-artifact"
 export const RUNTIME_ARTIFACT_VERSION = 1
@@ -16,6 +20,7 @@ export interface ArtifactProducer {
 export interface RuntimeArtifactEnvelope {
   readonly format: typeof RUNTIME_ARTIFACT_FORMAT
   readonly version: typeof RUNTIME_ARTIFACT_VERSION
+  readonly configuration: ConfigurationContract
   readonly organisation: unknown
   readonly producer?: ArtifactProducer | undefined
   readonly extensions: Readonly<Record<string, unknown>>
@@ -150,10 +155,23 @@ export const parseRuntimeArtifact = (
     )
   }
 
+  let configuration: ConfigurationContract
+  try {
+    configuration = parseConfigurationContract(value["configuration"])
+  } catch {
+    return Effect.fail(
+      new ArtifactParseError({
+        message:
+          "Missing or malformed configuration contract; rebuild the organisation.",
+      }),
+    )
+  }
+
   return Effect.succeed({
     format: RUNTIME_ARTIFACT_FORMAT,
     version: RUNTIME_ARTIFACT_VERSION,
     organisation: value["organisation"],
+    configuration,
     ...(producer !== undefined ? { producer } : {}),
     extensions: extensions ?? {},
   })

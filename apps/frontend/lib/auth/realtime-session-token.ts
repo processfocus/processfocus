@@ -51,6 +51,7 @@ export function matchesRealtimeSessionToken(
       "orgUnitId",
       "orgUnitPath",
       "delegationRoleSelection",
+      "workload",
     ].every(
       (key) =>
         JSON.stringify(Reflect.get(properties, key)) ===

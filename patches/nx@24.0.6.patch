@@ -1,0 +1,33 @@
+diff --git a/dist/src/tasks-runner/task-orchestrator.js b/dist/src/tasks-runner/task-orchestrator.js
+--- a/dist/src/tasks-runner/task-orchestrator.js
++++ b/dist/src/tasks-runner/task-orchestrator.js
+@@ -541,16 +541,29 @@ class TaskOrchestrator {
+             hash: task.hash,
+         })));
+         // Copy outputs in parallel for tasks that need it.
++        const unavailableHashes = new Set();
+         await Promise.all(cacheHits.map(async ({ task, cachedResult }) => {
+             if (shouldCopyMap.get(task.hash)) {
++                // A finishing task can evict this local entry while the output
++                // check above is awaited. Native copy silently accepts an absent
++                // directory, so schedule a rebuild instead of reporting a hit.
++                // nrwl/nx#37929: remove when stock Nx passes
++                // scripts/nx-cache-replay.test.mjs.
++                if (!cachedResult.remote && !(0, fs_1.existsSync)(cachedResult.outputsPath)) {
++                    this.cacheMissedHashes.add(task.hash);
++                    unavailableHashes.add(task.hash);
++                    return;
++                }
+                 const files = await this.cache.copyFilesFromCache(task.hash, cachedResult, task.outputs);
+                 if (files)
+                     this.copiedOutputFiles.set(task.id, files);
+             }
+         }));
+         // Derive status, print terminal output, build results.
+         const results = [];
+         for (const { task, cachedResult } of cacheHits) {
++            if (unavailableHashes.has(task.hash))
++                continue;
+             const shouldCopy = shouldCopyMap.get(task.hash) ?? false;
+             // A cached failure (only replayed when NX_CACHE_FAILURES is enabled) is
+             // reported as a plain failure so exit codes, run summaries, and the TUI

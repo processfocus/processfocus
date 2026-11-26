@@ -50,7 +50,13 @@
       "import": "./dist/lib/prepare-client.js",
       "default": "./dist/lib/prepare-client.js"
     },
-    "./styles.css": "./styles.css"
+    "./styles.css": "./styles.css",
+    "./field": {
+      "types": "./dist/lib/google-drive-field.d.ts",
+      "bun": "./src/lib/google-drive-field.ts",
+      "import": "./dist/lib/google-drive-field.js",
+      "default": "./dist/lib/google-drive-field.js"
+    }
   },
   "files": [
     "dist",
@@ -61,21 +67,20 @@
   ],
   "dependencies": {
     "@googleworkspace/drive-picker-element": "^0.7.3",
-    "@pf/form-client-representation": "workspace:*",
     "@pf/form-schema": "workspace:*",
     "@pf/frontend-plugin-host": "workspace:*",
     "@pf/process": "workspace:*",
     "@processfocus/runtime": "workspace:*",
     "constructs": "^10.8.1",
-    "effect": "^3.22.2",
-    "tailwindcss": "4.3.3"
+    "effect": "4.1.4",
+    "tailwindcss": "4.3.5"
   },
   "peerDependencies": {
     "react": "^19.2.8"
   },
   "devDependencies": {
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "publishConfig": {
     "access": "public",

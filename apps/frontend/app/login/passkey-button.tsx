@@ -1,6 +1,7 @@
 "use client"
 
 import { startRegistration } from "@simplewebauthn/browser"
+import Link from "next/link"
 import { useState } from "react"
 import { Button } from "@pf/shadcn-components"
 import { authenticateWithPasskey } from "@/lib/auth/verify-passkey"
@@ -58,7 +59,6 @@ export function PasskeyButton({
         throwPasskeyResponseError(data, "Failed to start passkey flow")
       }
 
-      // Step 2: Get registration options from the server
       const optionsResponse = await fetch("/api/auth/passkey/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -73,10 +73,8 @@ export function PasskeyButton({
 
       const { challengeId, options } = await optionsResponse.json()
 
-      // Step 4: Start the WebAuthn registration ceremony in the browser
       const attestation = await startRegistration({ optionsJSON: options })
 
-      // Step 5: Verify the registration with the server
       const verifyResponse = await fetch("/api/auth/passkey/register-verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -93,17 +91,14 @@ export function PasskeyButton({
         )
       }
 
-      // Step 6: On success, redirect to the callback URL
       if (verifyData.redirectUrl) {
         window.location.href = verifyData.redirectUrl
       } else if (verifyData.success) {
-        // Fallback: redirect to home
         window.location.href = "/"
       }
     } catch (err) {
       console.error("Passkey registration error:", err)
       if (err instanceof Error) {
-        // Handle user cancellation
         if (err.name === "NotAllowedError") {
           setError("Registration was cancelled")
         } else {
@@ -156,6 +151,16 @@ export function PasskeyButton({
               ? "Authenticate again with Passkey"
               : "Sign in with Passkey"}
         </Button>
+        {purpose === "signin" ? (
+          <p className="text-center text-sm">
+            <Link
+              href="/login/passkey-help"
+              className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              Need help with passkeys?
+            </Link>
+          </p>
+        ) : null}
         {openRegistration ? (
           <Button
             onClick={() => setMode("register")}

@@ -1,3 +1,5 @@
+import type { Scope } from "effect"
+import { Data, Effect } from "effect"
 /**
  * Provider interface for OpenAuth authentication providers.
  *
@@ -6,13 +8,7 @@
  *
  * @packageDocumentation
  */
-import type {
-  HttpBody,
-  HttpRouter,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
-import { Data, Effect } from "effect"
+import type { HttpBody, HttpServerError, HttpServerRequest, HttpServerResponse } from "effect/http"
 import isEmail from "validator/lib/isEmail"
 import type {
   InvariantViolationError,
@@ -180,7 +176,7 @@ export interface ProviderOptions<Properties> {
     | NoSigningKeysError
     | NoEncryptionKeysError
     | InvariantViolationError,
-    HttpServerRequest.HttpServerRequest | StorageService | KeyManagementService
+    HttpServerRequest.HttpServerRequest | Scope.Scope | StorageService | KeyManagementService
   >
   /**
    * Store encrypted state in a cookie.
@@ -229,6 +225,8 @@ export interface ProviderOptions<Properties> {
 export interface Provider<Properties = unknown> {
   /** Provider type identifier (e.g., "oauth2", "oidc", "passkey") */
   readonly type: string
+  /** Can supply verified email evidence for human account bootstrap. */
+  readonly supportsVerifiedHumanIdentity?: boolean
   /**
    * Initialize the provider and return an HttpRouter.
    * The router handles routes relative to /oauth/{provider-name}/
@@ -237,7 +235,9 @@ export interface Provider<Properties = unknown> {
    */
   readonly init: (
     options: ProviderOptions<Properties>,
-  ) => HttpRouter.HttpRouter<
+  ) => Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    | HttpServerError.HttpServerError
     | HttpBody.HttpBodyError
     | StorageError
     | MissingHostError
@@ -246,7 +246,7 @@ export interface Provider<Properties = unknown> {
     | NoEncryptionKeysError
     | InvariantViolationError
     | ProviderCallbackError,
-    HttpServerRequest.HttpServerRequest | StorageService | KeyManagementService
+    HttpServerRequest.HttpServerRequest | Scope.Scope | StorageService | KeyManagementService
   >
   /**
    * Optional: Handle client credentials flow for M2M authentication.

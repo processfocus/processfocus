@@ -41,9 +41,23 @@ const effectDateTime = customType<{ data: DateTime.Utc; driverData: number }>({
   // Warning: value can be undefined when using findFirst and no row exists
   fromDriver(value: number): DateTime.Utc {
     const millis = (value - 2440587.5) * 86400000
-    return DateTime.unsafeMake(millis)
+    return DateTime.makeUnsafe(millis)
   },
 })
+
+export const auditEvent = sqliteTable("pf_audit_event", {
+  id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `aud-${ulid()}`),
+  auditKind: text("audit_kind", { length: 16 }).notNull(),
+  occurredAt: effectDateTime("occurred_at").notNull(),
+  auditDetails: jsonColumn("audit_details").notNull(),
+  createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
+  createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
+  updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
+}, (table) => ({
+  updatedAtIdIdx: index("pf_audit_event_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
 
 export const orgUnit = sqliteTable("pf_org_unit", {
   id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `ou-${ulid()}`),
@@ -84,6 +98,20 @@ export const process = sqliteTable("pf_process", {
   pathidxIdx: uniqueIndex("pf_process_pathidx_idx").on(table.path).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_process_updated_at_id_idx").on(table.updatedAt, table.id),
   nameLengthCheck: check("name_length_check", sql.raw(`length("pf_process"."name") <= 1024`)),
+}))
+
+export const processVisibility = sqliteTable("pf_process_visibility", {
+  id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `pvis-${ulid()}`),
+  processId: text("process_id", { length: 41 }).notNull().references(() => process.id),
+  replicationScope: text("replication_scope", { length: 64 }).notNull(),
+  createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
+  createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
+  updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
+}, (table) => ({
+  scopeprocessidxIdx: uniqueIndex("pf_process_visibility_scopeprocessidx_idx").on(table.replicationScope, table.processId).where(sql`_deleted = 0`),
+  updatedAtIdIdx: index("pf_process_visibility_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
 export const role = sqliteTable("pf_role", {
@@ -157,6 +185,7 @@ export const step = sqliteTable("pf_step", {
   updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
   _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
 }, (table) => ({
+  processidxIdx: index("pf_step_processidx_idx").on(table.processId).where(sql`_deleted = 0`),
   pathidxIdx: uniqueIndex("pf_step_pathidx_idx").on(table.path).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_step_updated_at_id_idx").on(table.updatedAt, table.id),
   nameLengthCheck: check("name_length_check", sql.raw(`length("pf_step"."name") <= 1024`)),
@@ -186,6 +215,8 @@ export const flow = sqliteTable("pf_flow", {
   fallbackBranch: integer("fallback_branch", { mode: "boolean" }).notNull().default(false),
   errorBranch: integer("error_branch", { mode: "boolean" }).notNull().default(false),
   errorTags: jsonColumn("error_tags"),
+  deadlineName: text("deadline_name", { length: 100 }),
+  interrupting: integer("interrupting", { mode: "boolean" }).notNull().default(false),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -193,6 +224,7 @@ export const flow = sqliteTable("pf_flow", {
   _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
 }, (table) => ({
   sourcetargetidxIdx: index("pf_flow_sourcetargetidx_idx").on(table.sourceStepId, table.targetStepId).where(sql`_deleted = 0`),
+  targetidxIdx: index("pf_flow_targetidx_idx").on(table.targetStepId).where(sql`_deleted = 0`),
   flowkeyidxIdx: uniqueIndex("pf_flow_flowkeyidx_idx").on(table.flowKey).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_flow_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
@@ -224,6 +256,7 @@ export const processState = sqliteTable("pf_process_state", {
   updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
   _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
 }, (table) => ({
+  processidxIdx: index("pf_process_state_processidx_idx").on(table.processId).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_process_state_updated_at_id_idx").on(table.updatedAt, table.id),
   singleStarterCheck: check("single_starter_check", sql`${table.startedByUserId} is null or ${table.startedByExternalParticipantId} is null`),
 }))
@@ -237,12 +270,14 @@ export const processExecution = sqliteTable("pf_process_execution", {
   abandonedAt: effectDateTime("abandoned_at"),
   abandonedReason: citextColumn("abandoned_reason"),
   notStartedReason: citextColumn("not_started_reason"),
+  restartAttemptId: text("restart_attempt_id", { length: 36 }),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
   updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
   _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
 }, (table) => ({
+  processstateidxIdx: index("pf_process_execution_processstateidx_idx").on(table.processStateId).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_process_execution_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
@@ -264,12 +299,17 @@ export const toDo = sqliteTable("pf_to_do", {
   barrierScheduledFlowId: text("barrier_scheduled_flow_id", { length: 41 }),
   completedByRoleId: text("completed_by_role", { length: 41 }).references(() => role.id),
   notStartedReason: citextColumn("not_started_reason"),
+  externalWriteAttemptId: text("external_write_attempt_id", { length: 36 }),
+  restartAttemptId: text("restart_attempt_id", { length: 36 }),
+  interruptedAt: effectDateTime("interrupted_at"),
+  completionFingerprint: text("completion_fingerprint", { length: 64 }),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
   updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
   _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
 }, (table) => ({
+  executionidxIdx: index("pf_to_do_executionidx_idx").on(table.processExecutionId).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_to_do_updated_at_id_idx").on(table.updatedAt, table.id),
   singleCompleterCheck: check("single_completer_check", sql`${table.completedByUserId} is null or ${table.completedByExternalParticipantId} is null`),
 }))
@@ -311,11 +351,29 @@ export const scheduledFlow = sqliteTable("pf_scheduled_flow", {
   updatedAtIdIdx: index("pf_scheduled_flow_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
+export const taskDeadline = sqliteTable("pf_task_deadline", {
+  id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `tdl-${ulid()}`),
+  ownerToDoId: text("owner_to_do", { length: 41 }).notNull().references(() => toDo.id),
+  flowId: text("flow_id", { length: 41 }).notNull().references(() => flow.id),
+  deadlineName: text("deadline_name", { length: 100 }).notNull(),
+  scheduledAt: effectDateTime("scheduled_at").notNull(),
+  triggeredAt: effectDateTime("triggered_at"),
+  disarmedAt: effectDateTime("disarmed_at"),
+  interrupting: integer("interrupting", { mode: "boolean" }).notNull().default(false),
+  createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
+  createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
+  updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
+}, (table) => ({
+  activationnameIdx: uniqueIndex("pf_task_deadline_activationname_idx").on(table.ownerToDoId, table.deadlineName).where(sql`_deleted = 0`),
+  updatedAtIdIdx: index("pf_task_deadline_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
 export const user = sqliteTable("pf_user", {
   id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `usr-${ulid()}`),
   provider: text("provider", { length: 128 }).notNull(),
   sub: text("sub", { length: 256 }).notNull(),
-  lastLoggedIn: effectDateTime("last_logged_in").notNull(),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -481,20 +539,6 @@ export const permittedClientRole = sqliteTable("pf_permitted_client_role", {
   updatedAtIdIdx: index("pf_permitted_client_role_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
-export const permittedClientEmail = sqliteTable("pf_permitted_client_email", {
-  id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `pce-${ulid()}`),
-  oauthClientId: text("oauth_client_id", { length: 41 }).notNull().references(() => oauthClient.id),
-  email: text("email", { length: 320 }).notNull(),
-  createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
-  updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
-  createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
-  updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
-  _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
-}, (table) => ({
-  oauthclientemailidxIdx: uniqueIndex("pf_permitted_client_email_oauthclientemailidx_idx").on(table.oauthClientId, table.email).where(sql`_deleted = 0`),
-  updatedAtIdIdx: index("pf_permitted_client_email_updated_at_id_idx").on(table.updatedAt, table.id),
-}))
-
 export const invitation = sqliteTable("pf_invitation", {
   id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `inv-${ulid()}`),
   invitationId: text("invitation_id", { length: 128 }).notNull(),
@@ -601,6 +645,8 @@ export const oauthClient = sqliteTable("pf_oauth_client", {
   clientId: text("client_id", { length: 128 }).notNull(),
   clientSecretHash: text("client_secret_hash", { length: 256 }).notNull(),
   audience: text("audience", { length: 128 }).notNull(),
+  workloadTrust: jsonColumn("workload_trust"),
+  awsRoleBindings: jsonColumn("aws_role_bindings"),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -620,6 +666,10 @@ export const jobQueue = sqliteTable("pf_job_queue", {
   availableAt: effectDateTime("available_at").notNull().default(sql`(julianday('now'))`),
   lockedUntil: effectDateTime("locked_until"),
   claimReceipt: text("claim_receipt", { length: 64 }),
+  terminalAt: effectDateTime("terminal_at"),
+  terminalReason: citextColumn("terminal_reason"),
+  terminalOutcome: text("terminal_outcome", { length: 32 }),
+  redrivenFrom: text("redriven_from", { length: 64 }),
   createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
   updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
   createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
@@ -657,6 +707,23 @@ export const notStartedJob = sqliteTable("pf_not_started_job", {
 }, (table) => ({
   jobIdIxIdx: uniqueIndex("pf_not_started_job_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = 0`),
   updatedAtIdIdx: index("pf_not_started_job_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
+export const queueJobLifecycle = sqliteTable("pf_queue_job_lifecycle", {
+  id: text("id", { length: 41 }).primaryKey().$defaultFn(() => `qjl-${ulid()}`),
+  queue: text("queue", { length: 512 }).notNull(),
+  jobId: text("job_id", { length: 1024 }).notNull(),
+  jobLifecycle: jsonColumn("job_lifecycle").notNull(),
+  terminalAt: effectDateTime("terminal_at"),
+  createdAt: effectDateTime("created_at").notNull().default(sql`(julianday('now'))`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`(julianday('now'))`),
+  createdBy: text("created_by", { length: 256 }).notNull().default("SYSTEM"),
+  updatedBy: text("updated_by", { length: 256 }).notNull().default("SYSTEM"),
+  _deleted: integer("_deleted", { mode: "boolean" }).notNull().default(false),
+}, (table) => ({
+  terminalIdxIdx: index("pf_queue_job_lifecycle_terminal_idx_idx").on(table.terminalAt).where(sql`_deleted = 0`),
+  jobIdIxIdx: uniqueIndex("pf_queue_job_lifecycle_job_id_ix_idx").on(table.queue, table.jobId).where(sql`_deleted = 0`),
+  updatedAtIdIdx: index("pf_queue_job_lifecycle_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
 export const weeklySchedule = sqliteTable("pf_weekly_schedule", {
@@ -839,10 +906,14 @@ export const processStateItsIsDraft = sqliteView("pf_process_state_its_is_draft"
 `)
 
 // Type exports
+export type AuditEvent = typeof auditEvent.$inferSelect
+export type NewAuditEvent = typeof auditEvent.$inferInsert
 export type OrgUnit = typeof orgUnit.$inferSelect
 export type NewOrgUnit = typeof orgUnit.$inferInsert
 export type Process = typeof process.$inferSelect
 export type NewProcess = typeof process.$inferInsert
+export type ProcessVisibility = typeof processVisibility.$inferSelect
+export type NewProcessVisibility = typeof processVisibility.$inferInsert
 export type Role = typeof role.$inferSelect
 export type NewRole = typeof role.$inferInsert
 export type Phase = typeof phase.$inferSelect
@@ -867,6 +938,8 @@ export type PublicCompletionInvitationAttempt = typeof publicCompletionInvitatio
 export type NewPublicCompletionInvitationAttempt = typeof publicCompletionInvitationAttempt.$inferInsert
 export type ScheduledFlow = typeof scheduledFlow.$inferSelect
 export type NewScheduledFlow = typeof scheduledFlow.$inferInsert
+export type TaskDeadline = typeof taskDeadline.$inferSelect
+export type NewTaskDeadline = typeof taskDeadline.$inferInsert
 export type User = typeof user.$inferSelect
 export type NewUser = typeof user.$inferInsert
 export type PasskeyCredential = typeof passkeyCredential.$inferSelect
@@ -887,8 +960,6 @@ export type PermittedRole = typeof permittedRole.$inferSelect
 export type NewPermittedRole = typeof permittedRole.$inferInsert
 export type PermittedClientRole = typeof permittedClientRole.$inferSelect
 export type NewPermittedClientRole = typeof permittedClientRole.$inferInsert
-export type PermittedClientEmail = typeof permittedClientEmail.$inferSelect
-export type NewPermittedClientEmail = typeof permittedClientEmail.$inferInsert
 export type Invitation = typeof invitation.$inferSelect
 export type NewInvitation = typeof invitation.$inferInsert
 export type RegistrationSession = typeof registrationSession.$inferSelect
@@ -907,6 +978,8 @@ export type CompletedJob = typeof completedJob.$inferSelect
 export type NewCompletedJob = typeof completedJob.$inferInsert
 export type NotStartedJob = typeof notStartedJob.$inferSelect
 export type NewNotStartedJob = typeof notStartedJob.$inferInsert
+export type QueueJobLifecycle = typeof queueJobLifecycle.$inferSelect
+export type NewQueueJobLifecycle = typeof queueJobLifecycle.$inferInsert
 export type WeeklySchedule = typeof weeklySchedule.$inferSelect
 export type NewWeeklySchedule = typeof weeklySchedule.$inferInsert
 export type CalendarPeriod = typeof calendarPeriod.$inferSelect
@@ -945,10 +1018,18 @@ export const processRelations = relations(process, ({ one, many }) => ({
     fields: [process.orgUnitId],
     references: [orgUnit.id],
   }),
+  processVisibilities: many(processVisibility),
   phases: many(phase),
   roleResponsibilities: many(roleResponsibility),
   steps: many(step),
   processStates: many(processState),
+}))
+
+export const processVisibilityRelations = relations(processVisibility, ({ one }) => ({
+  process: one(process, {
+    fields: [processVisibility.processId],
+    references: [process.id],
+  }),
 }))
 
 export const roleRelations = relations(role, ({ one, many }) => ({
@@ -1030,6 +1111,7 @@ export const flowRelations = relations(flow, ({ one, many }) => ({
     references: [step.id],
   }),
   toDos: many(toDo),
+  taskDeadlines: many(taskDeadline),
 }))
 
 export const externalParticipantRelations = relations(externalParticipant, ({ many }) => ({
@@ -1096,6 +1178,7 @@ export const toDoRelations = relations(toDo, ({ one, many }) => ({
     references: [role.id],
   }),
   publicCompletionInvitationAttempts: many(publicCompletionInvitationAttempt),
+  taskDeadlines: many(taskDeadline),
 }))
 
 export const publicCompletionInvitationAttemptRelations = relations(publicCompletionInvitationAttempt, ({ one }) => ({
@@ -1123,6 +1206,17 @@ export const scheduledFlowRelations = relations(scheduledFlow, ({ one }) => ({
   completedByRole: one(role, {
     fields: [scheduledFlow.completedByRoleId],
     references: [role.id],
+  }),
+}))
+
+export const taskDeadlineRelations = relations(taskDeadline, ({ one }) => ({
+  ownerToDo: one(toDo, {
+    fields: [taskDeadline.ownerToDoId],
+    references: [toDo.id],
+  }),
+  flow: one(flow, {
+    fields: [taskDeadline.flowId],
+    references: [flow.id],
   }),
 }))
 
@@ -1253,13 +1347,6 @@ export const permittedClientRoleRelations = relations(permittedClientRole, ({ on
   }),
 }))
 
-export const permittedClientEmailRelations = relations(permittedClientEmail, ({ one }) => ({
-  oauthClient: one(oauthClient, {
-    fields: [permittedClientEmail.oauthClientId],
-    references: [oauthClient.id],
-  }),
-}))
-
 export const invitationRelations = relations(invitation, ({ one, many }) => ({
   acceptedByProviderUser: one(providerUser, {
     fields: [invitation.acceptedByProviderUserId],
@@ -1289,7 +1376,6 @@ export const invitationRoleRelations = relations(invitationRole, ({ one }) => ({
 
 export const oauthClientRelations = relations(oauthClient, ({ many }) => ({
   permittedClientRoles: many(permittedClientRole),
-  permittedClientEmails: many(permittedClientEmail),
 }))
 
 export const weeklyScheduleRelations = relations(weeklySchedule, ({ one }) => ({

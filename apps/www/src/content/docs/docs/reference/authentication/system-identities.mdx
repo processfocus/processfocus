@@ -1,0 +1,235 @@
+---
+title: System identities
+description: Authentication and authority for systems accessing Process Focus.
+---
+
+System identities, also known as workload identities, identify
+software accessing Process Focus. Authentication verifies the system's
+identity; [Cedar
+policies](/docs/reference/authorisation/cedar-policies/) determine
+what it can do.
+
+## Authentication methods
+
+- **Secrets:** A service can use a secret token for service-to-service access.
+- **GitHub Actions OIDC federation:** An approved GitHub Actions workload
+  exchanges a trusted assertion for short-lived access under a federated
+  identity. Trust in the workload and Cedar permissions are configured
+  separately. Access lasts at most 90 minutes and has no refresh token.
+- **AWS role authentication:** An AWS assumed-role workload can authenticate
+  GraphQL requests using a signed STS `GetCallerIdentity` request. An explicit
+  binding maps the AWS account and role name or immutable role ID to a service account.
+  Cedar service-account permissions govern access.
+
+In the next sections we will configure the `web-order` system identity
+for these three cases. Authentication establishes the service-account
+identity; it does not grant access. See [Authorising external
+systems](/docs/reference/authorisation/authorising-external-systems/)
+for a Cedar policy that allows `web-order` to start a process.
+
+### Secrets
+
+Configure a secret client in the organisation's `AuthenticationConfig`. For
+example, a website backend can authenticate as `web-order`:
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const configureOrg: Effect.Effect<Organisation, Config.ConfigError> =
+  Effect.gen(function* () {
+    const webOrderSecret = yield* Config.string("WEB_ORDER_SECRET")
+
+    new AuthenticationConfig(org, "auth", {
+      secretClients: {
+        "web-order": {
+          secret: webOrderSecret,
+          audience: "graphql-api",
+        },
+      },
+    })
+
+    return org
+  })
+```
+
+Provide `WEB_ORDER_SECRET` through secure configuration rather than embedding
+it in source code. The website uses `web-order` as its client ID and the secret
+to authenticate with the OAuth client credentials grant. Keep
+the secret on the backend and rotate it if exposed.
+
+## OIDC federated identity
+
+A GitHub Actions workflow can authenticate as `web-order` without a shared
+secret. Configure a workload client and a binding that identifies the trusted
+workflow:
+
+```typescript
+new AuthenticationConfig(org, "auth", {
+  workloadClients: {
+    "web-order": {
+      audience: "graphql-api",
+      bindings: [{
+        id: "web-order-github",
+        targetIssuer: "https://pf.example.com",
+        issuer: "https://token.actions.githubusercontent.com",
+        assertionAudience: "pf:web-order",
+        repositoryId: "123456789",
+        repositoryOwnerId: "1234567",
+        workflowRef: "example/shop/.github/workflows/orders.yml@refs/heads/main",
+        refs: ["refs/heads/main"],
+        events: ["workflow_dispatch"],
+        environment: "production",
+        lifetimeSeconds: 300,
+      }],
+    },
+  },
+})
+```
+
+Replace the example repository and owner IDs, workflow, branch, event and
+environment with those of your GitHub Actions workload. Set `targetIssuer` to
+the target Process Focus environment's authentication URL. The workload must
+request a GitHub OIDC assertion with the configured `assertionAudience` and
+exchange it for Process Focus access. The resulting access lasts up to the
+configured lifetime; Cedar policies determine what `web-order` can do.
+
+## AWS IAM roles
+
+An AWS workload can authenticate as `web-order` using an assumed IAM role,
+without a Process Focus client secret. Add a binding for the role to the
+organisation's `AuthenticationConfig`:
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const configureOrg: Effect.Effect<Organisation, Config.ConfigError> =
+  Effect.gen(function* () {
+    const targetIssuer = yield* Config.string("PROCESS_FOCUS_ISSUER")
+
+    new AuthenticationConfig(org, "auth", {
+      awsRoleBindings: [{
+        id: "website-order-role",
+        targetIssuer,
+        accountId: "123456789012",
+        roleName: "website-order-role",
+        serviceAccountId: "web-order",
+      }],
+    })
+
+    return org
+  })
+```
+
+Set `PROCESS_FOCUS_ISSUER` to the URL identifying the Process Focus
+environment the website will access, for example
+`https://pf.example.com`.  The `targetIssuer` value must match that
+environment's configured authentication issuer URL. This binds the
+role to that environment.  Replace the example account ID and role
+name with those of your AWS role. The workload signs an STS
+`GetCallerIdentity` request for each GraphQL request; Process Focus
+verifies it with AWS STS and applies the `web-order` Cedar
+permissions.
+
+For example, a TypeScript website backend can sign a request and start an
+order. Install `@aws-sdk/credential-provider-node`, `@smithy/signature-v4`,
+`@smithy/protocol-http`, and `@aws-crypto/sha256-js`. Run with temporary
+credentials for the bound role, and adapt the mutation and input to your process:
+
+```typescript
+import { defaultProvider } from "@aws-sdk/credential-provider-node"
+import { Sha256 } from "@aws-crypto/sha256-js"
+import { HttpRequest } from "@smithy/protocol-http"
+import { SignatureV4 } from "@smithy/signature-v4"
+import { createHash, randomUUID } from "node:crypto"
+
+const region = "us-east-1"
+const target = "https://pf.example.com" // Must match targetIssuer.
+const graphql = "https://pf.example.com/graphql"
+const body = JSON.stringify({ query: "mutation { startNewOrder { __typename } }" })
+const hash = (value: string) => createHash("sha256").update(value).digest("hex")
+const credentials = await defaultProvider()()
+if (!credentials.sessionToken) throw new Error("Temporary assumed-role credentials required")
+
+const host = `sts.${region}.amazonaws.com`
+const request = new HttpRequest({
+  protocol: "https:",
+  hostname: host,
+  method: "POST",
+  path: "/",
+  headers: {
+    host,
+    "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+    "x-pf-target": target,
+    "x-pf-request-id": randomUUID(),
+    "x-pf-request-digest": hash(`POST\n/graphql\n${hash(body)}`),
+  },
+  body: "Action=GetCallerIdentity&Version=2011-06-15",
+})
+const signer = new SignatureV4({
+  credentials,
+  region,
+  service: "sts",
+  sha256: Sha256,
+  applyChecksum: false,
+})
+const signed = await signer.sign(request)
+const proof = Buffer.from(JSON.stringify([1, region, Object.entries(signed.headers)]))
+  .toString("base64url")
+const response = await fetch(graphql, {
+  method: "POST",
+  redirect: "error",
+  headers: { "content-type": "application/json", "x-pf-aws-proof": proof },
+  body,
+})
+// Check for GraphQL errors as well as HTTP errors.
+```
+
+Send the same body bytes that were hashed. Each retry needs a fresh
+request ID and signature. Do not log the proof or credentials, or send
+cookies or an `Authorization` header with the proof.
+
+A start mutation also accepts an optional `executionId`: an identifier
+you choose for the process execution. If you provide one, reuse it
+when retrying the same start, such as after a timeout, to avoid
+starting a duplicate execution. It is separate from the request ID
+used to sign each attempt.
+
+Alternatively, use `roleId` instead of `roleName` in the Process Focus
+configured identity to bind to the immutable role id. This will
+prevent reuse of the role name. If a role is deleted and then
+recreated with the same name, the `roleId` will change. Find its
+immutable ID with:
+
+```bash
+aws iam get-role --role-name website-order-role --query 'Role.RoleId' --output text
+```
+
+Use the returned ID in the binding:
+
+```typescript
+new AuthenticationConfig(org, "auth", {
+  awsRoleBindings: [{
+    id: "website-order-role",
+    targetIssuer: "https://pf.example.com",
+    accountId: "123456789012",
+    roleId: "AROAYFHBCD6RVCU2QDPQS",
+    serviceAccountId: "web-order",
+  }],
+})
+```
+
+Specify exactly one of `roleName` and `roleId`.
+
+## Delegated access
+
+Unlike an independent system identity, a [delegated
+identity](/docs/reference/authentication/delegated-identities/) acts on behalf
+of an existing user while retaining its own identity.

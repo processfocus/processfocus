@@ -18,5 +18,7 @@ export interface DeployProgressEventSourceConfig {
   readonly realtimeUrl: string
   readonly appSyncEventsHttpHost: string
   readonly accessToken: string
+  readonly acquireAccessToken?: () => Promise<string>
   readonly channel: string
+  readonly bindToTokenExpiry?: boolean
 }

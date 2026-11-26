@@ -1,12 +1,11 @@
 import { and, eq } from "drizzle-orm"
-import { DateTime, Effect, FiberRef, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import * as postgresSchema from "@pf/drizzle-postgres"
 import * as sqliteSchema from "@pf/drizzle-sqlite"
 import {
   FlowExecutionOperations,
   ProcessExecutionOperations,
   UserDetails,
-  type UserDetailsValue,
 } from "@pf/graphql-db-operations"
 import { storeOrganisation } from "@pf/org-to-db"
 import {
@@ -34,20 +33,14 @@ import {
   SqliteScheduledFlowOperationsLive,
 } from "@pf/sqlite-operations"
 
-const fixedRequestTime = DateTime.unsafeMake("2026-04-06T10:00:00.000Z")
+const fixedRequestTime = DateTime.makeUnsafe("2026-04-06T10:00:00.000Z")
 
-const UserDetailsTest = Layer.succeed(
-  UserDetails,
-  FiberRef.unsafeMake<UserDetailsValue>({
-    by: "employee@example.com",
-    id: "employee@example.com",
-  }),
-)
+const UserDetailsTest = Layer.succeed(UserDetails, {
+  by: "employee@example.com",
+  id: "employee@example.com",
+})
 
-const RequestTimeTest = Layer.succeed(
-  RequestTime,
-  FiberRef.unsafeMake(fixedRequestTime),
-)
+const RequestTimeTest = Layer.succeed(RequestTime, fixedRequestTime)
 
 const SqliteBaseDbLayer = Layer.provideMerge(
   SqliteDbOperationsLive,
@@ -65,10 +58,10 @@ const SqliteOperationLayer = Layer.provideMerge(
 )
 
 type SqliteRequirements =
-  | Layer.Layer.Success<typeof SqliteBaseDbLayer>
-  | Layer.Layer.Success<typeof SqliteOperationLayer>
-  | Layer.Layer.Success<typeof RequestTimeTest>
-  | Layer.Layer.Success<typeof UserDetailsTest>
+  | Layer.Success<typeof SqliteBaseDbLayer>
+  | Layer.Success<typeof SqliteOperationLayer>
+  | Layer.Success<typeof RequestTimeTest>
+  | Layer.Success<typeof UserDetailsTest>
 
 const SqliteLayer: Layer.Layer<SqliteRequirements, unknown, never> =
   Layer.mergeAll(
@@ -79,8 +72,8 @@ const SqliteLayer: Layer.Layer<SqliteRequirements, unknown, never> =
   )
 
 type PostgresBaseRequirements =
-  | Layer.Layer.Success<typeof PostgresDbOperationsLive>
-  | Layer.Layer.Success<typeof PostgresTest>
+  | Layer.Success<typeof PostgresDbOperationsLive>
+  | Layer.Success<typeof PostgresTest>
 
 const PostgresBaseDbLayer: Layer.Layer<
   PostgresBaseRequirements,
@@ -90,10 +83,10 @@ const PostgresBaseDbLayer: Layer.Layer<
 
 type PostgresOperationRequirements =
   | PostgresBaseRequirements
-  | Layer.Layer.Success<typeof PostgresGraphqlDbOperationsLive>
-  | Layer.Layer.Success<typeof PostgresScheduledFlowOperationsLive>
-  | Layer.Layer.Success<typeof PostgresFlowExecutionOperationsLive>
-  | Layer.Layer.Success<typeof PostgresCompletedJobOperationsLive>
+  | Layer.Success<typeof PostgresGraphqlDbOperationsLive>
+  | Layer.Success<typeof PostgresScheduledFlowOperationsLive>
+  | Layer.Success<typeof PostgresFlowExecutionOperationsLive>
+  | Layer.Success<typeof PostgresCompletedJobOperationsLive>
 
 const PostgresOperationLayer: Layer.Layer<
   PostgresOperationRequirements,
@@ -112,8 +105,8 @@ const PostgresOperationLayer: Layer.Layer<
 type PostgresRequirements =
   | PostgresBaseRequirements
   | PostgresOperationRequirements
-  | Layer.Layer.Success<typeof RequestTimeTest>
-  | Layer.Layer.Success<typeof UserDetailsTest>
+  | Layer.Success<typeof RequestTimeTest>
+  | Layer.Success<typeof UserDetailsTest>
 
 const PostgresLayer: Layer.Layer<PostgresRequirements, unknown, never> =
   Layer.mergeAll(
@@ -151,8 +144,8 @@ const toStoredProcessState = (
 ): Effect.Effect<StoredProcessState> =>
   Effect.gen(function* () {
     if (!isJsonObject(row.state)) {
-      return yield* Effect.dieMessage(
-        "Expected process state to be a JSON object",
+      return yield* Effect.die(
+        new Error("Expected process state to be a JSON object"),
       )
     }
 
@@ -317,7 +310,7 @@ const ensureSqliteProviderUser = ({
       .limit(1)
     const orgUnitId = orgUnit[0]?.id
     if (!orgUnitId) {
-      return yield* Effect.dieMessage(`Missing org unit ${orgUnitPath}`)
+      return yield* Effect.die(new Error(`Missing org unit ${orgUnitPath}`))
     }
 
     const existingUser = yield* db
@@ -330,7 +323,7 @@ const ensureSqliteProviderUser = ({
         id: email,
         provider: "test",
         sub: email,
-        lastLoggedIn: fixedRequestTime,
+        createdAt: fixedRequestTime,
       })
     }
 
@@ -361,7 +354,7 @@ const ensureSqliteProviderUser = ({
         .limit(1)
       const roleId = role[0]?.id
       if (!roleId) {
-        return yield* Effect.dieMessage(`Missing role ${rolePath}`)
+        return yield* Effect.die(new Error(`Missing role ${rolePath}`))
       }
       const existingRoleLink = yield* db
         .select({ id: sqliteSchema.providerUserRole.id })
@@ -399,7 +392,7 @@ const ensurePostgresProviderUser = ({
       .limit(1)
     const orgUnitId = orgUnit[0]?.id
     if (!orgUnitId) {
-      return yield* Effect.dieMessage(`Missing org unit ${orgUnitPath}`)
+      return yield* Effect.die(new Error(`Missing org unit ${orgUnitPath}`))
     }
 
     const existingUser = yield* db
@@ -412,7 +405,7 @@ const ensurePostgresProviderUser = ({
         id: email,
         provider: "test",
         sub: email,
-        lastLoggedIn: fixedRequestTime,
+        createdAt: fixedRequestTime,
       })
     }
 
@@ -443,7 +436,7 @@ const ensurePostgresProviderUser = ({
         .limit(1)
       const roleId = role[0]?.id
       if (!roleId) {
-        return yield* Effect.dieMessage(`Missing role ${rolePath}`)
+        return yield* Effect.die(new Error(`Missing role ${rolePath}`))
       }
       const existingRoleLink = yield* db
         .select({ id: postgresSchema.providerUserRole.id })
@@ -480,7 +473,7 @@ export const sqliteDbCase: GraphqlDbCase<SqliteRequirements> = {
         .where(eq(sqliteSchema.process.path, path))
         .limit(1)
       return (
-        rows[0]?.id ?? (yield* Effect.dieMessage(`Missing process ${path}`))
+        rows[0]?.id ?? (yield* Effect.die(new Error(`Missing process ${path}`)))
       )
     }),
   getStepIdByPath: (path) =>
@@ -491,7 +484,9 @@ export const sqliteDbCase: GraphqlDbCase<SqliteRequirements> = {
         .from(sqliteSchema.step)
         .where(eq(sqliteSchema.step.path, path))
         .limit(1)
-      return rows[0]?.id ?? (yield* Effect.dieMessage(`Missing step ${path}`))
+      return (
+        rows[0]?.id ?? (yield* Effect.die(new Error(`Missing step ${path}`)))
+      )
     }),
   getFlowIdByStepPaths: (sourceStepPath, targetStepPath) =>
     Effect.gen(function* () {
@@ -508,7 +503,7 @@ export const sqliteDbCase: GraphqlDbCase<SqliteRequirements> = {
           ),
         )
         .limit(1)
-      return rows[0]?.id ?? (yield* Effect.dieMessage("Missing flow"))
+      return rows[0]?.id ?? (yield* Effect.die(new Error("Missing flow")))
     }),
   getProcessStatesByProcessId: (processId) =>
     Effect.gen(function* () {
@@ -679,7 +674,7 @@ export const postgresDbCase: GraphqlDbCase<PostgresRequirements> = {
         .where(eq(postgresSchema.process.path, path))
         .limit(1)
       return (
-        rows[0]?.id ?? (yield* Effect.dieMessage(`Missing process ${path}`))
+        rows[0]?.id ?? (yield* Effect.die(new Error(`Missing process ${path}`)))
       )
     }),
   getStepIdByPath: (path) =>
@@ -690,7 +685,9 @@ export const postgresDbCase: GraphqlDbCase<PostgresRequirements> = {
         .from(postgresSchema.step)
         .where(eq(postgresSchema.step.path, path))
         .limit(1)
-      return rows[0]?.id ?? (yield* Effect.dieMessage(`Missing step ${path}`))
+      return (
+        rows[0]?.id ?? (yield* Effect.die(new Error(`Missing step ${path}`)))
+      )
     }),
   getFlowIdByStepPaths: (sourceStepPath, targetStepPath) =>
     Effect.gen(function* () {
@@ -707,7 +704,7 @@ export const postgresDbCase: GraphqlDbCase<PostgresRequirements> = {
           ),
         )
         .limit(1)
-      return rows[0]?.id ?? (yield* Effect.dieMessage("Missing flow"))
+      return rows[0]?.id ?? (yield* Effect.die(new Error("Missing flow")))
     }),
   getProcessStatesByProcessId: (processId) =>
     Effect.gen(function* () {

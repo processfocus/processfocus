@@ -1,5 +1,4 @@
-import { Schema as ES } from "effect"
-import { BooleanField } from "@pf/form-schema"
+import { Effect } from "effect"
 import {
   Form,
   type OrgUnit,
@@ -8,6 +7,12 @@ import {
   Schedule,
   Sla,
 } from "@pf/process"
+import { demoConfiguration } from "./configuration"
+import {
+  approveTimeOffForm,
+  notifyEmployeeForm,
+  submitTimeOffRequestForm,
+} from "./time-off-request-forms"
 
 export class TimeOffRequest extends Process {
   constructor(
@@ -22,12 +27,13 @@ export class TimeOffRequest extends Process {
       sla: Sla.minutes(5),
     })
 
-    // Steps
     const submit_request = new Form(this, "Submit time off request", {
       name: "Submit time off request",
-      form: () => ({
-        dates: ES.String,
-      }),
+      form: submitTimeOffRequestForm,
+      browser: {
+        entrypoint: "src/time-off-request-forms.ts",
+        exportName: "submitTimeOffRequestForm",
+      },
       role: employeeRole,
     })
 
@@ -38,9 +44,11 @@ export class TimeOffRequest extends Process {
     // Using form: for fields that accumulate into state
     const approve_request = new Form(flow, "Approve time off", {
       name: "Approve time off request",
-      form: () => ({
-        approved: BooleanField({ label: "I approve", required: true }),
-      }),
+      form: approveTimeOffForm,
+      browser: {
+        entrypoint: "src/time-off-request-forms.ts",
+        exportName: "approveTimeOffForm",
+      },
       summary: (state, ctx) => ({
         When: state.dates,
         Requester: ctx.step.submitTimeOffRequest.providerUser.name,
@@ -49,20 +57,23 @@ export class TimeOffRequest extends Process {
       sla: Sla.minutes(1),
     })
 
-    // Chain to next step
     // Use Schedule.businessMinutes() for business-calendar-aware scheduling
     // Falls back to clock time when no calendar is configured
     const flow2 = flow.next(approve_request, {
       schedule: {
         fn: (_state, ctx) => {
           const completedAt = ctx.step.submitTimeOffRequest.completedAt
-          // Skip delay only if E2E_SKIP_DELAYS is explicitly "true"
-          if (process.env["E2E_SKIP_DELAYS"] === "true") {
+          // Read the same delay switch validated by deployment preflight.
+          if (
+            Effect.runSync(
+              Effect.gen(function* () {
+                return yield* demoConfiguration.fields.skipDelays.config
+              }),
+            )
+          ) {
             return completedAt
           }
           // Use business minutes scheduling - respects business calendar
-          // Example: if submitted at 4:30pm with 2 business minutes delay,
-          // and business closes at 5pm, it appears at 9:02am next day
           return Schedule.businessMinutes(completedAt, 2)
         },
         text: "2 business minutes from submission",
@@ -72,7 +83,11 @@ export class TimeOffRequest extends Process {
     // Third step - should have access to both previous steps
     const notify_employee = new Form(flow2, "Notify employee", {
       name: "Notify employee of decision",
-      form: () => ({}),
+      form: notifyEmployeeForm,
+      browser: {
+        entrypoint: "src/time-off-request-forms.ts",
+        exportName: "notifyEmployeeForm",
+      },
       summary: (state, ctx) => ({
         Dates: state.dates,
         Decision: state.approved ? "Approved" : "Denied",
@@ -83,7 +98,6 @@ export class TimeOffRequest extends Process {
       role: managerRole,
     })
 
-    // Flow
     flow2.end(notify_employee)
   }
 }

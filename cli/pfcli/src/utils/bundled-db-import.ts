@@ -1,5 +1,5 @@
 import { Runtime } from "@processfocus/runtime"
-import { ConfigProvider, DateTime, Effect, FiberRef, Layer } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer } from "effect"
 import {
   DATABASE_PATH_NOT_CONFIGURED,
   LOCAL_SQLITE_BUSY_TIMEOUT_MS,
@@ -16,10 +16,7 @@ import { SqliteDbOperationsLive } from "@pf/sqlite-operations"
 import { OrgLoadError } from "../errors"
 import { validateFlows } from "./validate-flows"
 
-const RequestTimeLive = Layer.effect(
-  RequestTime,
-  Effect.map(DateTime.now, (now) => FiberRef.unsafeMake(now)),
-)
+const RequestTimeLive = Layer.effect(RequestTime, DateTime.now)
 
 const loadTursoLayer = Effect.tryPromise({
   try: async () => {
@@ -48,7 +45,7 @@ interface BundledOrgModule {
 const resolveConfiguredOrganisation = (module: BundledOrgModule) => {
   if (module.configureOrg && Effect.isEffect(module.configureOrg)) {
     return module.configureOrg.pipe(
-      Effect.provide(Layer.setConfigProvider(ConfigProvider.fromEnv())),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
     )
   }
 

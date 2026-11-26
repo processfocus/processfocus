@@ -6,6 +6,7 @@ import {
   getRealtimeRecipientId,
   isAppSyncChannelPath,
 } from "@pf/auth-session"
+import { AppSyncEventsClient } from "./appsync-events-client"
 import { getAppSyncRecipientId } from "./realtime-recipient"
 import { describe, expect, it } from "bun:test"
 
@@ -126,11 +127,13 @@ describe("AWS E2E canonical recipients", () => {
       hostname: "127.0.0.1",
       port: 0,
       fetch: (request, server) =>
-        server.upgrade(request, {
-          headers: { "Sec-WebSocket-Protocol": "aws-appsync-event-ws" },
-        })
-          ? undefined
-          : new Response("upgrade required", { status: 400 }),
+        request.method === "POST"
+          ? Response.json({ successful: [], failed: [] })
+          : server.upgrade(request, {
+                headers: { "Sec-WebSocket-Protocol": "aws-appsync-event-ws" },
+              })
+            ? undefined
+            : new Response("upgrade required", { status: 400 }),
       websocket: {
         message: (socket, data) => {
           const message: unknown = JSON.parse(data.toString())
@@ -179,7 +182,8 @@ describe("AWS E2E canonical recipients", () => {
               typeof auth === "object" &&
               auth !== null &&
               "authorization" in auth &&
-              auth.authorization === adminToken,
+              typeof auth.authorization === "string" &&
+              JSON.parse(auth.authorization).token === adminToken,
           })
           socket.send(
             JSON.stringify(
@@ -207,7 +211,7 @@ describe("AWS E2E canonical recipients", () => {
     })
     const previousHost = process.env["APPSYNC_EVENTS_HTTP_HOST"]
     const previousUrl = process.env["NEXT_PUBLIC_APPSYNC_EVENTS_REALTIME_URL"]
-    process.env["APPSYNC_EVENTS_HTTP_HOST"] = "local-test"
+    process.env["APPSYNC_EVENTS_HTTP_HOST"] = `127.0.0.1:${server.port}`
     process.env["NEXT_PUBLIC_APPSYNC_EVENTS_REALTIME_URL"] =
       `ws://127.0.0.1:${server.port}`
     const world = new TestWorld({
@@ -291,8 +295,8 @@ describe("AWS E2E canonical recipients", () => {
       )
       expect(received).toHaveLength(3)
     } finally {
-      world.unsubscribe()
-      world.unsubscribeAllUsers()
+      await world.unsubscribe()
+      await world.unsubscribeAllUsers()
       await server.stop(true)
       if (previousHost === undefined)
         delete process.env["APPSYNC_EVENTS_HTTP_HOST"]
@@ -302,4 +306,85 @@ describe("AWS E2E canonical recipients", () => {
       else process.env["NEXT_PUBLIC_APPSYNC_EVENTS_REALTIME_URL"] = previousUrl
     }
   })
+})
+
+it("rejects E2E acquisition when an acknowledged socket closes during presence registration", async () => {
+  const releaseRegistration = Promise.withResolvers<void>()
+  let closeDuringPresence = () => {}
+  let acknowledged = false
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request, server) {
+      if (request.method === "POST") {
+        const credential = JSON.parse(
+          request.headers.get("authorization") || "{}",
+        )
+        if (credential.action === "open") {
+          closeDuringPresence()
+          // Keep registration pending until the client has observed closure.
+          await releaseRegistration.promise
+        }
+        return Response.json({ successful: [], failed: [] })
+      }
+      if (
+        server.upgrade(request, {
+          headers: { "Sec-WebSocket-Protocol": "aws-appsync-event-ws" },
+        })
+      )
+        return
+      return new Response(null, { status: 400 })
+    },
+    websocket: {
+      message(socket, raw) {
+        const message: unknown = JSON.parse(String(raw))
+        if (
+          typeof message !== "object" ||
+          message === null ||
+          !("type" in message)
+        )
+          return
+        if (message.type === "connection_init")
+          socket.send(
+            JSON.stringify({
+              type: "connection_ack",
+              connectionTimeoutMs: 300000,
+            }),
+          )
+        if (message.type === "subscribe" && "id" in message) {
+          closeDuringPresence = () =>
+            socket.close(1001, "registration interrupted")
+          socket.send(
+            JSON.stringify({ type: "subscribe_success", id: message.id }),
+          )
+        }
+      },
+    },
+  })
+  const client = new AppSyncEventsClient({
+    realtimeUrl: `ws://localhost:${server.port}`,
+    httpHost: `localhost:${server.port}`,
+    channel: "/rxdb/collection/todo/user/recipient",
+    accessToken: "test-token",
+    onEvent: () => {},
+    onConnect: () => {
+      acknowledged = true
+    },
+  })
+  try {
+    const outcome = await Promise.race([
+      client.connect().then(
+        () => "connected",
+        (error: unknown) => error,
+      ),
+      Bun.sleep(1000).then(() => "pending"),
+    ])
+    expect(outcome).toBeInstanceOf(Error)
+    if (outcome instanceof Error)
+      expect(outcome.message).toContain("WebSocket closed unexpectedly")
+    expect(acknowledged).toBe(false)
+  } finally {
+    releaseRegistration.resolve()
+    await client.disconnect()
+    await server.stop(true)
+  }
 })

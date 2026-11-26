@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Represents a flow record from the database.
@@ -17,9 +17,7 @@ export interface FlowRow {
 /**
  * Service providing flow query operations.
  */
-export class FlowQueries extends Context.Tag(
-  "@pf/graphql-db-operations/FlowQueries",
-)<
+export class FlowQueries extends Context.Service<
   FlowQueries,
   {
     /**
@@ -30,4 +28,4 @@ export class FlowQueries extends Context.Tag(
       stepId: string,
     ) => Effect.Effect<readonly FlowRow[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/FlowQueries") {}

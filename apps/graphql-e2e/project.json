@@ -2,6 +2,12 @@
   "name": "@pf/graphql-e2e",
   "tags": ["graphql-api"],
   "targets": {
+    "browser": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bunx playwright install ${CI:+--with-deps} chromium"
+      }
+    },
     "test": {
       "executor": "nx:run-commands",
       "dependsOn": ["codegen", "^build"],
@@ -27,7 +33,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["^build", "codegen"],
       "options": {
-        "command": "bun build --target=node --external '@cucumber/*' --sourcemap --outdir dist --entry-naming '[name].js' steps/index.ts",
+        "command": "bun build --target=node --external '@cucumber/*' --external '@playwright/*' --sourcemap --outdir dist --entry-naming '[name].js' steps/index.ts",
         "cwd": "{projectRoot}"
       },
       "inputs": [
@@ -38,14 +44,30 @@
       "outputs": ["{projectRoot}/dist"],
       "cache": true
     },
+    "e2e-deployed": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "cache": false,
+      "options": {
+        "command": ": \"${BASE_URL:?A deployed runtime is required}\" && NODE_ENV=development NODE_OPTIONS='--enable-source-maps' bun cucumber-js --parallel 0 --plugin ./scripts/deployed-passkeys.mjs ${CI:+--retry 2}",
+        "cwd": "{projectRoot}"
+      }
+    },
     "e2e": {
       "executor": "nx:run-commands",
-      "dependsOn": ["build", "@pf/demo:build"],
+      "dependsOn": [
+        "build",
+        "browser",
+        "@pf/demo:build",
+        "@processfocus/runtime-local:dashboard-build"
+      ],
       "options": {
         "command": "NODE_ENV=development NODE_OPTIONS='--enable-source-maps' bun cucumber-js --import 'dist/index.js' ${CI:+--retry 2}",
         "cwd": "{projectRoot}"
       },
       "inputs": [
+        "default",
+        "^production",
         "{workspaceRoot}/packages/graphql-api/**/*.ts",
         "{workspaceRoot}/runtime/local/src/graphql-server/**/*.ts"
       ]

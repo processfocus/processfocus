@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto"
-import * as Otel from "@effect/opentelemetry"
-import * as SqlClient from "@effect/sql/SqlClient"
-import { SqlError } from "@effect/sql/SqlError"
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics"
 import { EnqueueError, type Payload, QueueService } from "@processfocus/runtime"
@@ -11,19 +9,25 @@ import {
   DateTime,
   Deferred,
   Effect,
-  Either,
-  FiberRef,
+  FileSystem,
   Layer,
-  LogLevel,
   Logger,
+  ManagedRuntime,
   Metric,
-  MetricState,
   Option,
   Ref,
+  References,
+  Result,
   Schema,
+  SchemaGetter,
 } from "effect"
+import * as SqlClient from "effect/sql/SqlClient"
+import { SqlError, UnknownError } from "effect/sql/SqlError"
+import { buildSchema, defaultFieldResolver, graphql } from "graphql"
+import { createSchema } from "graphql-yoga"
 import {
   LocalCedarAuthorizationLive,
+  LocalCedarConfig,
   LocalCedarConfigDefault,
 } from "@pf/auth-local-cedar"
 import {
@@ -35,24 +39,24 @@ import * as sqliteSchema from "@pf/drizzle-sqlite"
 import {
   CurrentProviderUser,
   EmailField,
+  FileField,
+  FormDefault,
   type FormValue,
   ListField,
+  LookupField,
   NumberFieldFrom,
+  NumberFromString,
   ProviderUserField,
   TextBlock,
   TextField,
+  TextFieldFrom,
   Wrapper,
 } from "@pf/form-schema"
 import {
   type UserContext,
-  completeStep,
   makeBusinessMetricDimensionsLayer,
-  recoverPendingExternalCompletionEnqueues,
-  startProcess,
-  startProcessExecution,
 } from "@pf/graphql-api"
 import {
-  BusinessCalendarQueries,
   CompletedJobOperations,
   EXECUTION_EVENT_QUEUE,
   FLOW_EXECUTION_QUEUE,
@@ -70,14 +74,11 @@ import {
   NotAuthorized,
   StepCompletionConflictError,
 } from "@pf/graphql-schema"
-import {
-  completeAsyncSystemStep,
-  systemStepExecutionHandler,
-} from "@pf/job-handler"
+import { systemStepExecutionHandler } from "@pf/job-handler"
+import { buildDynamicSchema } from "@pf/org-to-graphql-schema"
 import {
   ConditionEvaluator,
   Form,
-  FormRuleSelf,
   FormSubmissionError,
   NodeStep,
   OrgUnit,
@@ -89,8 +90,28 @@ import {
   makeConditionEvaluator,
   makeSystemStepExecutor,
   normalizePath,
+  pathToPascalCase,
 } from "@pf/process"
+import {
+  completeTodo,
+  completeTodoFromChat,
+  inspectTodoForm,
+  startProcess as startProcessCommand,
+} from "@pf/process-execution"
+import { recoverPendingExternalCompletionEnqueues } from "@pf/process-execution/recovery"
+import { completeAsyncSystemStep } from "@pf/process-execution/worker"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
+import { withFormRules } from "../../../../packages/form-submission-schema/src"
+import { transformSchemaWithAuthDirective } from "../../../../packages/graphql-api/src/lib/auth-directive-plugin"
+import { dynamicSchema } from "../../../../packages/graphql-api/src/lib/dynamic-resolvers"
+import { executionIdentity } from "../../../../packages/graphql-api/src/lib/execution-adapter"
+import { DynamicSchemaConfig } from "../../../../packages/graphql-api/src/lib/graphql-api"
+import { createResolverExecutor } from "../../../../packages/graphql-api/src/lib/resolver-utils"
+import {
+  completeStep,
+  startProcess,
+  startProcessExecution,
+} from "../../../../packages/process-execution/src/lib/process-operations"
 import {
   businessMetricsOtlpUrl,
   businessMetricsPrometheusUrl,
@@ -148,29 +169,32 @@ const makeConcurrentTestClient = (
     Effect.gen(function* () {
       transactionAttempts += 1
       const transactionAttempt = transactionAttempts
-      const concurrentRequested = yield* FiberRef.get(
-        concurrentTransactionRequested,
-      )
+      const concurrentRequested = yield* concurrentTransactionRequested
       const conflict = concurrentRequested && shouldConflict(transactionAttempt)
       const bodyResult = yield* Ref.make(
-        Option.none<Effect.Effect.Success<typeof effect>>(),
+        Option.none<Effect.Success<typeof effect>>(),
       )
       const commitError = new SqlError({
-        message: "Failed to commit transaction",
-        cause: new Error("Tursodb error: Write-write conflict"),
+        reason: new UnknownError({
+          message: "Failed to commit transaction",
+          cause: new Error("Tursodb error: Write-write conflict"),
+        }),
       })
 
       return yield* client
         .withTransaction(
-          FiberRef.set(
-            transactionMode,
-            concurrentRequested ? "concurrent" : "immediate",
+          Effect.flatMap(transactionMode, (mode) =>
+            mode
+              ? Ref.set(mode, concurrentRequested ? "concurrent" : "immediate")
+              : Effect.void,
           ).pipe(
-            Effect.zipRight(effect),
+            Effect.andThen(effect),
             Effect.tap((result) => Ref.set(bodyResult, Option.some(result))),
             Effect.tap(() =>
               conflict
-                ? FiberRef.set(concurrentTransactionCommitError, commitError)
+                ? Effect.flatMap(concurrentTransactionCommitError, (ref) =>
+                    ref ? Ref.set(ref, commitError) : Effect.void,
+                  )
                 : Effect.void,
             ),
             Effect.flatMap((result) =>
@@ -186,8 +210,10 @@ const makeConcurrentTestClient = (
               Effect.flatMap(
                 Option.match({
                   onNone: () =>
-                    Effect.dieMessage(
-                      "Simulated commit conflict missing transaction result",
+                    Effect.die(
+                      new Error(
+                        "Simulated commit conflict missing transaction result",
+                      ),
                     ),
                   onSome: Effect.succeed,
                 }),
@@ -220,9 +246,10 @@ const makeAuthorizationLayer = ({
   readonly canCompletePublicTodo?: boolean
 } = {}) =>
   makeBaseAuthorizationLayer({
-    canCompleteStep: () => Effect.succeed(true),
-    canCompleteTodo: () => Effect.succeed(true),
-    canCompletePublicTodo: () => Effect.succeed(canCompletePublicTodo),
+    canCompleteStep: (principal) =>
+      Effect.succeed(
+        principal.uid.type !== "PF::PublicLink" || canCompletePublicTodo,
+      ),
     canModifyField: () => Effect.succeed(canModifyField),
     canActOnBehalfOf: () => Effect.succeed(canActOnBehalfOf),
   })
@@ -232,7 +259,7 @@ const makeContext = (
   rolePath: string,
   orgUnitPath: string,
 ): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: { by: email, id: email } as UserContext["_userDetails"],
   jwt: {
     mode: "access",
@@ -257,7 +284,7 @@ const makeServiceAccountContext = (
   rolePath: string,
   orgUnitPath: string,
 ): UserContext => ({
-  _requestTime: DateTime.unsafeMake("2026-04-06T10:00:00.000Z"),
+  _requestTime: DateTime.makeUnsafe("2026-04-06T10:00:00.000Z"),
   _userDetails: {
     by: "ci-client",
     id: "ci-client",
@@ -279,6 +306,277 @@ const makeServiceAccountContext = (
     iat: 0,
   },
   userId: "ci-client",
+})
+
+it("authorizes generated GraphQL mutations on the actual Step and Todo", async () => {
+  const db = sqliteDbCase
+  const seed = makeOverlappingTodoOrganisation("process-permission")
+  const lookupProcess = new Process(seed.org, "lookup", {
+    name: "Lookup",
+    purpose: "Check field authorization on a Step-bound lookup",
+  })
+  const role = new Role(seed.org, "Reader")
+  const lookupForm = new Form(lookupProcess, "Select", {
+    role,
+    form: () => ({
+      area: LookupField({ label: "Area" }),
+      city: LookupField({ label: "City" }),
+    }),
+  })
+  lookupForm.lookups.area.setQuery(() => Effect.succeed([]))
+  lookupForm.lookups.city
+    .dependsOn([lookupForm.lookups.area])
+    .setQuery(() => Effect.succeed([{ value: "city", label: "City" }]))
+  lookupProcess.start(lookupForm).end()
+  const cron = new Process(seed.org, "nightly", {
+    name: "Nightly",
+    purpose: "Check the retained cron field gate",
+    cron: { type: "daily", at: { hour: 2, minute: 0 } },
+  })
+  const sync = new NodeStep(cron, "Sync", {
+    input: () => Effect.succeed({}),
+    output: {},
+    execute: () => Effect.succeed({}),
+  })
+  cron.start(sync).end()
+
+  const start = `start${pathToPascalCase(seed.processPath)}`
+  const complete = `complete${pathToPascalCase(seed.givenNameStepPath)}`
+  const wrongComplete = `complete${pathToPascalCase(seed.familyNameStepPath)}`
+  const lookup = lookupForm.lookupQueryName("city")
+  const completeGrants = [
+    seed.startStepPath,
+    seed.givenNameStepPath,
+    seed.familyNameStepPath,
+    lookupForm.node.path,
+    sync.node.path,
+  ]
+    .map(normalizePath)
+    .map((path) => `PF::Step::${JSON.stringify(path)}`)
+    .join(", ")
+  const mutationFields = [start, complete, cron.startMutationName()]
+    .map((name) => `PF::GraphQLField::"Mutation.${name}"`)
+    .join(", ")
+  const policies = `
+    permit (principal is PF::ServiceAccount, action == PF::Action::"complete", resource is PF::Step)
+    when { [PF::ServiceAccount::"domain-only", PF::ServiceAccount::"domain-denied"].contains(principal) && [${completeGrants}].contains(resource) }
+    unless { context has assignedTo };
+    permit (principal == PF::ServiceAccount::"field-only", action == PF::Action::"mutation", resource is PF::GraphQLField)
+    when { [${mutationFields}].contains(resource) };
+    forbid (principal == PF::ServiceAccount::"domain-denied", action == PF::Action::"complete", resource is PF::Step);
+    forbid (principal == PF::ServiceAccount::"domain-only", action == PF::Action::"mutation", resource == PF::GraphQLField::"Mutation.${start}");
+  `
+  const cedar = LocalCedarAuthorizationLive.pipe(
+    Layer.provide(
+      Layer.effect(
+        LocalCedarConfig,
+        Effect.gen(function* () {
+          const defaults = yield* LocalCedarConfig
+          return {
+            ...defaults,
+            policiesText: [...defaults.policiesText, policies],
+          }
+        }),
+      ).pipe(Layer.provide(LocalCedarConfigDefault())),
+    ),
+  )
+  const orgLayer = OrganisationProviderTest(seed.org)
+  const runtime = ManagedRuntime.make(
+    Layer.mergeAll(db.layer, cedar, orgLayer, makeQueueLayer([], true)),
+  )
+  try {
+    const { todoId, executionId, flowId, assignee } = await runtime.runPromise(
+      Effect.gen(function* () {
+        const todo = yield* seedActiveTodo(db, {
+          organisation: seed.org,
+          orgUnitPath: seed.orgUnitPath,
+          rolePath: seed.rolePath,
+          processPath: seed.processPath,
+          startStepPath: seed.startStepPath,
+          todoStepPath: seed.givenNameStepPath,
+        })
+        const assignee = yield* db.ensureProviderUser({
+          email: "assignee@example.com",
+          rolePaths: [seed.rolePath],
+          orgUnitPath: seed.orgUnitPath,
+        })
+        return { ...todo, assignee }
+      }),
+    )
+    const sdl = await runtime.runPromise(buildDynamicSchema())
+    const generated = await runtime.runPromise(
+      dynamicSchema.pipe(
+        Effect.provideService(DynamicSchemaConfig, {
+          schemaPath: "/generated.graphql",
+        }),
+        Effect.provideService(
+          FileSystem.FileSystem,
+          FileSystem.makeNoop({
+            exists: () => Effect.succeed(true),
+            readFileString: () => Effect.succeed(sdl),
+          }),
+        ),
+      ),
+    )
+    const typeDefs = `scalar DateTimeISO
+        directive @auth(tag: String) on FIELD_DEFINITION
+        type Query { ready: Boolean }
+        type LookupItem { value: String!, label: String! }
+        ${generated.typeDefs}`
+    const executor = createResolverExecutor(runtime)
+    const schema = transformSchemaWithAuthDirective(
+      createSchema<UserContext>({ typeDefs, resolvers: generated.resolvers }),
+      executor,
+    )
+    expect(() =>
+      transformSchemaWithAuthDirective(
+        createSchema<UserContext>({
+          typeDefs,
+          resolvers: {
+            ...generated.resolvers,
+            Mutation: {
+              ...generated.resolvers.Mutation,
+              [start]: () => null,
+            },
+          },
+        }),
+        executor,
+      ),
+    ).toThrow(
+      `@processPermission on Mutation.${start} requires a generated process command resolver`,
+    )
+    const machine = (clientId: string): UserContext => {
+      const context = makeServiceAccountContext(seed.rolePath, seed.orgUnitPath)
+      return {
+        ...context,
+        _userDetails: { by: clientId, id: null },
+        userId: clientId,
+        jwt: {
+          ...context.jwt!,
+          sub: clientId,
+          properties: { userId: clientId, clientId, roles: [] },
+        },
+      }
+    }
+    const execute = (source: string, contextValue: UserContext) =>
+      graphql({ schema, source, contextValue })
+    const startMutation = `mutation { ${start}(executionId: "pex-machine-start") { executionId } }`
+    const completeTodoMutation = (id: string) =>
+      `mutation { ${complete}(todoId: "${id}", input: { givenName: "Done" }) { stepPath } }`
+    const completion = completeTodoMutation(todoId)
+    const expectPending = async () =>
+      expect(await runtime.runPromise(db.getTodoById(todoId))).toMatchObject({
+        deleted: false,
+      })
+
+    for (const actor of ["field-only", "domain-denied"]) {
+      const started = await execute(startMutation, machine(actor))
+      expect(started.errors?.[0]?.message).toContain(
+        "not authorized to start step",
+      )
+      expect(
+        await runtime.runPromise(
+          db.getProcessStateByExecutionId("pex-machine-start"),
+        ),
+      ).toBeNull()
+      expect(
+        (await execute(completion, machine(actor))).errors?.[0]?.extensions?.[
+          "code"
+        ],
+      ).toBe("NotAuthorized")
+      await expectPending()
+    }
+    const domain = machine("domain-only")
+    expect((await execute(startMutation, domain)).data).toEqual({
+      [start]: { executionId: "pex-machine-start" },
+    })
+    expect(
+      (
+        await execute(
+          `mutation { ${wrongComplete}(todoId: "${todoId}", input: { familyName: "Done" }) { stepPath } }`,
+          domain,
+        )
+      ).errors?.[0]?.extensions?.["code"],
+    ).toBe("NotAuthorized")
+    await expectPending()
+
+    const assign = (assignedToProviderUserId: string | null) =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* TypedSqliteDrizzle
+          yield* sql
+            .update(sqliteSchema.toDo)
+            .set({ assignedToProviderUserId })
+            .where(eq(sqliteSchema.toDo.id, todoId))
+        }),
+      )
+    await assign(assignee)
+    expect(
+      (await execute(completion, domain)).errors?.[0]?.extensions?.["code"],
+    ).toBe("NotAuthorized")
+    const employee = makeContext(
+      "employee@example.com",
+      seed.rolePath,
+      seed.orgUnitPath,
+    )
+    expect(
+      (await execute(completion, employee)).errors?.[0]?.extensions?.["code"],
+    ).toBe("NotAuthorized")
+    await expectPending()
+    await assign(null)
+    expect((await execute(completion, domain)).data).toEqual({
+      [complete]: { stepPath: seed.givenNameStepPath },
+    })
+    expect(await runtime.runPromise(db.getTodoById(todoId))).toMatchObject({
+      deleted: true,
+    })
+    const otherTodoId = await runtime.runPromise(
+      Effect.gen(function* () {
+        const flows = yield* FlowExecutionOperations
+        return yield* flows.insertToDo({
+          processExecutionId: executionId,
+          flowId,
+          slaTargetAt: null,
+          slaWarningAt: null,
+          itemData: null,
+        })
+      }),
+    )
+    expect(
+      (await execute(completeTodoMutation(otherTodoId), employee)).data,
+    ).toEqual({
+      [complete]: { stepPath: seed.givenNameStepPath },
+    })
+
+    const cronMutation = `mutation { ${cron.startMutationName()} { executionId } }`
+    expect(
+      (await execute(cronMutation, domain)).errors?.[0]?.message,
+    ).toContain("no permission to use field")
+    expect(
+      (await execute(cronMutation, machine("field-only"))).errors?.[0]?.message,
+    ).toContain("not authorized to start step")
+    expect(
+      (await execute(cronMutation, machine("scheduler"))).errors,
+    ).toBeUndefined()
+    expect(
+      (
+        await execute(
+          `mutation { ${start} { executionId } }`,
+          machine("scheduler"),
+        )
+      ).errors?.[0]?.message,
+    ).toContain("not authorized to start step")
+    expect(
+      (
+        await execute(
+          `{ ${lookup}(input: { area: "north" }) { value } }`,
+          domain,
+        )
+      ).errors?.[0]?.message,
+    ).toContain("no permission to use field")
+  } finally {
+    await runtime.dispose()
+  }
 })
 
 const makeStartOrganisation = (suffix: string, systemStart = false) => {
@@ -497,13 +795,10 @@ const makeOptionalSubmissionOrganisation = (
     help: TextBlock("Help"),
   }
   const fields = (resolved: FormValue<string> | undefined) => ({
-    count: Schema.optionalWith(
-      NumberFieldFrom(
-        Schema.NumberFromString,
-        resolved === undefined ? {} : { default: resolved },
-      ),
-      { default: () => 5 },
-    ),
+    count: NumberFieldFrom(
+      NumberFromString,
+      resolved === undefined ? {} : { default: resolved },
+    ).pipe(Schema.withDecodingDefaultType(Effect.succeed(5))),
     leaf: Schema.optional(TextField({ readOnly: true })),
     nested: Schema.optional(Schema.Struct(children)),
     list: Schema.optional(ListField(children)),
@@ -545,63 +840,52 @@ const makeRuleStartOrganisation = (suffix: string) => {
   })
   const submit = new Form(process, "Submit", {
     role: employee,
-    form: ({ value }) => ({
-      status: TextField(),
-      details: Schema.optional(TextField()),
-      disabledDefault: Schema.optional(
-        TextField({
-          default: value(
-            (_state, ctx) =>
-              ctx.process.startedAt ? "server default" : "unreachable",
-            "server default",
-          ),
+    form: withFormRules(
+      Schema.Struct({
+        status: TextField(),
+        details: Schema.optional(TextField()),
+        disabledDefault: Schema.optional(TextField()),
+        disabledRequired: Schema.optional(TextField()),
+        section: Schema.optional(
+          Schema.Struct({ inheritedDisabled: Schema.optional(TextField()) }),
+        ),
+        alwaysRequired: TextField(),
+        choices: Wrapper({
+          category: Schema.optional(Schema.Literals(["Member", "Guest"])),
         }),
-      ),
-      disabledRequired: Schema.optional(TextField()),
-      section: Schema.optional(
-        Schema.Struct({ inheritedDisabled: Schema.optional(TextField()) }),
-      ),
-      alwaysRequired: TextField(),
-      choices: Wrapper({
-        category: Schema.optional(Schema.Literal("Member", "Guest")),
+        approvers: Schema.optional(ListField({ name: TextField() })),
       }),
-      approvers: Schema.optional(ListField({ name: TextField() })),
+      (value) => ({
+        details: {
+          hidden: value.status === "hide" || value.status === "hide-disabled",
+          disabled: value.status === "hide-disabled",
+          required: value.status === "show",
+        },
+        choices: {
+          $self: {
+            hidden: value.status === "hide-choice-wrapper",
+            disabled: value.status === "disable-choice-wrapper",
+          },
+        },
+        approvers: { required: value.status === "needs-list" },
+        alwaysRequired: {
+          ...(value.status === "loosen-static" ? { required: false } : {}),
+          hidden: value.status === "invalid-model-state",
+        },
+        disabledDefault: { disabled: value.status === "disable-default" },
+        disabledRequired: {
+          disabled: value.status === "disable-required-missing",
+          required: value.status === "disable-required-missing",
+        },
+        section: { disabled: value.status === "disable-section" },
+      }),
+    ),
+    bindings: (_state, ctx) => ({
+      disabledDefault: {
+        default: ctx.process.startedAt ? "server default" : "unreachable",
+      },
     }),
-  }).rules((value, rule) => [
-    rule.when(value.status.equals("hide")).effects({
-      details: { hidden: true },
-    }),
-    rule.when(value.status.equals("hide-choice-wrapper")).effects({
-      choices: { [FormRuleSelf]: { hidden: true } },
-    }),
-    rule.when(value.status.equals("disable-choice-wrapper")).effects({
-      choices: { [FormRuleSelf]: { disabled: true } },
-    }),
-    rule.when(value.status.equals("hide-disabled")).effects({
-      details: { hidden: true, disabled: true },
-    }),
-    rule.when(value.status.equals("show")).effects({
-      details: { required: true },
-    }),
-    rule.when(value.status.equals("needs-list")).effects({
-      approvers: { required: true },
-    }),
-    rule.when(value.status.equals("loosen-static")).effects({
-      alwaysRequired: { required: false },
-    }),
-    rule.when(value.status.equals("invalid-model-state")).effects({
-      alwaysRequired: { hidden: true },
-    }),
-    rule.when(value.status.equals("disable-default")).effects({
-      disabledDefault: { disabled: true },
-    }),
-    rule.when(value.status.equals("disable-required-missing")).effects({
-      disabledRequired: { disabled: true, required: true },
-    }),
-    rule.when(value.status.equals("disable-section")).effects({
-      section: { disabled: true },
-    }),
-  ])
+  })
   process.start(submit).end()
 
   return {
@@ -625,7 +909,7 @@ const makePartialDefaultsOrganisation = (suffix: string, lazy: boolean) => {
     name: "Partial defaults",
     purpose: "Verify nested default precedence",
   })
-  const fields = (editDefault: FormValue<string>) => ({
+  const fields = (editDefault: string | (() => string)) => ({
     mode: TextField(),
     section: Schema.optional(
       Schema.NullOr(
@@ -640,29 +924,24 @@ const makePartialDefaultsOrganisation = (suffix: string, lazy: boolean) => {
       ListField({ edit: TextField() }, { default: [{ edit: "list default" }] }),
     ),
   })
+  const definition = withFormRules(
+    Schema.Struct(fields(lazy ? () => "edit default" : "edit default")),
+    (value) => ({
+      section: {
+        edit: { disabled: value.mode === "locked" },
+        details: { hidden: value.mode === "locked" },
+      },
+    }),
+  )
   const start = new Form(process, "Start", {
     role: employee,
-    form: ({ value }) =>
-      fields(lazy ? value(() => "edit default") : "edit default"),
-  }).rules(() => [
-    {
-      condition: {
-        _tag: "equals",
-        left: { _tag: "field", path: ["mode"] },
-        right: { _tag: "literal", value: "locked" },
-      },
-      effects: [
-        { target: ["section", "edit"], state: { disabled: true } },
-        { target: ["section", "details"], state: { hidden: true } },
-      ],
-    },
-  ])
+    form: definition,
+  })
   const flow = process.start(start)
   const complete = new Form(flow, "Complete", {
     role: employee,
-    form: ({ value }) =>
-      fields(lazy ? value(() => "edit default") : "edit default"),
-  }).rules(() => start.authoritativeFormRules())
+    form: definition,
+  })
   flow.next(complete).end()
   return {
     org,
@@ -695,53 +974,47 @@ const makeRuleTodoOrganisation = (suffix: string) => {
   const startFlow = process.start(start)
   const submit = new Form(startFlow, "Submit", {
     role: employee,
-    form: ({ value }) => ({
-      status: TextField(),
-      details: Schema.optional(TextField()),
-      originalOnly: Schema.optional(
-        TextField({ default: value((_state, ctx) => ctx.process.executionId) }),
-      ),
-      disabledRequired: Schema.optional(TextField()),
-      section: Schema.optional(
-        Schema.Struct({ inheritedDisabled: Schema.optional(TextField()) }),
-      ),
-      alwaysRequired: TextField(),
-      approvers: Schema.optional(ListField({ name: TextField() })),
+    form: withFormRules(
+      Schema.Struct({
+        status: TextField(),
+        details: Schema.optional(TextField()),
+        originalOnly: Schema.optional(TextField()),
+        disabledRequired: Schema.optional(TextField()),
+        section: Schema.optional(
+          Schema.Struct({ inheritedDisabled: Schema.optional(TextField()) }),
+        ),
+        alwaysRequired: TextField(),
+        approvers: Schema.optional(
+          ListField({
+            name: TextField(),
+            secret: Schema.optional(TextField()),
+          }),
+        ),
+      }),
+      (value) => ({
+        details: {
+          hidden: value.status === "hide" || value.status === "hide-disabled",
+          disabled: value.status === "hide-disabled",
+          required: value.status === "show",
+        },
+        approvers: {
+          required: value.status === "needs-list",
+          name: { disabled: value.status === "disable-list-child" },
+          secret: { hidden: value.status === "hide" },
+        },
+        alwaysRequired: { hidden: value.status === "invalid-model-state" },
+        originalOnly: { disabled: value.status === "disable-original" },
+        disabledRequired: {
+          disabled: value.status === "disable-required-missing",
+          required: value.status === "disable-required-missing",
+        },
+        section: { disabled: value.status === "disable-section" },
+      }),
+    ),
+    bindings: (_state, ctx) => ({
+      originalOnly: { default: ctx.process.executionId },
     }),
-  }).rules((value, rule) => [
-    rule.when(value.status.equals("hide")).effects({
-      details: { hidden: true },
-    }),
-    rule.when(value.status.equals("hide-disabled")).effects({
-      details: { hidden: true, disabled: true },
-    }),
-    rule.when(value.status.equals("show")).effects({
-      details: { required: true },
-    }),
-    rule.when(value.status.equals("needs-list")).effects({
-      approvers: { required: true },
-    }),
-    rule.when(value.status.equals("invalid-model-state")).effects({
-      alwaysRequired: { hidden: true },
-    }),
-    rule.when(value.status.equals("disable-original")).effects({
-      originalOnly: { disabled: true },
-    }),
-    rule.when(value.status.equals("disable-required-missing")).effects({
-      disabledRequired: { disabled: true, required: true },
-    }),
-    rule.when(value.status.equals("disable-section")).effects({
-      section: { disabled: true },
-    }),
-    {
-      condition: {
-        _tag: "equals",
-        left: { _tag: "field", path: ["status"] },
-        right: { _tag: "literal", value: "disable-list-child" },
-      },
-      effects: [{ target: ["approvers", "name"], state: { disabled: true } }],
-    },
-  ])
+  })
   startFlow.next(submit).end()
 
   return {
@@ -768,21 +1041,22 @@ const makeNestedRuleStartOrganisation = (suffix: string) => {
   })
   const submit = new Form(process, "Submit", {
     role: employee,
-    form: () => ({
-      section: Schema.Struct({
-        status: TextField(),
-        details: Schema.optional(TextField()),
-        alwaysRequired: TextField(),
+    form: withFormRules(
+      Schema.Struct({
+        section: Schema.Struct({
+          status: TextField(),
+          details: Schema.optional(TextField()),
+          alwaysRequired: TextField(),
+        }),
       }),
-    }),
-  }).rules((value, rule) => [
-    rule.when(value.section.status.equals("hide-child")).effects({
-      section: { details: { hidden: true } },
-    }),
-    rule.when(value.section.status.equals("hide-parent")).effects({
-      section: { [FormRuleSelf]: { hidden: true } },
-    }),
-  ])
+      (value) => ({
+        section: {
+          $self: { hidden: value.section?.status === "hide-parent" },
+          details: { hidden: value.section?.status === "hide-child" },
+        },
+      }),
+    ),
+  })
   process.start(submit).end()
 
   return {
@@ -808,15 +1082,16 @@ const makeHiddenProviderUserRuleStartOrganisation = (suffix: string) => {
   })
   const submit = new Form(process, "Submit", {
     role: employee,
-    form: () => ({
-      status: TextField(),
-      requestedFor: Schema.optional(ProviderUserField()),
-    }),
-  }).rules((value, rule) => [
-    rule.when(value.status.equals("hide")).effects({
-      requestedFor: { hidden: true },
-    }),
-  ])
+    form: withFormRules(
+      Schema.Struct({
+        status: TextField(),
+        requestedFor: Schema.optional(ProviderUserField()),
+      }),
+      (value) => ({
+        requestedFor: { hidden: value.status === "hide" },
+      }),
+    ),
+  })
   process.start(submit).end()
 
   return {
@@ -829,7 +1104,7 @@ const makeHiddenProviderUserRuleStartOrganisation = (suffix: string) => {
   }
 }
 
-const makeRestrictedTodoOrganisation = (suffix: string) => {
+const makeRestrictedTodoOrganisation = (suffix: string, shared = false) => {
   const org = new Organisation({ name: `Restricted Todo Org ${suffix}` })
   const operations = new OrgUnit(org, `Restricted Todo Ops ${suffix}`, {
     name: `Restricted Todo Ops ${suffix}`,
@@ -847,15 +1122,33 @@ const makeRestrictedTodoOrganisation = (suffix: string) => {
     execute: () => Effect.succeed({}),
   })
   const startFlow = process.start(start)
-  const submit = new Form(startFlow, "Submit", {
-    role: employee,
-    form: () => ({
-      title: TextField(),
-      requestedFor: ProviderUserField({
-        default: CurrentProviderUser,
+  const schema = Schema.Struct({
+    title: TextField(),
+    requestedFor: ProviderUserField({
+      default: CurrentProviderUser,
+      permission: { modify: manager },
+    }),
+    restricted: Schema.optional(
+      TextField({
+        ...(shared ? { default: "private" } : {}),
         permission: { modify: manager },
       }),
-    }),
+    ),
+    details: Schema.optional(TextField()),
+  })
+  const submit = new Form(startFlow, "Submit", {
+    role: employee,
+    ...(shared
+      ? { browser: { entrypoint: "request.ts", exportName: "request" } }
+      : {}),
+    form: shared
+      ? withFormRules(schema, (values) => ({
+          details: {
+            hidden: values.restricted !== undefined,
+            required: values.requestedFor !== undefined,
+          },
+        }))
+      : schema,
   })
   startFlow.next(submit).end()
 
@@ -972,7 +1265,7 @@ const makeUnionProviderUserTodoOrganisation = (suffix: string) => {
   const submit = new Form(startFlow, "Submit", {
     role: employee,
     form: () => ({
-      target: Schema.Union(
+      target: Schema.Union([
         Schema.Struct({
           kind: Schema.Literal("provider-user"),
           requestedFor: ProviderUserField(),
@@ -981,7 +1274,7 @@ const makeUnionProviderUserTodoOrganisation = (suffix: string) => {
           kind: Schema.Literal("note"),
           requestedFor: TextField(),
         }),
-      ),
+      ]),
     }),
   })
   startFlow.next(submit).end()
@@ -1061,7 +1354,10 @@ const makeSupportingRoleStartOrganisation = (suffix: string) => {
   }
 }
 
-const makeSupportingRoleTodoOrganisation = (suffix: string) => {
+const makeSupportingRoleTodoOrganisation = (
+  suffix: string,
+  nullableChatFields = false,
+) => {
   const org = new Organisation({ name: `Supporting Role Todo Org ${suffix}` })
   const operations = new OrgUnit(org, `Supporting Role Todo Ops ${suffix}`, {
     name: `Supporting Role Todo Ops ${suffix}`,
@@ -1079,10 +1375,30 @@ const makeSupportingRoleTodoOrganisation = (suffix: string) => {
     execute: () => Effect.succeed({}),
   })
   const startFlow = process.start(start)
+  const fields = { title: TextField() }
   const submit = new Form(startFlow, "Submit", {
     role: employee,
     supportingRoles: [manager],
-    form: () => ({ title: TextField() }),
+    form: Schema.Struct({
+      ...fields,
+      ...(nullableChatFields
+        ? {
+            items: Schema.NullOr(ListField({ name: TextField() })).annotate({
+              [FormDefault]: null,
+            }),
+            choice: Schema.NullOr(Schema.Literals(["A", "B"])),
+            evidence: Schema.NullOr(
+              Schema.Struct({
+                reason: TextField({ label: "Reason for supplying evidence" }),
+                document: FileField({
+                  label: "Document",
+                  documentStore: { node: { path: "/documents" } },
+                }),
+              }),
+            ),
+          }
+        : {}),
+    }),
   })
   startFlow.next(submit).end()
   return {
@@ -1173,7 +1489,7 @@ const seedTwoProcessStartOrganisation = <R>(
     return { ...seed, firstProcessId, secondProcessId }
   })
 
-it("persists delegated GraphQL process starts with owner FKs and immutable generation audit", async () => {
+it("persists delegated command starts with owner FKs and immutable generation audit", async () => {
   const seed = makeRestrictedStartOrganisation(`delegation-${uniqueSuffix()}`)
   const context = makeContext(
     "employee@example.com",
@@ -1214,17 +1530,14 @@ it("persists delegated GraphQL process starts with owner FKs and immutable gener
         rolePaths: [seed.rolePath],
         orgUnitPath: seed.orgUnitPath,
       })
-      const processId = yield* sqliteDbCase.getProcessIdByPath(seed.processPath)
-      const ref = yield* UserDetails
-      const started = yield* startProcess(
-        processId,
-        seed.processPath,
-        seed.startStepPath,
-        { title: "Delegated request" },
-        seed.form.submissionEffectSchema,
-        seed.form,
-        context,
-      ).pipe(Effect.locally(ref, context._userDetails))
+      const started = yield* startProcessCommand({
+        processPath: seed.processPath,
+        input: { title: "Delegated request" },
+        identity: executionIdentity(context),
+      }).pipe(
+        Effect.provideService(UserDetails, context._userDetails),
+        Effect.provide(OrganisationProviderTest(seed.org)),
+      )
       const db = yield* TypedSqliteDrizzle
       const executions = yield* db
         .select()
@@ -1253,7 +1566,7 @@ it("persists delegated GraphQL process starts with owner FKs and immutable gener
   )
 })
 
-it("persists delegated Todo completion and its outgoing handoff with owner FKs", async () => {
+it("persists delegated Todo command completion and its outgoing handoff with owner FKs", async () => {
   const seed = makeRuleTodoOrganisation(`delegation-todo-${uniqueSuffix()}`)
   const context = makeContext(
     "employee@example.com",
@@ -1297,14 +1610,14 @@ it("persists delegated Todo completion and its outgoing handoff with owner FKs",
         todoStepPath: seed.todoStepPath,
         state: {},
       })
-      const ref = yield* UserDetails
-      yield* completeStep(
-        active.todoId,
-        { status: "hide", alwaysRequired: "present" },
-        seed.form,
-        seed.form.submissionEffectSchema,
-        context,
-      ).pipe(Effect.locally(ref, context._userDetails))
+      yield* completeTodo({
+        todoId: active.todoId,
+        input: { status: "hide", alwaysRequired: "present" },
+        actor: { kind: "authenticated", identity: executionIdentity(context) },
+      }).pipe(
+        Effect.provideService(UserDetails, context._userDetails),
+        Effect.provide(OrganisationProviderTest(seed.org)),
+      )
       const db = yield* TypedSqliteDrizzle
       const todos = yield* db
         .select()
@@ -1312,6 +1625,18 @@ it("persists delegated Todo completion and its outgoing handoff with owner FKs",
         .where(eq(sqliteSchema.toDo.id, active.todoId))
       expect(todos[0]?.completedByUserId).toBe("employee@example.com")
       expect(todos[0]?.updatedBy).toBe(by)
+      const state = yield* sqliteDbCase.getProcessStateByExecutionId(
+        active.executionId,
+      )
+      expect(state?.state).toMatchObject({
+        _completionIdentity: {
+          [seed.todoStepPath]: {
+            userId: "employee@example.com",
+            email: "employee@example.com",
+            rolePath: seed.rolePath,
+          },
+        },
+      })
       const handoffs = yield* db
         .select()
         .from(sqliteSchema.scheduledFlow)
@@ -1327,6 +1652,152 @@ it("persists delegated Todo completion and its outgoing handoff with owner FKs",
 
 const runSuite = <R>(db: GraphqlDbCase<R>) => {
   describe(`startProcess and completeStep (${db.name})`, () => {
+    for (const { label, hasFields, input } of [
+      { label: "preserves no-input", hasFields: false, input: undefined },
+      { label: "submits zero-field", hasFields: false, input: {} },
+      {
+        label: "validates field-bearing",
+        hasFields: true,
+        input: { title: "Request" },
+      },
+      {
+        label: "rejects omitted-input field-bearing",
+        hasFields: true,
+        input: undefined,
+      },
+    ]) {
+      it(`${label} form starts with an authored submission callback`, async () => {
+        const org = new Organisation({ name: `Start hooks ${uniqueSuffix()}` })
+        const operations = new OrgUnit(org, "Operations", {
+          name: "Operations",
+          type: "department",
+        })
+        const orgUnitPath = normalizePath(operations.node.path)
+        const employee = new Role(operations, "Employee")
+        const process = new Process(operations, "start-hooks", {
+          name: "Start hooks",
+          purpose: "Preserve no-input start behavior",
+        })
+        const fields: Schema.Struct.Fields = hasFields
+          ? { title: TextField() }
+          : {}
+        const form = new Form(process, "Start", {
+          role: employee,
+          form: Schema.Struct(fields),
+          onSubmit: () =>
+            Effect.fail(
+              new FormSubmissionError({ field: "", message: "Start hook ran" }),
+            ),
+        })
+        process.start(form).end()
+        const rolePath = normalizePath(employee.node.path)
+        const processPath = normalizePath(process.node.path)
+        const context = makeContext(
+          "employee@example.com",
+          rolePath,
+          orgUnitPath,
+        )
+        const jobs: EnqueuedJob[] = []
+        await runDbEffect(
+          db,
+          jobs,
+          Effect.gen(function* () {
+            yield* db.storeOrganisation(org)
+            yield* db.ensureProviderUser({
+              email: "employee@example.com",
+              rolePaths: [rolePath],
+              orgUnitPath,
+            })
+            const submit = Effect.gen(function* () {
+              if (hasFields || input !== undefined)
+                return yield* startProcessCommand({
+                  processPath,
+                  ...(input === undefined ? {} : { input }),
+                  identity: executionIdentity(context),
+                })
+
+              // Exercise omission through the actual generated GraphQL adapter.
+              const sdl = yield* buildDynamicSchema()
+              const generated = yield* dynamicSchema.pipe(
+                Effect.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(DynamicSchemaConfig, {
+                      schemaPath: "/tmp/opencode/start-hooks.graphql",
+                    }),
+                    Layer.succeed(
+                      FileSystem.FileSystem,
+                      FileSystem.makeNoop({
+                        exists: () => Effect.succeed(true),
+                        readFileString: () => Effect.succeed(sdl),
+                      }),
+                    ),
+                  ),
+                ),
+              )
+              const runtime =
+                yield* Effect.context<
+                  Effect.Services<ReturnType<typeof startProcessCommand>>
+                >()
+              const response = yield* Effect.promise(() =>
+                graphql({
+                  schema: buildSchema(
+                    `scalar DateTimeISO\ntype Query { ready: Boolean }\n${sdl}`,
+                  ),
+                  source: `mutation { ${process.startMutationName()} { executionId } }`,
+                  contextValue: context,
+                  fieldResolver: (parent, args, ctx, info) => {
+                    const entry =
+                      info.parentType.name === "Mutation"
+                        ? generated.resolvers?.Mutation?.[info.fieldName]
+                        : undefined
+                    const resolver = entry?.resolve ?? entry
+                    return typeof resolver === "function"
+                      ? Effect.runPromiseWith(runtime)(
+                          resolver(parent, args, ctx, info),
+                        )
+                      : defaultFieldResolver(parent, args, ctx, info)
+                  },
+                }),
+              )
+              expect(response.errors).toBeUndefined()
+              return response.data
+            })
+            const result = yield* submit.pipe(
+              Effect.provide(OrganisationProviderTest(org)),
+              Effect.provideService(UserDetails, context._userDetails),
+              Effect.result,
+            )
+            const processId = yield* db.getProcessIdByPath(processPath)
+            const states = yield* db.getProcessStatesByProcessId(processId)
+            if (hasFields || input !== undefined) {
+              expect(Result.isFailure(result)).toBe(true)
+              if (Result.isFailure(result))
+                expect(result.failure).toMatchObject({
+                  _tag: "InputValidationError",
+                })
+              if (Result.isFailure(result) && input !== undefined)
+                expect(result.failure).toMatchObject({
+                  _tag: "InputValidationError",
+                  errors: [{ field: "", message: "Start hook ran" }],
+                })
+              expect(states).toHaveLength(0)
+              expect(jobs).toHaveLength(0)
+            } else {
+              if (Result.isFailure(result)) throw result.failure
+              expect(Result.isSuccess(result)).toBe(true)
+              expect(states).toHaveLength(1)
+              expect(states[0]?.state).toEqual({})
+              expect(
+                jobs.some((job) => job.queue === FLOW_EXECUTION_QUEUE),
+              ).toBe(true)
+            }
+          }),
+          true,
+          makeAuthorizationLayer(),
+        )
+      })
+    }
+
     it("rejects explicit restricted start fields before writing process state", async () => {
       const enqueuedJobs: EnqueuedJob[] = []
       const seed = makeRestrictedStartOrganisation(
@@ -1356,7 +1827,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processStates = yield* db.getProcessStatesByProcessId(processId)
           return { error, processStates }
@@ -1461,7 +1932,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                     scenario.input,
                     seed.start.submissionEffectSchema,
                     seed.start,
-                    context,
+                    executionIdentity(context),
                   )
                   return yield* db.getProcessStateByExecutionId(
                     started.executionId,
@@ -1483,7 +1954,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                   scenario.input,
                   seed.complete,
                   seed.complete.submissionEffectSchema,
-                  context,
+                  executionIdentity(context),
                 )
                 return yield* db.getProcessStateByExecutionId(
                   active.executionId,
@@ -1492,7 +1963,12 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
               true,
               makeAuthorizationLayer(),
             )
-            expect(stored?.state).toEqual(scenario.expected)
+            expect(stored?.state).toEqual({
+              ...scenario.expected,
+              ...(phase === "completion"
+                ? { _completionIdentity: expect.any(Object) }
+                : {}),
+            })
           })
         }
         for (const scenario of [
@@ -1547,7 +2023,9 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             }
             expect(
               Schema.decodeUnknownSync(
-                Schema.make(seed.start.submissionEffectSchema.ast),
+                Schema.make<Schema.Codec<unknown>>(
+                  seed.start.submissionEffectSchema.ast,
+                ),
               )({}),
             ).toEqual({ count: 5 })
             const result = await runDbEffect(
@@ -1571,16 +2049,16 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                     input,
                     seed.start.submissionEffectSchema,
                     seed.start,
-                    context,
-                  ).pipe(Effect.either)
-                  if (Either.isLeft(started)) {
+                    executionIdentity(context),
+                  ).pipe(Effect.result)
+                  if (Result.isFailure(started)) {
                     expect(
                       yield* db.getProcessStatesByProcessId(processId),
                     ).toEqual([])
-                    return started.left
+                    return started.failure
                   }
                   return (yield* db.getProcessStateByExecutionId(
-                    started.right.executionId,
+                    started.success.executionId,
                   ))?.state
                 }
                 const active = yield* seedActiveTodo(db, {
@@ -1597,14 +2075,14 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                   input,
                   seed.complete,
                   seed.complete.submissionEffectSchema,
-                  context,
-                ).pipe(Effect.either)
+                  executionIdentity(context),
+                ).pipe(Effect.result)
                 const stored = yield* db.getProcessStateByExecutionId(
                   active.executionId,
                 )
-                if (Either.isLeft(completed)) {
+                if (Result.isFailure(completed)) {
                   expect(stored?.state).toEqual({})
-                  return completed.left
+                  return completed.failure
                 }
                 return stored?.state
               }),
@@ -1615,6 +2093,9 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
               expect(result).toBeInstanceOf(InputValidationError)
             else
               expect(result).toEqual({
+                ...(phase === "completion"
+                  ? { _completionIdentity: expect.any(Object) }
+                  : {}),
                 count: scenario.expected,
                 nested: { edit: "ok" },
                 list: [{ edit: "ok" }, { edit: "ok" }],
@@ -1653,7 +2134,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           const processState = yield* db.getProcessStateByExecutionId(
             started.executionId,
@@ -1700,7 +2181,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processStates = yield* db.getProcessStatesByProcessId(processId)
           return { error, processStates }
@@ -1737,7 +2218,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processStates = yield* db.getProcessStatesByProcessId(processId)
           return { error, processStates }
@@ -1785,7 +2266,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processStates = yield* db.getProcessStatesByProcessId(processId)
           return { error, processStates }
@@ -1834,7 +2315,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { email: " Parent@Example.com ", title: "Request" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           const processState = yield* db.getProcessStateByExecutionId(
             started.executionId,
@@ -1890,7 +2371,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           const processState = yield* db.getProcessStateByExecutionId(
             started.executionId,
@@ -1941,7 +2422,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(started.executionId)
         }),
@@ -1989,7 +2470,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(started.executionId)
         }),
@@ -2037,7 +2518,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2084,7 +2565,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
               { status, category: "Guest", alwaysRequired: "present" },
               seed.form.submissionEffectSchema,
               seed.form,
-              context,
+              executionIdentity(context),
             )
             return yield* db.getProcessStateByExecutionId(started.executionId)
           }),
@@ -2133,7 +2614,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(started.executionId)
         }),
@@ -2182,7 +2663,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { status: "hide", requestedFor: "other@example.com" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(started.executionId)
         }),
@@ -2222,7 +2703,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { status: "show", alwaysRequired: "present" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processStates = yield* db.getProcessStatesByProcessId(processId)
           return { error, processStates }
@@ -2271,7 +2752,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { status: "show", details: "   ", alwaysRequired: "present" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2321,7 +2802,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2372,7 +2853,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2422,7 +2903,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2468,7 +2949,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { status: "loosen-static" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2521,7 +3002,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             input,
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           )
           const processState = yield* db.getProcessStateByExecutionId(
             started.executionId,
@@ -2536,6 +3017,148 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
         section: { status: "hide-child", alwaysRequired: "present" },
       })
       expect(input.section.details).toBe("stale nested value")
+    })
+
+    it("enforces executable normalized rules before persisting a direct start", async () => {
+      const jobs: EnqueuedJob[] = []
+      const org = new Organisation({ name: "Executable rules" })
+      const unit = new OrgUnit(org, `executable-${uniqueSuffix()}`, {
+        name: "Operations",
+        type: "department",
+      })
+      const role = new Role(unit, "employee", { name: "Employee" })
+      const manager = new Role(unit, "manager", { name: "Manager" })
+      const process = new Process(unit, "request", {
+        name: "Request",
+        purpose: "Executable rules contract",
+      })
+      const schema = withFormRules(
+        Schema.Struct({
+          status: Schema.Trim,
+          display: Wrapper({
+            status: TextField({ readOnly: true }),
+            nickname: TextField({ readOnly: true }),
+            note: Schema.optional(TextField()),
+          }),
+          nickname: Schema.optional(TextField()),
+          restricted: TextField({
+            permission: { modify: manager },
+            default: "private",
+          }).pipe(Schema.withDecodingDefaultType(Effect.sync(() => "private"))),
+          details: Schema.optional(TextField()),
+          restrictedDetails: Schema.optional(TextField()),
+          group: Wrapper({
+            locked: Schema.optional(
+              TextFieldFrom(
+                Schema.String.pipe(
+                  Schema.decodeTo(Schema.String, {
+                    decode: SchemaGetter.transform((value) => `${value}!`),
+                    encode: SchemaGetter.transform((value) =>
+                      value.slice(0, -1),
+                    ),
+                  }),
+                ),
+                { default: "server value" },
+              ),
+            ),
+          }),
+        }),
+        (values) => ({
+          details: {
+            hidden: values.status === "hide" || values.status === "conflict",
+            required: values.status === "show" || values.status === "conflict",
+          },
+          restricted: { required: true },
+          restrictedDetails: { required: values.restricted === "private" },
+          group: { $self: { disabled: true } },
+        }),
+      )
+      const form = new Form(process, "Submit", {
+        role,
+        form: schema,
+        browser: { entrypoint: "request.ts", exportName: "request" },
+      })
+      process.start(form).end()
+      const rolePath = normalizePath(role.node.path)
+      const orgUnitPath = normalizePath(unit.node.path)
+      const processPath = normalizePath(process.node.path)
+      const context = makeContext("employee@example.com", rolePath, orgUnitPath)
+      const result = await runDbEffect(
+        db,
+        jobs,
+        Effect.gen(function* () {
+          yield* db.storeOrganisation(org)
+          yield* db.ensureProviderUser({
+            email: "employee@example.com",
+            rolePaths: [rolePath],
+            orgUnitPath,
+          })
+          const processId = yield* db.getProcessIdByPath(processPath)
+          const unauthorized = yield* startProcess(
+            processId,
+            processPath,
+            normalizePath(form.node.path),
+            { status: "hide", restricted: "forged" },
+            form.submissionEffectSchema,
+            form,
+            executionIdentity(context),
+          ).pipe(Effect.flip)
+          expect(unauthorized).toBeInstanceOf(NotAuthorized)
+          const rejected = yield* startProcess(
+            processId,
+            processPath,
+            normalizePath(form.node.path),
+            { status: " show ", locked: "forged" },
+            form.submissionEffectSchema,
+            form,
+            executionIdentity(context),
+          ).pipe(Effect.flip)
+          const conflict = yield* startProcess(
+            processId,
+            processPath,
+            normalizePath(form.node.path),
+            { status: "conflict", details: "draft" },
+            form.submissionEffectSchema,
+            form,
+            executionIdentity(context),
+          ).pipe(Effect.flip)
+          expect(conflict).toBeInstanceOf(InputValidationError)
+          if (conflict instanceof InputValidationError)
+            expect(conflict.errors).toContainEqual({
+              field: "details",
+              message: "Field cannot be required while hidden",
+            })
+          expect(yield* db.getProcessStatesByProcessId(processId)).toEqual([])
+          yield* startProcess(
+            processId,
+            processPath,
+            normalizePath(form.node.path),
+            {
+              status: " hide ",
+              nickname: "kept",
+              details: "private",
+              locked: "forged",
+            },
+            form.submissionEffectSchema,
+            form,
+            executionIdentity(context),
+          )
+          return {
+            rejected,
+            states: yield* db.getProcessStatesByProcessId(processId),
+          }
+        }),
+        true,
+        makeAuthorizationLayer(),
+      )
+      expect(result.rejected).toBeInstanceOf(InputValidationError)
+      expect(result.states).toHaveLength(1)
+      expect(result.states[0]?.state).toEqual({
+        status: "hide",
+        nickname: "kept",
+        locked: "server value!",
+        restricted: "private",
+      })
     })
 
     it("rejects static required children hidden by parent rules", async () => {
@@ -2572,7 +3195,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2617,7 +3240,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -2635,6 +3258,51 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result.error.resource).toBe(`${seed.todoStepPath}/requestedFor`)
       expect(result.processState?.state).toEqual({})
       expect(enqueuedJobs).toEqual([])
+    })
+
+    it("evaluates completion rules only on accessible values and preserves protected originals", async () => {
+      const jobs: EnqueuedJob[] = []
+      const seed = makeRestrictedTodoOrganisation(
+        `shared-${uniqueSuffix()}`,
+        true,
+      )
+      const context = makeContext(
+        "employee@example.com",
+        seed.rolePath,
+        seed.orgUnitPath,
+      )
+      const state = await runDbEffect(
+        db,
+        jobs,
+        Effect.gen(function* () {
+          const active = yield* seedActiveTodo(db, {
+            organisation: seed.org,
+            orgUnitPath: seed.orgUnitPath,
+            rolePath: seed.rolePath,
+            processPath: seed.processPath,
+            startStepPath: seed.startStepPath,
+            todoStepPath: seed.todoStepPath,
+            state: { restricted: "original" },
+          })
+          yield* completeStep(
+            active.todoId,
+            { title: "Request", details: "visible" },
+            seed.form,
+            seed.form.submissionEffectSchema,
+            executionIdentity(context),
+          )
+          return yield* db.getProcessStateByExecutionId(active.executionId)
+        }),
+        true,
+        makeAuthorizationLayer(),
+      )
+      expect(state?.state).toEqual({
+        _completionIdentity: expect.any(Object),
+        title: "Request",
+        details: "visible",
+        restricted: "original",
+        requestedFor: "employee@example.com",
+      })
     })
 
     it("sanitizes hidden stale values during todo completion", async () => {
@@ -2659,17 +3327,33 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             processPath: seed.processPath,
             startStepPath: seed.startStepPath,
             todoStepPath: seed.todoStepPath,
+            state: {
+              details: "previous details",
+              approvers: [
+                { name: "previous approver", secret: "previous secret" },
+              ],
+            },
           })
           yield* completeStep(
             activeTodo.todoId,
             {
               status: "hide",
               details: "stale client value",
+              approvers: [
+                {
+                  name: "first visible approver",
+                  secret: "first hidden value",
+                },
+                {
+                  name: "second visible approver",
+                  secret: "second hidden value",
+                },
+              ],
               alwaysRequired: "present",
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -2678,8 +3362,13 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       )
 
       expect(result?.state).toEqual({
+        _completionIdentity: expect.any(Object),
         originalOnly: expect.stringMatching(/^pex-/),
         status: "hide",
+        approvers: [
+          { name: "first visible approver" },
+          { name: "second visible approver" },
+        ],
         alwaysRequired: "present",
       })
     })
@@ -2717,7 +3406,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -2728,6 +3417,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result?.state).toEqual({
         originalOnly: expect.stringMatching(/^pex-/),
         status: "hide-disabled",
+        _completionIdentity: expect.any(Object),
         alwaysRequired: "present",
       })
     })
@@ -2765,7 +3455,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -2775,6 +3465,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
 
       expect(result?.state).toEqual({
         status: "disable-original",
+        _completionIdentity: expect.any(Object),
         originalOnly: "original value",
         alwaysRequired: "present",
       })
@@ -2813,7 +3504,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return {
             executionId: activeTodo.executionId,
@@ -2828,6 +3519,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
 
       expect(result.stored?.state).toEqual({
         status: "disable-original",
+        _completionIdentity: expect.any(Object),
         originalOnly: result.executionId,
         alwaysRequired: "present",
       })
@@ -2865,7 +3557,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -2915,7 +3607,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -2926,6 +3618,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result?.state).toEqual({
         originalOnly: expect.stringMatching(/^pex-/),
         status: "disable-section",
+        _completionIdentity: expect.any(Object),
         section: { inheritedDisabled: "original value" },
         alwaysRequired: "present",
       })
@@ -2964,7 +3657,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -2975,6 +3668,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result?.state).toEqual({
         originalOnly: expect.stringMatching(/^pex-/),
         status: "disable-list-child",
+        _completionIdentity: expect.any(Object),
         approvers: [{ name: "original approver" }],
         alwaysRequired: "present",
       })
@@ -3016,7 +3710,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -3060,7 +3754,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { status: "show", details: "   ", alwaysRequired: "present" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -3109,7 +3803,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -3159,7 +3853,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -3204,7 +3898,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { status: "invalid-model-state", alwaysRequired: "present" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
         }),
         true,
@@ -3249,7 +3943,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -3260,6 +3954,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result?.state).toEqual({
         title: "Request",
         requestedFor: "employee@example.com",
+        _completionIdentity: expect.any(Object),
       })
     })
 
@@ -3291,7 +3986,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3334,7 +4029,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3389,7 +4084,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "pu-other" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -3403,6 +4098,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result?.state).toEqual({
         title: "Request",
         requestedFor: "pu-other",
+        _completionIdentity: expect.any(Object),
       })
     })
 
@@ -3439,7 +4135,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3495,7 +4191,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { approvers: [{ requestedFor: "pu-other" }] },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3542,7 +4238,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { target: { kind: "note", requestedFor: "free text" } },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           return yield* db.getProcessStateByExecutionId(activeTodo.executionId)
         }),
@@ -3552,6 +4248,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
 
       expect(result?.state).toEqual({
         target: { kind: "note", requestedFor: "free text" },
+        _completionIdentity: expect.any(Object),
       })
     })
 
@@ -3583,7 +4280,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3641,7 +4338,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "other@example.com" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3691,7 +4388,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request", requestedFor: "unknown@example.com" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(Effect.flip)
           const processState = yield* db.getProcessStateByExecutionId(
             activeTodo.executionId,
@@ -3716,9 +4413,9 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
     it("retries the full completion after a state conflict", async () => {
       const enqueuedJobs: EnqueuedJob[] = []
       const completionLogs: Array<Record<string, unknown>> = []
-      const capturingLogger = Logger.make(({ message, annotations }) => {
+      const capturingLogger = Logger.make(({ message, fiber }) => {
         if (String(message) === "Completing step transaction") {
-          completionLogs.push(Object.fromEntries(annotations))
+          completionLogs.push(fiber.getRef(References.CurrentLogAnnotations))
         }
       })
       const seed = makeSupportingRoleTodoOrganisation(
@@ -3744,7 +4441,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           })
           const operations = yield* StepCompletionOperations
           let stateUpdateAttempts = 0
-          const retryingOperations: StepCompletionOperations["Type"] = {
+          const retryingOperations: StepCompletionOperations["Service"] = {
             ...operations,
             updateProcessStateIfUnchanged: (stateId, updatedAt, state) =>
               Effect.gen(function* () {
@@ -3765,13 +4462,11 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(
             Effect.provideService(StepCompletionOperations, retryingOperations),
-            Effect.provide(
-              Logger.replace(Logger.defaultLogger, capturingLogger),
-            ),
-            Logger.withMinimumLogLevel(LogLevel.Info),
+            Effect.provide(Logger.layer([capturingLogger])),
+            Effect.provideService(References.MinimumLogLevel, "Info"),
           )
           const processState = yield* db.getProcessStateByExecutionId(
             todo.executionId,
@@ -3806,7 +4501,10 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           completeStepRetryCount: 1,
         },
       ])
-      expect(result.processState?.state).toEqual({ title: "Request" })
+      expect(result.processState?.state).toEqual({
+        title: "Request",
+        _completionIdentity: expect.any(Object),
+      })
       expect(result.scheduledFlowIds).toEqual([result.todoId])
       expect(enqueuedJobs).toHaveLength(4)
       expect(
@@ -3844,7 +4542,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           )
           const completions = yield* Effect.all([complete, complete], {
             concurrency: "unbounded",
@@ -3868,7 +4566,10 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
 
       expect(result.completions).toHaveLength(2)
       expect(result.transactionAttempts).toBeGreaterThanOrEqual(2)
-      expect(result.processState?.state).toEqual({ title: "Request" })
+      expect(result.processState?.state).toEqual({
+        title: "Request",
+        _completionIdentity: expect.any(Object),
+      })
       expect(result.scheduledFlowIds).toHaveLength(1)
       expect(enqueuedJobs).toHaveLength(4)
       expect(
@@ -3879,9 +4580,9 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
     it("preserves both state patches from overlapping todo completions", async () => {
       const enqueuedJobs: EnqueuedJob[] = []
       const completionLogs: Array<Record<string, unknown>> = []
-      const capturingLogger = Logger.make(({ message, annotations }) => {
+      const capturingLogger = Logger.make(({ message, fiber }) => {
         if (String(message) === "Completing step transaction") {
-          completionLogs.push(Object.fromEntries(annotations))
+          completionLogs.push(fiber.getRef(References.CurrentLogAnnotations))
         }
       })
       const seed = makeOverlappingTodoOrganisation(
@@ -3925,7 +4626,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           )
           const bothInitialStatesRead = yield* Deferred.make<void>()
           let initialStateReads = 0
-          const overlappingOperations: StepCompletionOperations["Type"] = {
+          const overlappingOperations: StepCompletionOperations["Service"] = {
             ...operations,
             getProcessStateByTodoId: (todoId) =>
               operations.getProcessStateByTodoId(todoId).pipe(
@@ -3950,14 +4651,14 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                 { givenName: "Ada" },
                 seed.givenName,
                 seed.givenName.submissionEffectSchema,
-                context,
+                executionIdentity(context),
               ),
               completeStep(
                 secondTodoId,
                 { familyName: "Lovelace" },
                 seed.familyName,
                 seed.familyName.submissionEffectSchema,
-                context,
+                executionIdentity(context),
               ),
             ],
             { concurrency: "unbounded" },
@@ -3967,10 +4668,8 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
               overlappingOperations,
             ),
             Effect.provideService(SqlClient.SqlClient, concurrent.client),
-            Effect.provide(
-              Logger.replace(Logger.defaultLogger, capturingLogger),
-            ),
-            Logger.withMinimumLogLevel(LogLevel.Info),
+            Effect.provide(Logger.layer([capturingLogger])),
+            Effect.provideService(References.MinimumLogLevel, "Info"),
           )
           const processState = yield* db.getProcessStateByExecutionId(
             firstTodo.executionId,
@@ -3999,6 +4698,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(result.processState?.state).toEqual({
         givenName: "Ada",
         familyName: "Lovelace",
+        _completionIdentity: expect.any(Object),
       })
       expect(enqueuedJobs).toHaveLength(8)
     })
@@ -4032,7 +4732,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
               { title: "Request" },
               seed.form,
               seed.form.submissionEffectSchema,
-              context,
+              executionIdentity(context),
             )
           const first = yield* complete()
           const replayed = yield* complete()
@@ -4049,9 +4749,205 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       )
 
       expect(result.replayed).toEqual(result.first)
-      expect(result.processState?.state).toEqual({ title: "Request" })
+      expect(result.processState?.state).toEqual({
+        title: "Request",
+        _completionIdentity: expect.any(Object),
+      })
       expect(result.scheduledFlowIds).toHaveLength(1)
       expect(enqueuedJobs).toHaveLength(4)
+    })
+
+    it("recovers a chat completion after the same caller signs in with a supporting role", async () => {
+      const enqueuedJobs: EnqueuedJob[] = []
+      const seed = makeSupportingRoleTodoOrganisation(
+        `${db.name}-chat-replay-${uniqueSuffix()}`,
+      )
+      const email = "employee@example.com"
+      const result = await runDbEffect(
+        db,
+        enqueuedJobs,
+        Effect.gen(function* () {
+          const todo = yield* seedActiveTodo(db, {
+            organisation: seed.org,
+            orgUnitPath: seed.orgUnitPath,
+            rolePath: seed.rolePath,
+            processPath: seed.processPath,
+            startStepPath: seed.startStepPath,
+            todoStepPath: seed.todoStepPath,
+            providerEmail: email,
+          })
+          const submit = (role: string, title: string) => {
+            const identity = executionIdentity(
+              makeContext(email, role, seed.orgUnitPath),
+            )
+            return completeTodoFromChat({
+              todoId: todo.todoId,
+              input: { title },
+              // New sign-ins have different JWT subjects, even for the same user.
+              identity: {
+                ...identity,
+                subject:
+                  role === seed.rolePath
+                    ? "providerUser:first"
+                    : "providerUser:new",
+              },
+            }).pipe(Effect.provide(OrganisationProviderTest(seed.org)))
+          }
+          const accepted = yield* submit(seed.rolePath, "Original")
+          const replayed = yield* submit(seed.supportingRolePath, "Original")
+          const changed = yield* submit(
+            seed.supportingRolePath,
+            "Changed",
+          ).pipe(Effect.flip)
+          const unauthorized = yield* submit("/unrelated", "Original").pipe(
+            Effect.flip,
+          )
+          const stored = yield* db.getTodoById(todo.todoId)
+          const originalRoleId = yield* db.getRoleIdByPath(seed.rolePath)
+          return {
+            accepted,
+            replayed,
+            changed,
+            unauthorized,
+            stored,
+            originalRoleId,
+          }
+        }),
+        true,
+        LocalCedarAuthorizationLive.pipe(
+          Layer.provide(LocalCedarConfigDefault()),
+        ),
+      )
+      expect(result.replayed).toEqual(result.accepted)
+      expect(result.changed).toBeInstanceOf(StepCompletionConflictError)
+      expect(result.unauthorized).toBeInstanceOf(NotAuthorized)
+      expect(result.stored?.completedByRoleId).toBe(result.originalRoleId)
+      expect(enqueuedJobs).toHaveLength(4)
+    })
+
+    it("completes a chat form without the Dashboard when nullable answers are null", async () => {
+      const seed = makeSupportingRoleTodoOrganisation(
+        `${db.name}-nullable-chat-${uniqueSuffix()}`,
+        true,
+      )
+      await runDbEffect(
+        db,
+        [],
+        Effect.gen(function* () {
+          const todo = yield* seedActiveTodo(db, {
+            organisation: seed.org,
+            orgUnitPath: seed.orgUnitPath,
+            rolePath: seed.rolePath,
+            processPath: seed.processPath,
+            startStepPath: seed.startStepPath,
+            todoStepPath: seed.todoStepPath,
+          })
+          const identity = executionIdentity(
+            makeContext(
+              "employee@example.com",
+              seed.rolePath,
+              seed.orgUnitPath,
+            ),
+          )
+          const input = { title: "Request", choice: null, evidence: null }
+          const inspected = yield* inspectTodoForm({
+            todoId: todo.todoId,
+            input,
+            identity,
+          })
+          expect(inspected).toMatchObject({ needsDashboard: false, errors: [] })
+          expect(inspected.fields).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                name: "items",
+                defaultValue: null,
+                required: true,
+              }),
+              expect.objectContaining({
+                name: "choice",
+                choices: [{ value: "A" }, { value: "B" }, { value: null }],
+                required: true,
+              }),
+            ]),
+          )
+          expect(inspected.fields).not.toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ name: "evidence.document" }),
+            ]),
+          )
+          const omitted = yield* inspectTodoForm({
+            todoId: todo.todoId,
+            input: { title: input.title },
+            identity,
+          })
+          expect(omitted).toMatchObject({
+            needsDashboard: false,
+            errors: expect.arrayContaining([
+              expect.objectContaining({ field: "choice" }),
+              expect.objectContaining({ field: "evidence" }),
+            ]),
+            fields: expect.arrayContaining([
+              expect.objectContaining({ name: "choice", required: true }),
+              expect.objectContaining({
+                name: "evidence",
+                required: true,
+                choices: [{ value: null }],
+              }),
+              expect.objectContaining({
+                name: "evidence.document",
+                label: "Document",
+                whenObjectSupplied: ["evidence"],
+                required: false,
+                requiredWhenObjectSupplied: true,
+                needsDashboard: false,
+              }),
+              expect.objectContaining({
+                name: "evidence.reason",
+                label: "Reason for supplying evidence",
+                whenObjectSupplied: ["evidence"],
+                required: false,
+                requiredWhenObjectSupplied: true,
+                supported: true,
+              }),
+            ]),
+          })
+          const evidenceRequired = yield* inspectTodoForm({
+            todoId: todo.todoId,
+            input: { ...input, evidence: {} },
+            identity,
+          })
+          expect(evidenceRequired).toMatchObject({
+            needsDashboard: true,
+            fields: expect.arrayContaining([
+              expect.objectContaining({
+                name: "evidence.document",
+                required: true,
+                needsDashboard: true,
+              }),
+            ]),
+          })
+          const handoff = yield* inspectTodoForm({
+            todoId: todo.todoId,
+            input: { ...input, items: [{ name: "Unsupported value" }] },
+            identity,
+          })
+          expect(handoff.needsDashboard).toBe(true)
+          yield* completeTodoFromChat({
+            todoId: todo.todoId,
+            input: { ...input, items: null },
+            identity,
+          })
+          const stored = yield* db.getProcessStateByExecutionId(
+            todo.executionId,
+          )
+          expect(stored?.state).toMatchObject({ title: "Request" })
+          expect(
+            yield* db.getScheduledFlowIdsForExecution(todo.executionId),
+          ).toHaveLength(1)
+        }).pipe(Effect.provide(OrganisationProviderTest(seed.org))),
+        true,
+        makeAuthorizationLayer(),
+      )
     })
 
     it("recovers external enqueue after the completion commit", async () => {
@@ -4099,14 +4995,14 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                   )
                 : queueService.enqueue(queue, payload, enqueueOptions)
             },
-          } as unknown as QueueService["Type"]
+          } as unknown as QueueService["Service"]
           const complete = () =>
             completeStep(
               todo.todoId,
               { title: "Request" },
               seed.form,
               seed.form.submissionEffectSchema,
-              context,
+              executionIdentity(context),
             )
 
           const firstError = yield* complete().pipe(
@@ -4196,14 +5092,14 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
                   message: "Simulated post-commit enqueue failure",
                 }),
               ),
-          } as unknown as QueueService["Type"]
+          } as unknown as QueueService["Service"]
           const complete = () =>
             completeStep(
               todo.todoId,
               { title: "Request" },
               seed.form,
               seed.form.submissionEffectSchema,
-              context,
+              executionIdentity(context),
             )
 
           yield* complete().pipe(
@@ -4257,7 +5153,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
+            executionIdentity(context),
           ).pipe(
             Effect.provideService(SqlClient.SqlClient, concurrent.client),
             Effect.flip,
@@ -4314,7 +5210,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           })
           const operations = yield* StepCompletionOperations
           let todoCompletionAttempts = 0
-          const retryingOperations: StepCompletionOperations["Type"] = {
+          const retryingOperations: StepCompletionOperations["Service"] = {
             ...operations,
             completeToDoIfOpen: (completion) =>
               Effect.gen(function* () {
@@ -4330,8 +5226,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
-            { completingRolePath: seed.rolePath },
+            executionIdentity(context),
           ).pipe(
             Effect.provideService(StepCompletionOperations, retryingOperations),
           )
@@ -4389,7 +5284,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Request" },
             seed.form.submissionEffectSchema,
             seed.form,
-            context,
+            executionIdentity(context),
             { completingRolePath: seed.supportingRolePath },
           )
           const sf = yield* db.getFirstScheduledFlowForExecution(
@@ -4425,7 +5320,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
       expect(enqueuedJobs[1]?.queue).toBe(EXECUTION_EVENT_QUEUE)
     })
 
-    it("stores completingRolePath on to_do when completing a step", async () => {
+    it("completes a Todo through an exact Step Cedar grant and records the authorized supporting role", async () => {
       const enqueuedJobs: EnqueuedJob[] = []
       const suffix = `${db.name}-sr-todo-${uniqueSuffix()}`
       const seed = makeSupportingRoleTodoOrganisation(suffix)
@@ -4461,8 +5356,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             { title: "Done" },
             seed.form,
             seed.form.submissionEffectSchema,
-            context,
-            { completingRolePath: seed.supportingRolePath },
+            executionIdentity(context),
           )
           const storedTodo = yield* db.getTodoById(todo.todoId)
           const managerRoleId = yield* db.getRoleIdByPath(
@@ -4477,7 +5371,29 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           }
         }),
         true,
-        makeAuthorizationLayer(),
+        LocalCedarAuthorizationLive.pipe(
+          Layer.provide(
+            Layer.effect(
+              LocalCedarConfig,
+              Effect.gen(function* () {
+                const defaults = yield* LocalCedarConfig
+                return {
+                  ...defaults,
+                  policiesText: [
+                    `permit (
+                  principal == PF::ProviderUser::"employee@example.com",
+                  action == PF::Action::"complete",
+                  resource == PF::Step::"${seed.todoStepPath}"
+                ) when {
+                  resource has role &&
+                  resource.role == PF::Role::"${seed.supportingRolePath}"
+                };`,
+                  ],
+                }
+              }),
+            ).pipe(Layer.provide(LocalCedarConfigDefault())),
+          ),
+        ),
       )
 
       expect(result.storedTodo).not.toBeNull()
@@ -4520,7 +5436,7 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
             `${seed.startStepPath}/missing`,
             {},
             { trigger: "human" },
-          ).pipe(Effect.either)
+          ).pipe(Effect.result)
         }),
         true,
         makeBusinessMetricDimensionsLayer({
@@ -4531,22 +5447,17 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
         }),
       )
 
-      const series = Metric.globalMetricRegistry
-        .snapshot()
-        .filter(
-          (pair) =>
-            pair.metricKey.name === "pf.business.process.starts" &&
-            pair.metricKey.tags.some(
-              (label) => label.key === "pf_project" && label.value === project,
-            ),
-        )
+      const series = (await Effect.runPromise(Metric.snapshot)).filter(
+        (metric) =>
+          metric.id === "pf.business.process.starts" &&
+          metric.attributes?.["pf_project"] === project,
+      )
       expect(series).toHaveLength(1)
-      const counter = series[0]?.metricState
-      expect(MetricState.isCounterState(counter)).toBe(true)
-      if (!MetricState.isCounterState(counter)) {
+      const counter = series[0]
+      expect(counter?.type).toBe("Counter")
+      if (counter?.type !== "Counter")
         throw new Error("Expected process starts to be a counter")
-      }
-      expect(counter.count).toBe(1)
+      expect(counter.state.count).toBe(1)
     })
 
     it("keeps ordinary starts on the flow-execution path", async () => {
@@ -4979,8 +5890,8 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
           const processState =
             yield* db.getProcessStateByExecutionId(executionId)
           if (processState === null) {
-            return yield* Effect.dieMessage(
-              "Expected process state after start",
+            return yield* Effect.die(
+              new Error("Expected process state after start"),
             )
           }
           const stepCompletionOps = yield* StepCompletionOperations
@@ -5151,7 +6062,7 @@ businessMetricsIntegrationIt(
       ),
       exportIntervalMillis: 60_000,
     })
-    const telemetryLayer = Otel.NodeSdk.layer(() => ({
+    const telemetryLayer = NodeSdk.layer(() => ({
       resource: { serviceName: "process-start-analytics-integration" },
       metricReader,
     }))
@@ -5252,7 +6163,7 @@ businessMetricsIntegrationIt(
             `${seed.startStepPath}/missing`,
             {},
             { trigger: "human" },
-          ).pipe(Effect.either)
+          ).pipe(Effect.result)
           yield* startProcessExecution(
             seed.processId,
             seed.processPath,
@@ -5450,7 +6361,7 @@ businessMetricsIntegrationIt(
       ),
       exportIntervalMillis: 60_000,
     })
-    const telemetry = Otel.NodeSdk.layer(() => ({
+    const telemetry = NodeSdk.layer(() => ({
       resource: { serviceName: "step-completion-analytics-integration" },
       metricReader,
     }))
@@ -5504,7 +6415,7 @@ businessMetricsIntegrationIt(
                 { title: "Request" },
                 seed.form,
                 seed.form.submissionEffectSchema,
-                context,
+                executionIdentity(context),
               )
               const queue = yield* QueueService
               // The real completion writes are rolled back when transactional enqueue fails.
@@ -5519,9 +6430,9 @@ businessMetricsIntegrationIt(
                       }),
                     ),
                 }),
-                Effect.either,
+                Effect.result,
               )
-              expect(Either.isLeft(rejected)).toBe(true)
+              expect(Result.isFailure(rejected)).toBe(true)
               expect(
                 (yield* (yield* StepCompletionOperations).queryTodoForCompletionById(
                   todo.todoId,
@@ -5538,7 +6449,7 @@ businessMetricsIntegrationIt(
               )
               expect(concurrent.transactionAttempts()).toBe(2)
               // Replaying a completed human todo must not increase the successful count.
-              yield* complete.pipe(Effect.either)
+              yield* complete.pipe(Effect.result)
               expect(
                 (yield* (yield* StepCompletionOperations).queryTodoForCompletionById(
                   todo.todoId,
@@ -5621,19 +6532,10 @@ businessMetricsIntegrationIt(
                 asyncTodo.todoId,
               )
               if (!todoInfo)
-                return yield* Effect.dieMessage("Missing callback todo")
+                return yield* Effect.die(new Error("Missing callback todo"))
               const callback = completeAsyncSystemStep({
                 todoId: asyncTodo.todoId,
-                stepPath: todoInfo.targetStepPath,
                 output: {},
-                todoInfo,
-                isForEach: false,
-                queueService: queue,
-                stepCompletionOps,
-                scheduledFlowOps: yield* ScheduledFlowOperations,
-                flowExecutionOps: yield* FlowExecutionOperations,
-                calendarQueries: yield* BusinessCalendarQueries,
-                sqlClient,
               })
               expect(yield* callback).toBe(true)
               expect(yield* callback).toBe(false)
@@ -5848,7 +6750,7 @@ it.each(["start", "completion"])(
                 { value },
                 next,
                 next.submissionEffectSchema,
-                context,
+                executionIdentity(context),
               )
             } else {
               yield* startProcess(
@@ -5858,7 +6760,7 @@ it.each(["start", "completion"])(
                 { value },
                 first.submissionEffectSchema,
                 first,
-                context,
+                executionIdentity(context),
                 { executionId },
               )
             }

@@ -1,5 +1,6 @@
 export { authenticateClient } from "./endpoints/_internal/client-authentication"
 export { generateTokens } from "./endpoints/_internal/token-generation"
+export { OAuthEndpointError } from "./endpoints/errors"
 export {
   type AllowCallbackInput,
   type AuthorizationState,

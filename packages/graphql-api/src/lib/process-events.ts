@@ -5,6 +5,9 @@ import type { ProcessPullBulk } from "@pf/graphql-schema"
 /**
  * Event emitted when processes change.
  * Contains the changed documents and checkpoint for efficient streaming.
+ * Statistics are shared from this event snapshot. Delivery reloads current
+ * metadata and authorizes each recipient before disclosing content, retaining
+ * the snapshot revision for live documents and current revisions for removals.
  */
 export type ProcessChangeEvent = ProcessPullBulk
 
@@ -20,7 +23,7 @@ class SubscriptionNotSupportedError extends Data.TaggedError(
 /**
  * Service for broadcasting process changes to WebSocket subscribers
  */
-export class ProcessEvents extends Context.Tag("@pf/graphql-api/ProcessEvents")<
+export class ProcessEvents extends Context.Service<
   ProcessEvents,
   {
     /**
@@ -46,4 +49,4 @@ export class ProcessEvents extends Context.Tag("@pf/graphql-api/ProcessEvents")<
       SubscriptionNotSupportedError
     >
   }
->() {}
+>()("@pf/graphql-api/ProcessEvents") {}

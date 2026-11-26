@@ -28,7 +28,7 @@ const todoUpdatedAtMillis = sql<number>`CAST(ROUND((${schema.toDo.updatedAt} - 2
  * Build the base todo query with SELECT + FROM + JOINs.
  * Callers add WHERE/ORDER BY/LIMIT as needed.
  */
-const buildTodoBaseQuery = (db: TypedSqliteDrizzle["Type"]) =>
+const buildTodoBaseQuery = (db: TypedSqliteDrizzle["Service"]) =>
   db
     .select({
       id: schema.toDo.id,
@@ -110,8 +110,8 @@ const mapRowToTodo = (row: TodoQueryRow): TodoRow => ({
     : row.deleted
       ? "Completed"
       : "Active",
-  priority: "Medium", // Phase 1: default value
-  assignedAt: row.createdAt, // Now ISO string
+  priority: "Medium",
+  assignedAt: row.createdAt,
   dueAt: row.slaTargetAt, // Pre-calculated from SLA at todo creation
   dueWarningAt: row.slaWarningAt, // Pre-calculated from SLA at todo creation
   formComplexity: calculateFormComplexity(row.formFields),

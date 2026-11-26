@@ -1,6 +1,7 @@
 import { Effect } from "effect"
 import { AlertCircle } from "lucide-react"
 import { Suspense } from "react"
+import { ListProcessDialog } from "../lib/list-process-dialog"
 import { ListControlsClient, ListTableClient } from "./list-page-client"
 import { getSessionWithToken } from "@/lib/auth/session"
 import { BasePage, runEffect } from "@/lib/effect/runtime"
@@ -15,6 +16,9 @@ import {
   parseListSort,
 } from "@/lib/graphql/list-queries"
 import { createServerGraphqlClient } from "@/lib/graphql/server-client"
+
+// The authenticated shell can omit this page while checking the session.
+export const instant = false
 
 interface PageProps {
   readonly params: Promise<{ readonly listPath: readonly string[] }>
@@ -118,7 +122,7 @@ async function ListDataSection({
 
   const sort = parseListSort(sortField, sortDirection)
   const session = await runEffect(
-    getSessionWithToken.pipe(Effect.catchAll(() => Effect.succeed(null))),
+    getSessionWithToken.pipe(Effect.catch(() => Effect.succeed(null))),
   )
 
   if (!session) {
@@ -145,6 +149,7 @@ async function ListDataSection({
         currentList={currentList}
         listPath={listPath}
         listResult={listResult}
+        filter={filter}
         sort={sort}
       />
     )
@@ -179,7 +184,7 @@ const ListPage = Effect.fn("ListPage")(function* (props: PageProps) {
     )
     .pipe(
       Effect.map((data) => data.availableLists),
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.sync(() => {
           console.error("Failed to load available lists", error)
           return null
@@ -199,6 +204,9 @@ const ListPage = Effect.fn("ListPage")(function* (props: PageProps) {
 
   return (
     <div className="container mx-auto py-6">
+      <Suspense fallback={null}>
+        <ListProcessDialog listPath={listPath} />
+      </Suspense>
       {/* ListControlsClient reads URL state with useSearchParams. */}
       <Suspense fallback={<ListControlsSkeleton currentList={currentList} />}>
         <ListControlsClient

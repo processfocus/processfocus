@@ -5,7 +5,6 @@
     "default": [
       "{projectRoot}/**/*",
       "!{projectRoot}/drizzle.config.ts",
-      "!{projectRoot}/CLAUDE.md",
       "!{projectRoot}/AGENTS.md",
       "sharedGlobals"
     ],
@@ -39,7 +38,7 @@
     },
     {
       "plugin": "@nx/js/typescript",
-      "exclude": ["fixtures/external-plugins/*/host/**"],
+      "exclude": ["fixtures/external-plugins/*/host/**", "apps/www/**"],
       "options": {
         "compiler": "tsgo",
         "typecheck": {
@@ -132,7 +131,12 @@
       "cache": true
     },
     "lint": {
-      "cache": true
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/biome.jsonc"
+      ]
     },
     "pack-check": {
       "cache": true
@@ -154,6 +158,9 @@
     }
   },
   "analytics": true,
+  "affected": {
+    "legacy": false
+  },
   "release": {
     "groups": {
       "public": {

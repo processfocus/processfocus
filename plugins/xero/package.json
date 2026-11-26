@@ -46,9 +46,9 @@
     "!**/*.tsbuildinfo"
   ],
   "dependencies": {
-    "@effect/platform": "^0.97.2",
     "@pf/process": "workspace:*",
-    "effect": "^3.22.2"
+    "@processfocus/runtime": "workspace:*",
+    "effect": "4.1.4"
   },
   "publishConfig": {
     "access": "public",

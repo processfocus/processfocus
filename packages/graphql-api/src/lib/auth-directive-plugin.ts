@@ -12,13 +12,17 @@ import {
   GraphQLField,
   ProviderUserPrincipal,
   ServiceAccountPrincipal,
+  Step,
 } from "@pf/auth-policy"
+import { StepRoleQueries } from "@pf/graphql-db-operations"
 import { NotAuthorized } from "@pf/graphql-schema"
 import { delegatedRealtimeEnabled } from "./delegated-realtime"
+import { isProcessPermissionResolver } from "./dynamic-resolvers"
 import {
   type ResolverExecutor,
   type ResolverExecutorContext,
   buildCurrentPrincipal,
+  getProcessPathFromStepPath,
 } from "./resolver-utils"
 import {
   hasDelegation,
@@ -159,7 +163,7 @@ const liftResolverResult = (
  * Transform schema to add authorization checks for fields with @auth directive.
  *
  * Auth and the original resolver are composed as one Effect and executed with a
- * single {@link ResolverExecutor.runWithFieldContext} call so FiberRef scoping
+ * single {@link ResolverExecutor.runWithFieldContext} call so scoping
  * and fiber lifecycle are not duplicated.
  *
  * The executor must be built at the ManagedRuntime boundary; this function does
@@ -170,12 +174,33 @@ export const transformSchemaWithAuthDirective = <R>(
   executor: ResolverExecutor<R>,
 ): GraphQLSchema => {
   return mapSchema(schema, {
-    [MapperKind.OBJECT_FIELD]: (
+    [MapperKind.COMPOSITE_FIELD]: (
       fieldConfig: GraphQLFieldConfig<unknown, UserContext>,
       fieldName: string,
       typeName: string,
     ): GraphQLFieldConfig<unknown, UserContext> => {
-      // Only apply to root operation types
+      const fieldKey = `${typeName}.${fieldName}`
+      const processPermission =
+        (getDirective(schema, fieldConfig, "processPermission")?.length ?? 0) >
+        0
+      if (processPermission) {
+        if (getDirective(schema, fieldConfig, "auth")?.length) {
+          throw new Error(
+            `@processPermission on ${fieldKey} cannot be combined with @auth`,
+          )
+        }
+        if (
+          typeName !== "Mutation" ||
+          typeName !== schema.getMutationType()?.name ||
+          !isProcessPermissionResolver(fieldName, fieldConfig.resolve)
+        ) {
+          throw new Error(
+            `@processPermission on ${fieldKey} requires a generated process command resolver`,
+          )
+        }
+      }
+
+      // Only wrap root operation types
       if (
         typeName !== "Query" &&
         typeName !== "Mutation" &&
@@ -184,7 +209,6 @@ export const transformSchemaWithAuthDirective = <R>(
         return fieldConfig
       }
 
-      const fieldKey = `${typeName}.${fieldName}`
       const cachedResult = getCachedDirective(schema, fieldKey)
 
       let authDirective: { tag?: string; action?: FeatureAction } | undefined
@@ -212,11 +236,19 @@ export const transformSchemaWithAuthDirective = <R>(
         )
       }
 
-      // All Query/Mutation/Subscription fields go through Cedar
+      // Unmarked root fields authorize here; marked mutations authorize inside
+      // the process command using live execution facts.
       // tag is optional - only set if @auth(tag: "...") directive is present
       // action is optional - for feature-based authorization
       const tag = authDirective?.tag
       const featureAction = authDirective?.action
+      // Generated SDL binds an operation to its actual Step, never to an
+      // access category. Eligibility comes from persisted step attributes.
+      const stepDirective = getDirective(schema, fieldConfig, "step")?.[0]
+      const stepPath =
+        typeof stepDirective?.["path"] === "string"
+          ? stepDirective["path"]
+          : undefined
       // Subscribe must be authorized before acquiring a source, as well as resolve.
       const wrapAuthorized =
         (
@@ -231,6 +263,46 @@ export const transformSchemaWithAuthDirective = <R>(
 
           const authCheck = Effect.gen(function* () {
             if (
+              context.jwt?.properties &&
+              "awsRole" in context.jwt.properties &&
+              (fieldName === "requestRole" || operationType === "subscription")
+            ) {
+              yield* rejectUnsupportedDelegationHandoff(
+                context.jwt.properties,
+                fieldName,
+              )
+            }
+            if (
+              (context.jwt?.properties.workload ||
+                (context.jwt?.properties &&
+                  "awsRole" in context.jwt.properties)) &&
+              ((operationType === "mutation" &&
+                featureAction?.startsWith("administer") &&
+                // Preferences neither issue credentials nor change authority.
+                // The ordinary Cedar feature check below still applies.
+                fieldName !== "updateNotificationPreferences" &&
+                // Non-production workload setup may invite fresh users through
+                // normal registration. This never authorizes the operation:
+                // administerUsers still passes through Cedar below.
+                !(
+                  context.jwt?.properties.workload &&
+                  isServiceAccountSession(context.jwt.properties) &&
+                  process.env["PF_STAGE"] &&
+                  process.env["PF_STAGE"] !== "production" &&
+                  process.env["PF_STAGE"] !== "prod" &&
+                  ["createInvitation", "generateRegistrationLink"].includes(
+                    fieldName,
+                  )
+                )) ||
+                featureAction === "databaseShell")
+            ) {
+              return yield* new NotAuthorized({
+                action: fieldName,
+                resource: fieldKey,
+                message: "Workload access cannot administer credentials",
+              })
+            }
+            if (
               (operationType === "subscription" &&
                 !(yield* delegatedRealtimeEnabled)) ||
               [
@@ -238,7 +310,6 @@ export const transformSchemaWithAuthDirective = <R>(
                 "requestDownloadUrl",
                 "requestUploadUrl",
                 "requestDatabaseUploadUrl",
-                "requestProviderUserPermissions",
                 "exportListCsv",
               ].includes(fieldName)
             ) {
@@ -247,6 +318,17 @@ export const transformSchemaWithAuthDirective = <R>(
                 fieldName,
               )
             }
+            if (processPermission) {
+              if (!context.jwt) {
+                return yield* new NotAuthorized({
+                  action: operationType,
+                  resource: fieldKey,
+                  message: "Authentication is required",
+                })
+              }
+              return
+            }
+
             const auth = yield* AuthorizationService
 
             let allowed: boolean
@@ -260,7 +342,19 @@ export const transformSchemaWithAuthDirective = <R>(
               )
             } else {
               // Tag-based authorization: use field with optional tag
-              const resource = new GraphQLField(fieldKey, tag)
+              let step: Step | undefined
+              if (stepPath) {
+                const queries = yield* StepRoleQueries
+                const info = yield* queries.queryRolePathsByStepPath(stepPath)
+                step = new Step({
+                  stepPath,
+                  processPath: getProcessPathFromStepPath(stepPath),
+                  rolePath: info.rolePath,
+                  startsProcess: info.startsProcess,
+                  embedded: info.embedded,
+                })
+              }
+              const resource = new GraphQLField(fieldKey, tag, step)
               allowed = yield* auth.canAccessField(
                 principal,
                 resource,
@@ -325,7 +419,7 @@ export const transformSchemaWithAuthDirective = <R>(
           // Auth needs AuthorizationService; the executor's closed-over R must
           // provide it (ResolverRuntime does). GraphQL's erase of field Effect
           // requirements means we assert coverage here rather than free-quantify R.
-          const composed = authCheck.pipe(Effect.zipRight(resolverEffect))
+          const composed = authCheck.pipe(Effect.andThen(resolverEffect))
 
           return executor.runWithFieldContext(
             composed as Effect.Effect<
@@ -339,6 +433,7 @@ export const transformSchemaWithAuthDirective = <R>(
               parentSpan,
               requestTime: context._requestTime,
               userDetails: context._userDetails,
+              session: context.jwt?.properties,
               principal: buildCurrentPrincipal(context),
               signal: context._realtimeAbortSignal,
               // Neutral label: failures may be auth or post-auth resolver body.

@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto"
-import type { SqlError } from "@effect/sql/SqlError"
-import { Effect } from "effect"
+import {
+  type DocumentStoreError,
+  DocumentStoreService,
+} from "@processfocus/runtime"
+import { Clock, Effect, Option } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 import {
   Application,
   type AuthorizationError,
   AuthorizationService,
   type ProviderUserPrincipal,
   type ServiceAccountPrincipal,
+  WorkloadDatabaseUploadAccess,
 } from "@pf/auth-policy"
-import {
-  type DocumentStoreError,
-  DocumentStoreService,
-} from "@pf/document-store-service"
 import { FileOperations } from "@pf/graphql-db-operations"
 import {
   DocumentStoreNotFoundError,
@@ -20,7 +21,7 @@ import {
   NotAuthorized,
 } from "@pf/graphql-schema"
 import type { RequestTime } from "@pf/request-time"
-import { buildPrincipal } from "./authorization"
+import { buildStepPrincipal } from "./authorization"
 import { rejectUnsupportedDelegationHandoff } from "./session-guards"
 import type { UserContext } from "./types"
 
@@ -160,25 +161,64 @@ export const requestDatabaseUploadUrl = (
     const fileOps = yield* FileOperations
     const docStoreService = yield* DocumentStoreService
     const store = yield* databaseTransferStore
-    const principal = yield* buildPrincipal(context)
+    const principal = yield* buildStepPrincipal(context)
     yield* checkDatabaseTransferAuthorization(principal)
     const target = yield* validateTarget(args)
 
+    if (principal.uid.type === "PF::ServiceAccount") {
+      const access = yield* Effect.serviceOption(WorkloadDatabaseUploadAccess)
+      if (
+        !principal.roles.some(
+          (role) => role.id === "/Workload database-upload",
+        ) ||
+        Option.isNone(access) ||
+        !(yield* access.value.permits(
+          principal.uid.id,
+          target.project,
+          target.env,
+        ))
+      )
+        return yield* new NotAuthorized({
+          action: "databaseTransfer",
+          resource: "upload",
+          message: "Project environment not authorized",
+        })
+    }
     const contentType = yield* validateContentType(
       args.contentType ?? DATABASE_TRANSFER_DEFAULT_CONTENT_TYPE,
     )
     const fileId = yield* fileOps.createFile(
       store.id,
       contentType,
-      principalId(principal),
+      principal.uid.type === "PF::ServiceAccount"
+        ? `service-account:${principal.uid.id}`
+        : principalId(principal),
     )
 
+    const deadline = context.jwt?.properties.workload
+      ? Math.min(
+          context.jwt.properties.workload.expiresAt,
+          context.jwt.exp * 1000,
+        )
+      : undefined
     const upload = yield* docStoreService.requestUploadUrl({
       fileId,
       storePrefix: store.name,
       contentType,
       ...(args.filename != null && { filename: args.filename }),
+      ...(deadline !== undefined && { expiresAt: deadline }),
     })
+    if (
+      deadline !== undefined &&
+      (!Number.isFinite(Date.parse(upload.expiresAt)) ||
+        Date.parse(upload.expiresAt) > deadline ||
+        Date.parse(upload.expiresAt) <= (yield* Clock.currentTimeMillis))
+    )
+      return yield* new NotAuthorized({
+        action: "databaseTransfer",
+        resource: "upload",
+        message: "Upload capability exceeds workload deadline",
+      })
 
     return {
       // Correlation-only operation ID; no durable transfer operation exists yet.

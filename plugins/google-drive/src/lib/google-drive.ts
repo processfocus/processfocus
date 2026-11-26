@@ -15,7 +15,7 @@ import {
 /**
  * Declares Google Drive as organisation-owned browser and server behavior.
  *
- * Importing the plugin's field API registers its walker in the organisation
+ * Importing the plugin's server entrypoint registers its walker in the organisation
  * bundle realm. This construct makes the matching browser renderer and its
  * build-time stylesheet part of the same organisation artifact.
  */

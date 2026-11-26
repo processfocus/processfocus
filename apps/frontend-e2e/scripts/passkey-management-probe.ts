@@ -4,10 +4,12 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { chromium } from "@playwright/test"
 import { Schema } from "effect"
+import { addVirtualPasskeyAuthenticator } from "../src/steps/virtual-authenticator"
 
 // Run with the private handoff from PASSKEY_MANAGEMENT_PROBE=true
 // bun runtime/local/scripts/delegation-next-runtime.ts. All visible interactions
-// use agent-browser; CDP only supplies independent virtual authenticators.
+// use agent-browser; CDP supplies virtual authenticators, locale/zone emulation
+// and a real touch tap for the timestamp interaction check.
 const handoffPath = process.argv[2]
 const evidence = Schema.decodeUnknownSync(Schema.NonEmptyString)(
   process.argv[3],
@@ -28,10 +30,13 @@ mkdirSync(evidence, { recursive: true })
 const session = `passkeys-${process.pid}`
 const checks: string[] = []
 async function ab(...args: string[]): Promise<string> {
-  const child = Bun.spawn(["agent-browser", "--session", session, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const child = Bun.spawn(
+    ["agent-browser", "--headed", "--session", session, ...args],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
   const [stdout, stderr, code] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -100,6 +105,14 @@ const context = browser.contexts()[0]
 assert(context)
 const page = context.pages().find((p) => p.url().startsWith(handoff.frontend))
 assert(page)
+const hydrationErrors: string[] = []
+page.on("console", (message) => {
+  if (
+    message.type() === "error" &&
+    /hydration|hydrated|server rendered HTML/i.test(message.text())
+  )
+    hydrationErrors.push(message.text())
+})
 const listingReady = new Promise<void>((resolve) => {
   page.on("response", async (response) => {
     if (
@@ -113,21 +126,12 @@ const listingReady = new Promise<void>((resolve) => {
   })
 })
 const cdp = await context.newCDPSession(page)
+await cdp.send("Emulation.setTimezoneOverride", {
+  timezoneId: "America/New_York",
+})
 await cdp.send("WebAuthn.enable")
 async function authenticator() {
-  return (
-    await cdp.send("WebAuthn.addVirtualAuthenticator", {
-      options: {
-        protocol: "ctap2",
-        ctap2Version: "ctap2_1",
-        transport: "internal",
-        hasResidentKey: true,
-        hasUserVerification: true,
-        isUserVerified: true,
-        automaticPresenceSimulation: true,
-      },
-    })
-  ).authenticatorId
+  return addVirtualPasskeyAuthenticator(cdp)
 }
 let active = await authenticator()
 try {
@@ -270,6 +274,107 @@ try {
   record(
     "Both independent credentials sign in to same account; credential-specific last-used recorded; roles and Invitation unchanged",
   )
+  await ab("snapshot", "-i")
+  // Scope to the creation paragraph; last-used is an independent control.
+  const creation = "article:first-of-type p:first-of-type button:has(time)"
+  const lastUsed =
+    "article:first-of-type [data-testid=passkey-last-used] button"
+  assert.match(
+    (await page.locator(creation).getAttribute("aria-label")) ?? "",
+    /Relative time/,
+  )
+  await ab("hover", creation)
+  const tooltip = page
+    .locator("[data-radix-popper-content-wrapper]")
+    .filter({ hasText: "Browser-local:" })
+  assert.equal(
+    await tooltip.evaluate((element) => getComputedStyle(element).visibility),
+    "visible",
+  )
+  assert.match((await tooltip.textContent()) ?? "", /Browser-local:/)
+  await ab("focus", creation)
+  assert.equal(
+    await tooltip.evaluate((element) => getComputedStyle(element).visibility),
+    "visible",
+  )
+  await ab("press", "Escape")
+  assert.equal(await tooltip.count(), 0)
+  await ab("press", "Enter")
+  assert.match(
+    (await page.locator(creation).getAttribute("aria-label")) ?? "",
+    /Browser-local time\. Show UTC/,
+  )
+  assert.match(
+    (await page.locator(lastUsed).getAttribute("aria-label")) ?? "",
+    /Relative time/,
+  )
+  await ab("press", "Space")
+  assert.match(
+    (await page.locator(creation).getAttribute("aria-label")) ?? "",
+    /UTC\. Show Relative time/,
+  )
+  await ab("click", creation)
+  assert.match(
+    (await page.locator(creation).getAttribute("aria-label")) ?? "",
+    /Relative time/,
+  )
+  record(
+    "Passkeys timestamps expose exact hover/focus time; Enter and Space cycle one instance through local and UTC back to relative",
+  )
+  await ab("set", "viewport", "390", "844")
+  await cdp.send("Emulation.setTouchEmulationEnabled", {
+    enabled: true,
+    maxTouchPoints: 1,
+  })
+  await ab("scrollintoview", creation)
+  const box = await page.locator(creation).boundingBox()
+  assert(box)
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }],
+  })
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  })
+  await ab(
+    "wait",
+    "--fn",
+    `document.querySelector(${JSON.stringify(creation)})?.getAttribute('aria-label')?.includes('Browser-local time')`,
+  )
+  assert.match(
+    (await page.locator(lastUsed).getAttribute("aria-label")) ?? "",
+    /Relative time/,
+  )
+  assert(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+    "Touch layout must not overflow horizontally",
+  )
+  await ab("screenshot", join(evidence, "date-time-touch.png"))
+  await ab("reload")
+  await text("Spare key")
+  assert.match(
+    (await page.locator(creation).getAttribute("aria-label")) ?? "",
+    /Relative time/,
+  )
+  record(
+    "390px Chromium touch tap immediately advances to exact local time; last-used is independent and reload resets the mode",
+  )
+  await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false })
+  await ab("set", "viewport", "1440", "1000")
+  await cdp.send("Emulation.setLocaleOverride", { locale: "en-GB" })
+  await ab("reload")
+  await text("Spare key")
+  await ab("click", creation)
+  const localText = await page.locator(`${creation} time`).textContent()
+  assert.match(localText ?? "", /\d{2}:\d{2}/)
+  assert.doesNotMatch(localText ?? "", /AM|PM/)
+  assert.equal(hydrationErrors.length, 0, hydrationErrors.join("\n"))
+  record(
+    "Browser en-GB locale uses the 24-hour clock; no hydration mismatch was reported during the real page journey",
+  )
   // Remove the first row via its visible confirmation.
   const originalRow = baseline.credentials[0]
   assert(originalRow)
@@ -307,7 +412,7 @@ try {
   await ab("open", `${handoff.frontend}/login`)
   await text("Sign in with Passkey")
   await button("Sign in with Passkey")
-  await text("Passkey verification failed")
+  await text("We couldn’t verify this passkey.")
   record("Removed credential rejected by real sign-in ceremony")
   await cdp.send("WebAuthn.removeVirtualAuthenticator", {
     authenticatorId: active,

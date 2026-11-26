@@ -4,7 +4,7 @@ import {
   PUBLIC_SNAPSHOT_ROOT_INPUTS,
   PUBLIC_SOURCE_PROJECT_ROOTS,
   tagsForProjectRoot,
-} from "./policy"
+} from "./policy.js"
 
 export const createNodesV2: CreateNodesV2 = [
   "**/{package.json,project.json}",

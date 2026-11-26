@@ -1,5 +1,5 @@
-import type { SqlError } from "@effect/sql/SqlError"
 import { Context, type Effect } from "effect"
+import type { SqlError } from "effect/sql/SqlError"
 
 /**
  * Timestamp pair from a completed process execution.
@@ -24,9 +24,7 @@ export const DEFAULT_DURATION_SAMPLE_SIZE = 10
 /**
  * Service for querying execution timestamps for duration calculation.
  */
-export class ExecutionDurationQueries extends Context.Tag(
-  "@pf/graphql-db-operations/ExecutionDurationQueries",
-)<
+export class ExecutionDurationQueries extends Context.Service<
   ExecutionDurationQueries,
   {
     /**
@@ -43,4 +41,4 @@ export class ExecutionDurationQueries extends Context.Tag(
       sampleSize: number,
     ) => Effect.Effect<ExecutionTimestampPair[], SqlError>
   }
->() {}
+>()("@pf/graphql-db-operations/ExecutionDurationQueries") {}

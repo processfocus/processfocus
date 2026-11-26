@@ -19,6 +19,9 @@ export const FormMessage = Symbol.for("pf/form/annotation/Message")
 
 export const FormAutoComplete = Symbol.for("pf/form/annotation/AutoComplete")
 
+/** Set to false on a form schema to preserve initial focus instead of focusing its first editable control. */
+export const FormAutoFocus = Symbol.for("pf/form/annotation/AutoFocus")
+
 export const FormNumberInput = Symbol.for("pf/form/annotation/NumberInput")
 
 export const FormDateInput = Symbol.for("pf/form/annotation/DateInput")
@@ -39,6 +42,10 @@ export const FormLookupInput = Symbol.for("pf/form/annotation/LookupInput")
 
 export const FormRadioInput = Symbol.for("pf/form/annotation/RadioInput")
 
+export const FormCheckboxGroupInput = Symbol.for(
+  "pf/form/annotation/CheckboxGroupInput",
+)
+
 export const FormSuggestionInput = Symbol.for(
   "pf/form/annotation/SuggestionInput",
 )
@@ -56,3 +63,6 @@ export const FormStaticText = Symbol.for("pf/form/annotation/StaticText")
 export const FormComponentPluginType = Symbol.for(
   "pf/form/annotation/ComponentPluginType",
 )
+
+/** Public, static renderer options. Server-resolved configuration travels separately. */
+export const FormPluginData = Symbol.for("pf/form/annotation/PluginData")

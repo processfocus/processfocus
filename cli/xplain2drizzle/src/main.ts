@@ -8,12 +8,12 @@ import type { GeneratorError } from "./generator.postgres.js"
 import * as PostgresGenerator from "./generator.postgres.js"
 import * as SqliteGenerator from "./generator.sqlite.js"
 
-const DatabaseTypeSchema = Schema.Literal("postgres", "sqlite")
+const DatabaseTypeSchema = Schema.Literals(["postgres", "sqlite"])
 type DatabaseType = Schema.Schema.Type<typeof DatabaseTypeSchema>
 
 const ParsedArgsSchema = Schema.Struct({
-  inputFile: Schema.String.pipe(Schema.nonEmptyString()),
-  outputFile: Schema.optional(Schema.String.pipe(Schema.nonEmptyString())),
+  inputFile: Schema.NonEmptyString,
+  outputFile: Schema.optional(Schema.NonEmptyString),
   dbType: DatabaseTypeSchema,
   prefix: Schema.optional(Schema.String),
 })
@@ -42,8 +42,7 @@ const parseArgs = (
       catch: () => new InvalidUsageError({ _: undefined }),
     })
 
-    // Validate the entire structure using Schema
-    return yield* Schema.decodeUnknown(ParsedArgsSchema)({
+    return yield* Schema.decodeUnknownEffect(ParsedArgsSchema)({
       inputFile: parseResult.positionals[0],
       outputFile: parseResult.positionals[1],
       dbType: parseResult.values.database,
@@ -123,7 +122,6 @@ const writeFile = (
   Effect.gen(function* () {
     const dir = path.dirname(filePath)
 
-    // Ensure parent directory exists
     yield* Effect.tryPromise({
       try: () => fs.mkdir(dir, { recursive: true }),
       catch: (error): DirectoryCreateError =>
@@ -133,7 +131,6 @@ const writeFile = (
         }),
     })
 
-    // Write the file
     yield* Effect.tryPromise({
       try: () => fs.writeFile(filePath, content, "utf-8"),
       catch: (error): FileWriteError =>
@@ -156,9 +153,6 @@ const displayErrorLines = (lines: string[]): Effect.Effect<void> =>
     },
   )
 
-/**
- * Main program logic
- */
 const runProgram = (
   inputFile: string,
   outputFile: string | undefined,
@@ -272,7 +266,6 @@ const handleError = (error: ProgramError): Effect.Effect<void> =>
 const program = Effect.gen(function* () {
   const args = process.argv.slice(2)
 
-  // Parse and validate arguments
   const { inputFile, outputFile, dbType, prefix } = yield* parseArgs(args).pipe(
     Effect.tapError(() =>
       displayErrorLines([
@@ -293,12 +286,10 @@ const program = Effect.gen(function* () {
     ),
   )
 
-  // Run the program with validated arguments
   yield* runProgram(inputFile, outputFile, dbType, prefix)
 })
 
-// Execute the program
-Effect.runPromise(program.pipe(Effect.catchAll(handleError))).then(
+Effect.runPromise(program.pipe(Effect.catch(handleError))).then(
   () => process.exit(0),
   () => process.exit(1),
 )

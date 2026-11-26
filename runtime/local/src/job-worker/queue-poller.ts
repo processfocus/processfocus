@@ -15,18 +15,34 @@ import {
   Duration as D,
   DateTime,
   Effect,
-  FiberRef,
   Metric,
   Option,
   Random,
   Ref,
   Schedule,
+  type Semaphore,
 } from "effect"
 import * as schema from "@pf/drizzle-sqlite"
-import { ScheduledFlowNotFoundError } from "@pf/job-handler"
+import { ScheduledFlowNotFoundError } from "@pf/process-execution/errors"
 import { RequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
+import { SqliteQueueMaintenance } from "@pf/sqlite-queue-service"
+import {
+  AttemptEscalation,
+  type AttemptPolicy,
+  type InvalidAttemptPolicy,
+  boundedQueueOperation,
+  readAttemptPolicy,
+  runLocalAttempt,
+} from "./attempt-lifecycle"
+import {
+  type InvalidQueueObservationPolicy,
+  type QueueObservation,
+  observeQueueHealth,
+  readQueueObservationPolicy,
+} from "./queue-health"
 import type { JobHandlerMap } from "./types"
+import { reportWorkerActivity } from "./worker-protocol"
 
 /**
  * Sleep for a duration with small symmetric jitter.
@@ -48,7 +64,7 @@ const MAX_SUCCESS_DELAY_JITTER = D.millis(50)
 const PAUSED_POLL_DELAY = D.millis(100)
 const MAX_PAUSED_POLL_JITTER = D.millis(25)
 const SQLITE_BUSY_RETRY_SCHEDULE = Schedule.addDelay(Schedule.recurs(4), () =>
-  D.millis(50),
+  Effect.succeed(D.millis(50)),
 )
 
 export interface LocalQueueWorkerState {
@@ -56,9 +72,21 @@ export interface LocalQueueWorkerState {
   readonly paused: boolean
   readonly pauseToken: string | null
   readonly updatedAt: string
+  readonly escalation?: AttemptEscalation
+  readonly queueObservation?: QueueObservation | undefined
+  readonly longestAttempt?:
+    | {
+        readonly jobId: string
+        readonly queue: string
+        readonly receipt: string
+        readonly startedAt: string
+        readonly executionDeadline: string
+      }
+    | undefined
 }
 
 interface QueuePollerOptions {
+  readonly attemptPolicy?: Partial<AttemptPolicy>
   readonly onWorkerStateChange?: (
     state: LocalQueueWorkerState,
   ) => Effect.Effect<void>
@@ -111,7 +139,7 @@ const writeLocalQueueWorkerState = (state: LocalQueueWorkerState) =>
     catch: (error) =>
       error instanceof Error ? error : new Error(String(error)),
   }).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.logWarning("Failed to write local queue worker state", {
         error: String(error),
       }).pipe(Effect.as(false)),
@@ -247,12 +275,15 @@ const jobsFailed = Metric.counter("jobs.failed", {
  * available jobs so new local work is not stuck behind older jobs with the
  * same attempt count.
  */
-export const claimNextLocalJob = (queueNames: readonly string[]) =>
+export const claimNextLocalJob = (
+  queueNames: readonly string[],
+  visibilityTimeout = DEFAULT_VISIBILITY_TIMEOUT,
+) =>
   Effect.gen(function* () {
     const db = yield* TypedSqliteDrizzle
     const now = yield* DateTime.now
     const lockedUntil = DateTime.add(now, {
-      millis: D.toMillis(DEFAULT_VISIBILITY_TIMEOUT),
+      milliseconds: D.toMillis(visibilityTimeout),
     })
     const receipt = randomUUID()
     const claimOrder = [
@@ -264,6 +295,7 @@ export const claimNextLocalJob = (queueNames: readonly string[]) =>
     ]
 
     const availableJobConditions = and(
+      isNull(schema.jobQueue.terminalAt),
       inArray(schema.jobQueue.queue, queueNames),
       lte(schema.jobQueue.availableAt, now),
       or(
@@ -331,74 +363,114 @@ export const claimNextLocalJob = (queueNames: readonly string[]) =>
 export const processClaimedJob = <E, R>(
   job: RawJob,
   queueHandlers: JobHandlerMap<E, R>,
+  policy?: AttemptPolicy,
+  onEscalation: (error: AttemptEscalation) => void = () => {},
 ) =>
-  Effect.gen(function* () {
-    const queueService = yield* QueueService
-    const requestTimeFiberRef = yield* RequestTime
-    const now = yield* DateTime.now
-    yield* FiberRef.set(requestTimeFiberRef, now)
-    yield* Effect.log(`Processing job ${job.jobId} (attempt ${job.attempts})`)
-
-    const dispatcher = makeJobDispatcher<E, R, JobHandlerMap<E, R>>(
-      queueHandlers,
-    )
-    const result = yield* Runtime.job(dispatcher, job)
-    if (result.kind === "acknowledge") {
-      yield* queueService.acknowledge(job.jobId, job.receipt).pipe(
-        Effect.tapErrorCause((cause) =>
-          Effect.gen(function* () {
-            const message = Cause.pretty(cause)
-            yield* Effect.logError(
-              `Job ${job.jobId} acknowledgement failed: ${message}`,
+  Effect.flatMap(DateTime.now, (now) =>
+    Effect.gen(function* () {
+      const queueService = yield* QueueService
+      const queueOperation = <A, E2>(
+        operation: Effect.Effect<A, E2>,
+        phase: string,
+      ) =>
+        policy === undefined
+          ? operation
+          : boundedQueueOperation(
+              operation,
+              policy,
+              new AttemptEscalation({
+                kind: "supervision-required",
+                jobId: job.jobId,
+                receipt: job.receipt,
+                phase,
+                executionDeadline: DateTime.formatIso(
+                  DateTime.makeUnsafe(
+                    DateTime.toEpochMillis(job.lockedUntil) -
+                      policy.visibilityMs +
+                      policy.executionMs,
+                  ),
+                ),
+                outcome: "unknown",
+              }),
+              onEscalation,
             )
-            yield* Effect.annotateCurrentSpan("job.failed", true)
-            yield* Effect.annotateCurrentSpan("job.error", message)
-            yield* Metric.increment(jobsFailed)
+      yield* Effect.log(`Processing job ${job.jobId} (attempt ${job.attempts})`)
+
+      const dispatcher = makeJobDispatcher<E, R, JobHandlerMap<E, R>>(
+        queueHandlers,
+      )
+      const result = yield* Runtime.job(dispatcher, job)
+      if (result.kind === "acknowledge") {
+        yield* queueOperation(
+          queueService.acknowledge(job.jobId, job.receipt),
+          "acknowledge",
+        ).pipe(
+          Effect.tapCause((cause) =>
+            Effect.gen(function* () {
+              const message = Cause.pretty(cause)
+              yield* Effect.logError(
+                `Job ${job.jobId} acknowledgement failed: ${message}`,
+              )
+              yield* Effect.annotateCurrentSpan("job.failed", true)
+              yield* Effect.annotateCurrentSpan("job.error", message)
+              yield* Metric.update(jobsFailed, 1)
+            }),
+          ),
+          Effect.withSpan(`job.acknowledge.${job.queue}`, {
+            attributes: {
+              "job.id": job.jobId,
+              "job.queue": job.queue,
+              "job.attempts": job.attempts,
+            },
           }),
-        ),
-        Effect.withSpan(`job.acknowledge.${job.queue}`, {
-          attributes: {
-            "job.id": job.jobId,
-            "job.queue": job.queue,
-            "job.attempts": job.attempts,
+        )
+        yield* Metric.update(jobsProcessed, 1)
+        return
+      }
+
+      const failure = Cause.findErrorOption(result.cause)
+      if (Cause.hasInterruptsOnly(result.cause)) {
+        return yield* Effect.interrupt
+      }
+      if (
+        Option.isSome(failure) &&
+        failure.value instanceof ScheduledFlowNotFoundError &&
+        job.attempts < job.maxAttempts
+      ) {
+        yield* Effect.logInfo(
+          `Job ${job.jobId} will retry: scheduled flow not yet visible`,
+          {
+            scheduledFlowId: failure.value.scheduledFlowId,
+            attempt: job.attempts,
+            maxAttempts: job.maxAttempts,
           },
-        }),
-      )
-      yield* Metric.increment(jobsProcessed)
-      return
-    }
+        )
+        return
+      }
 
-    const failure = Cause.failureOption(result.cause)
-    if (Cause.isInterruptedOnly(result.cause)) {
-      return yield* Effect.interrupt
-    }
-    if (
-      Option.isSome(failure) &&
-      failure.value instanceof ScheduledFlowNotFoundError
-    ) {
-      yield* Effect.logInfo(
-        `Job ${job.jobId} will retry: scheduled flow not yet visible`,
-        {
-          scheduledFlowId: failure.value.scheduledFlowId,
-          attempt: job.attempts,
-          maxAttempts: job.maxAttempts,
-        },
+      yield* Effect.logError(
+        `Job ${job.jobId} failed: ${Cause.pretty(result.cause)}`,
       )
-      return
-    }
-
-    yield* Effect.logError(
-      `Job ${job.jobId} failed: ${Cause.pretty(result.cause)}`,
-    )
-    yield* Metric.increment(jobsFailed)
-    if (result.kind === "terminal") {
-      yield* queueService.fail(job.jobId, job.receipt, { retryable: false })
-    } else if (Option.isSome(failure)) {
-      yield* queueService.fail(job.jobId, job.receipt, {
-        releaseImmediately: false,
-      })
-    }
-  })
+      yield* Metric.update(jobsFailed, 1)
+      if (result.kind === "terminal") {
+        yield* queueOperation(
+          queueService.fail(job.jobId, job.receipt, {
+            retryable: false,
+            reason: Cause.pretty(result.cause),
+          }),
+          "terminal-fail",
+        )
+      } else {
+        yield* queueOperation(
+          queueService.fail(job.jobId, job.receipt, {
+            releaseImmediately: false,
+            reason: Cause.pretty(result.cause),
+          }),
+          "retry-fail",
+        )
+      }
+    }).pipe(Effect.provideService(RequestTime, now)),
+  )
 
 /**
  * Creates a single queue poller that claims from all local runtime queues.
@@ -419,9 +491,13 @@ export const processClaimedJob = <E, R>(
  */
 export const createSingleQueuePoller = <E, R>(
   queueHandlers: JobHandlerMap<E, R>,
-  globalSemaphore: Effect.Semaphore,
+  globalSemaphore: Semaphore.Semaphore,
   options: QueuePollerOptions = {},
-) => {
+): Effect.Effect<
+  never,
+  InvalidAttemptPolicy | InvalidQueueObservationPolicy,
+  R | QueueService | SqliteQueueMaintenance | TypedSqliteDrizzle
+> => {
   const queueNames = Object.keys(queueHandlers)
   const successDelay = getLocalQueueSuccessDelay()
   const notifyWorkerState = options.onWorkerStateChange ?? (() => Effect.void)
@@ -432,6 +508,28 @@ export const createSingleQueuePoller = <E, R>(
   })
 
   return Effect.gen(function* () {
+    const policy = yield* readAttemptPolicy(options.attemptPolicy)
+    yield* readQueueObservationPolicy()
+    const maintenance = yield* SqliteQueueMaintenance
+    // Startup sweep precedes dispatch; periodic sweeps are a sibling fiber,
+    // never behind the processing semaphore, pause file, or dispatch priority.
+    const recover = maintenance.recover().pipe(
+      Effect.tap((count) =>
+        count > 0
+          ? Effect.logWarning("Recovered terminal queue jobs", { count })
+          : Effect.void,
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logError("Queue terminal recovery failed", cause),
+      ),
+    )
+    yield* recover
+    yield* reportWorkerActivity({
+      kind: "ready",
+      pid: process.pid,
+      instance: randomUUID(),
+    })
+    let escalation: AttemptEscalation | undefined
     let idleSinceMs: number | null = null
     let lastIdleStageLabel: string | null = null
     let consecutivePollErrors = 0
@@ -439,11 +537,16 @@ export const createSingleQueuePoller = <E, R>(
     let lastPauseState = false
     let lastWorkerStateSnapshot: string | null = null
     const activeJobsRef = yield* Ref.make(0)
+    let queueObservation: QueueObservation | undefined
+    const attempts = new Map<
+      string,
+      NonNullable<LocalQueueWorkerState["longestAttempt"]>
+    >()
 
     const writeState = (paused: boolean, pauseToken: string | null) =>
       Effect.gen(function* () {
         const activeJobs = yield* Ref.get(activeJobsRef)
-        const snapshot = `${activeJobs}:${paused}:${pauseToken ?? ""}`
+        const snapshot = `${activeJobs}:${paused}:${pauseToken ?? ""}:${escalation?.phase ?? ""}:${queueObservation?.sampledAt ?? ""}`
         if (snapshot === lastWorkerStateSnapshot) {
           return
         }
@@ -454,9 +557,13 @@ export const createSingleQueuePoller = <E, R>(
           paused,
           pauseToken,
           updatedAt: DateTime.formatIso(now),
+          ...(escalation ? { escalation } : {}),
+          queueObservation,
+          longestAttempt: attempts.values().next().value,
         }
         const written = yield* writeLocalQueueWorkerState(workerState)
         yield* notifyWorkerState(workerState)
+        yield* reportWorkerActivity({ kind: "state", state: workerState })
         if (written) {
           lastWorkerStateSnapshot = snapshot
         }
@@ -487,14 +594,45 @@ export const createSingleQueuePoller = <E, R>(
       return true
     })
 
+    yield* writeState(readPauseToken() !== null, readPauseToken())
+    // Supervised workers are observed by the independent parent, embedded
+    // pollers by a sibling fiber. Neither waits for a processing permit.
+    if (!process.send)
+      yield* Effect.forkChild(
+        observeQueueHealth((observation) => {
+          queueObservation = observation
+        }).pipe(
+          Effect.forkChild,
+          Effect.andThen(
+            Effect.forever(
+              Effect.sleep(100).pipe(
+                Effect.andThen(
+                  Effect.suspend(() =>
+                    writeState(readPauseToken() !== null, readPauseToken()),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
     return yield* Effect.forever(
       Effect.gen(function* () {
+        if (escalation !== undefined) {
+          yield* writeState(true, null)
+          yield* Effect.sleep(PAUSED_POLL_DELAY)
+          return
+        }
         if (yield* waitIfPaused) {
           return
         }
 
         yield* globalSemaphore.take(1)
         const releasePermit = globalSemaphore.release(1)
+        if (escalation !== undefined) {
+          yield* releasePermit
+          return
+        }
 
         const pauseToken = readPauseToken()
         if (pauseToken !== null) {
@@ -503,15 +641,28 @@ export const createSingleQueuePoller = <E, R>(
           return
         }
 
-        const jobOption = yield* claimNextLocalJob(queueNames).pipe(
+        yield* reportWorkerActivity({ kind: "claim" })
+        const jobOption = yield* boundedQueueOperation(
+          claimNextLocalJob(queueNames, D.millis(policy.visibilityMs)),
+          policy,
+          new AttemptEscalation({
+            kind: "supervision-required",
+            jobId: null,
+            receipt: null,
+            phase: "claim",
+            executionDeadline: null,
+            outcome: "unknown",
+          }),
+        ).pipe(
           Effect.withTracerEnabled(false),
-          Effect.tapErrorCause(() => releasePermit),
+          Effect.tapCause(() => releasePermit),
           Effect.tap((jobOption) =>
             Option.isNone(jobOption) ? releasePermit : Effect.void,
           ),
         )
 
         if (Option.isNone(jobOption)) {
+          yield* reportWorkerActivity({ kind: "idle" })
           // A successful poll roundtrip, even with no ready jobs, clears the
           // transient error streak used for poll-failure backoff.
           consecutivePollErrors = 0
@@ -539,29 +690,82 @@ export const createSingleQueuePoller = <E, R>(
         hasClaimedSinceStartup = true
 
         const job = jobOption.value
+        const startedAt =
+          DateTime.toEpochMillis(job.lockedUntil) - policy.visibilityMs
+        const attempt = {
+          jobId: job.jobId,
+          queue: job.queue,
+          receipt: job.receipt,
+          startedAt: DateTime.formatIso(DateTime.makeUnsafe(startedAt)),
+          executionDeadline: DateTime.formatIso(
+            DateTime.makeUnsafe(startedAt + policy.executionMs),
+          ),
+        }
+        attempts.set(job.receipt, attempt)
+        yield* reportWorkerActivity({
+          kind: "attempt",
+          ...attempt,
+        })
         yield* Effect.logDebug(`Processing job ${job.jobId} from ${job.queue}`)
         yield* Ref.update(activeJobsRef, (count) => count + 1)
-        yield* writeState(false, null)
 
         const releaseJobPermit = Effect.gen(function* () {
+          attempts.delete(job.receipt)
           yield* Ref.update(activeJobsRef, (count) => Math.max(0, count - 1))
+          yield* releasePermit
           const pauseToken = readPauseToken()
           yield* writeState(pauseToken !== null, pauseToken)
-          yield* releasePermit
+          if (escalation === undefined)
+            yield* reportWorkerActivity({ kind: "idle" })
         })
 
-        yield* Effect.fork(
-          processClaimedJob(job, queueHandlers).pipe(
-            Effect.tap(() => waitAfterSuccessfulJob),
-            Effect.catchAllCause((cause) =>
-              Effect.logError(`Job processing failed for ${job.jobId}`, cause),
+        yield* Effect.forkChild(
+          runLocalAttempt(
+            job,
+            writeState(false, null).pipe(
+              Effect.andThen(
+                processClaimedJob(job, queueHandlers, policy, (error) => {
+                  escalation = error
+                }),
+              ),
+              Effect.tap(() => waitAfterSuccessfulJob),
+            ),
+            policy,
+            (error) => {
+              escalation = error
+            },
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const error = Cause.findErrorOption(cause)
+                if (
+                  Option.isSome(error) &&
+                  error.value instanceof AttemptEscalation
+                ) {
+                  escalation = error.value
+                }
+                yield* Effect.logError(
+                  `Job processing failed for ${job.jobId}`,
+                  cause,
+                )
+              }),
             ),
             Effect.ensuring(releaseJobPermit),
           ),
         )
       }).pipe(
-        Effect.catchAllCause((cause) =>
+        Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            const error = Cause.findErrorOption(cause)
+            if (
+              Option.isSome(error) &&
+              error.value instanceof AttemptEscalation
+            ) {
+              escalation = error.value
+            }
+            if (escalation === undefined)
+              yield* reportWorkerActivity({ kind: "idle" })
+            else yield* writeState(true, null)
             consecutivePollErrors += 1
             const errorDelay = getPollErrorDelay(consecutivePollErrors)
             yield* Effect.logError("Failed to poll local queues", cause)

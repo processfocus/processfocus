@@ -322,6 +322,8 @@ describe("passkey provider", () => {
     await Effect.runPromise(
       createPasskeyRegistrationOptions({
         rpName: "Test App",
+        accountLabel: "Example Organisation",
+        origin: "http://localhost:3001",
         rpID: "localhost",
         email: "person@example.com",
         userHandle,
@@ -337,7 +339,8 @@ describe("passkey provider", () => {
       expect.objectContaining({
         rpName: "Test App",
         rpID: "localhost",
-        userName: "person@example.com",
+        userName: "Example Organisation · person@example.com · localhost:3001",
+        userDisplayName: "Example Organisation · person@example.com · localhost:3001",
         attestationType: "none",
         authenticatorSelection: {
           residentKey: "required",
@@ -371,8 +374,8 @@ describe("passkey provider", () => {
     const secondOptions = mockGenerateRegistrationOptions.mock.calls[1]?.[0]
     expect(firstOptions).toEqual(
       expect.objectContaining({
-        userName: "person@example.com",
-        userDisplayName: "person@example.com",
+        userName: "Test App · person@example.com · localhost:3000",
+        userDisplayName: "Test App · person@example.com · localhost:3000",
         attestationType: "none",
         authenticatorSelection: {
           residentKey: "required",
@@ -388,6 +391,32 @@ describe("passkey provider", () => {
     expect(Buffer.from(firstOptions?.userID ?? []).toString("utf8")).not.toContain(
       "person@example.com",
     )
+  })
+
+  test.each([
+    { rpID: "example.com", origin: "https://example.com:8443/path", label: "PF · person@example.com" },
+    { rpID: "example.com", origin: undefined, label: "PF · person@example.com" },
+    { rpID: "localhost", origin: "http://localhost:3000/path", label: "PF · person@example.com · localhost:3000" },
+    { rpID: "localhost", origin: ["http://localhost:3001/path", "http://localhost:3000"], label: "PF · person@example.com · localhost:3001" },
+    { rpID: "localhost", origin: "http://localhost", label: "PF · person@example.com · localhost" },
+    { rpID: "localhost", origin: "http://localhost:80/path", label: "PF · person@example.com · localhost:80" },
+    { rpID: "localhost", origin: "https://localhost:443/path", label: "PF · person@example.com · localhost:443" },
+    { rpID: "localhost", origin: undefined, label: "PF · person@example.com · localhost" },
+  ])("labels new passkeys as $label (origin: $origin)", async ({ rpID, origin, label }) => {
+    await Effect.runPromise(
+      createPasskeyRegistrationOptions({
+        rpName: "Process Focus",
+        accountLabel: "PF",
+        rpID,
+        origin,
+        email: "person@example.com",
+        userHandle: Buffer.from("existing-handle").toString("base64url"),
+      }),
+    )
+    expect(mockGenerateRegistrationOptions.mock.calls[0]?.[0]).toMatchObject({
+      userName: label,
+      userDisplayName: label,
+    })
   })
 
   test("returns verified registration material without storing the user or credential", async () => {
@@ -426,6 +455,8 @@ describe("passkey provider", () => {
           publicKey: "AQIDBA",
           counter: 0,
           transports: ["internal", "hybrid"],
+          aaguid: "00000000-0000-0000-0000-000000000000",
+          deviceType: "multiDevice",
         },
       },
     ])

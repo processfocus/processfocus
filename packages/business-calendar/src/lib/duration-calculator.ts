@@ -38,8 +38,8 @@ export const calculateBusinessDuration = (
   finishedAt: number,
 ): Effect.Effect<Duration.Duration, BusinessCalendarError, never> =>
   Effect.gen(function* () {
-    const start = DateTime.unsafeMake(createdAt)
-    const end = DateTime.unsafeMake(finishedAt)
+    const start = DateTime.makeUnsafe(createdAt)
+    const end = DateTime.makeUnsafe(finishedAt)
 
     return yield* calendarService.businessHoursBetween(start, end)
   })
@@ -72,8 +72,8 @@ export const calculateBusinessDurations = (
       timestampPairs,
       (pair) =>
         Effect.gen(function* () {
-          const start = DateTime.unsafeMake(pair.createdAt)
-          const end = DateTime.unsafeMake(pair.finishedAt)
+          const start = DateTime.makeUnsafe(pair.createdAt)
+          const end = DateTime.makeUnsafe(pair.finishedAt)
           const duration = yield* calendarService.businessHoursBetween(
             start,
             end,
@@ -125,7 +125,6 @@ export const calculateRawDurations = (
     return new Map()
   }
 
-  // Group pairs by id
   const groupedPairs = new Map<string, TimestampPair[]>()
   for (const pair of timestampPairs) {
     const existing = groupedPairs.get(pair.id)
@@ -136,7 +135,6 @@ export const calculateRawDurations = (
     }
   }
 
-  // Calculate durations for each group
   const result = new Map<string, DurationStats>()
 
   for (const [id, pairs] of groupedPairs) {

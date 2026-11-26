@@ -10,7 +10,7 @@ import {
 import {
   decryptRegistrationLinkToken,
   generateRegistrationLinkMaterial,
-} from "@pf/graphql-schema"
+} from "@pf/identity-management/credentials"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
 import { DatabaseTest } from "@pf/service-drizzle-sqlite/test"
 import { SqliteSettingsQueriesLive } from "../src/lib/settings-queries.js"
@@ -261,7 +261,7 @@ describe("registration link management", () => {
         yield* db
           .update(schema.invitation)
           .set({
-            registrationLinkExpiresAt: DateTime.unsafeMake(past),
+            registrationLinkExpiresAt: DateTime.makeUnsafe(past),
           })
           .where(eq(schema.invitation.id, invitation.id))
 

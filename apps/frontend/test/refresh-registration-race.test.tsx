@@ -225,6 +225,7 @@ test("collections mounted during exchange and delayed renewal use committed cred
     await waitFor(() => firstState?.state.status === "ready")
     if (firstState?.state.status !== "ready")
       throw new Error("First collection not ready")
+    await waitFor(() => firstState?.initialSync.status === "complete")
     const initialCollection = firstState.state.collection
     const initialReplication = firstState.state.replicationState
     const cancel = initialReplication.cancel.bind(initialReplication)
@@ -250,6 +251,7 @@ test("collections mounted during exchange and delayed renewal use committed cred
     await act(async () => {
       await cancelStarted.promise
     })
+    expect(firstState.initialSync.status).toBe("complete")
     await render(true, true)
     await waitFor(
       () =>
@@ -262,6 +264,8 @@ test("collections mounted during exchange and delayed renewal use committed cred
     expect((await db.late.findOne("permitted").exec())?.get("id")).toBe(
       "permitted",
     )
+    await waitFor(() => lateState?.initialSync.status === "complete")
+    expect(firstState.initialSync.status).toBe("complete")
     expect(contextExpiry).toBe(oldExpiry)
     const recipient = await getRealtimeRecipientId(human, nextExpiry)
     expect(
@@ -275,6 +279,7 @@ test("collections mounted during exchange and delayed renewal use committed cred
     expect(firstState.state.status).toBe("ready")
     if (firstState.state.status !== "ready")
       throw new Error("First collection lost")
+    expect(firstState.initialSync.status).toBe("complete")
     expect(firstState.state.collection).toBe(initialCollection)
     expect(firstState.state.replicationState).not.toBe(initialReplication)
     expect(container.querySelector("input")).toBe(input)

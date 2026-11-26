@@ -5,10 +5,9 @@ import { parseRuntimeArtifact } from "./artifact.js"
 import type { JobDispatcher } from "./job.js"
 import type { RawJob } from "./queue.js"
 
-type AnyLayer = Layer.Layer<never, unknown, unknown>
-type LayerServices<T extends AnyLayer> = EffectLayer.Layer.Success<T>
-type ClosedLayer<T extends AnyLayer> = T &
-  Layer.Layer<LayerServices<T>, EffectLayer.Layer.Error<T>>
+type AnyLayer = Layer.Layer<never, unknown>
+type LayerServices<T extends AnyLayer> = EffectLayer.Success<T>
+type ClosedLayer<T extends AnyLayer> = T
 
 export interface RuntimeLogging<LoggingError = never> {
   readonly decorate: <Result, Error>(
@@ -112,18 +111,9 @@ export const Runtime = {
       LoggingError
     >,
   ) => {
-    const database: Layer.Layer<
-      LayerServices<DatabaseLayer>,
-      EffectLayer.Layer.Error<DatabaseLayer>
-    > = capabilities.database
-    const configuration: Layer.Layer<
-      LayerServices<ConfigurationLayer>,
-      EffectLayer.Layer.Error<ConfigurationLayer>
-    > = capabilities.configuration
-    const policy: Layer.Layer<
-      LayerServices<PolicyLayer>,
-      EffectLayer.Layer.Error<PolicyLayer>
-    > = capabilities.policy
+    const database = capabilities.database
+    const configuration = capabilities.configuration
+    const policy = capabilities.policy
 
     return capabilities.logging.decorate(
       Layer.build(Layer.mergeAll(database, configuration, policy)).pipe(
@@ -157,30 +147,12 @@ export const Runtime = {
       LoggingError
     >,
   ) => {
-    const persistence: Layer.Layer<
-      LayerServices<PersistenceLayer>,
-      EffectLayer.Layer.Error<PersistenceLayer>
-    > = capabilities.persistence
-    const queue: Layer.Layer<
-      LayerServices<QueueLayer>,
-      EffectLayer.Layer.Error<QueueLayer>
-    > = capabilities.queue
-    const documentStore: Layer.Layer<
-      LayerServices<DocumentStoreLayer>,
-      EffectLayer.Layer.Error<DocumentStoreLayer>
-    > = capabilities.documentStore
-    const eventPublisher: Layer.Layer<
-      LayerServices<EventPublisherLayer>,
-      EffectLayer.Layer.Error<EventPublisherLayer>
-    > = capabilities.eventPublisher
-    const organisationLoader: Layer.Layer<
-      LayerServices<OrganisationLoaderLayer>,
-      EffectLayer.Layer.Error<OrganisationLoaderLayer>
-    > = capabilities.organisationLoader
-    const authorization: Layer.Layer<
-      LayerServices<AuthorizationLayer>,
-      EffectLayer.Layer.Error<AuthorizationLayer>
-    > = capabilities.authorization
+    const persistence = capabilities.persistence
+    const queue = capabilities.queue
+    const documentStore = capabilities.documentStore
+    const eventPublisher = capabilities.eventPublisher
+    const organisationLoader = capabilities.organisationLoader
+    const authorization = capabilities.authorization
 
     return capabilities.logging.decorate(
       Layer.build(

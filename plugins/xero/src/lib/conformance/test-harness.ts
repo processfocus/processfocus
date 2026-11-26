@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 import { CurrentStepJobContext } from "@pf/process"
 import { parseXeroCalendarDate } from "../invoice-reconciliation"
 import { XeroInvoice } from "../xero-invoice"
@@ -25,12 +25,14 @@ export const makeTestConformanceHarness = (): ConformanceHarness => {
         plugin.controller.seedItem({
           itemCode: items.zeroTax,
           name: "PF Conformance Zero Tax",
+          description: "PF Conformance Zero Tax",
           taxType: "NONE",
           taxPercent: 0,
         })
         plugin.controller.seedItem({
           itemCode: items.gst,
           name: "PF Conformance GST 15",
+          description: "PF Conformance GST 15",
           taxType: "OUTPUT",
           taxPercent: 15,
         })
@@ -46,10 +48,10 @@ export const makeTestConformanceHarness = (): ConformanceHarness => {
             todoId,
             stepPath: "/Create Xero Invoice",
           }),
-          Effect.either,
+          Effect.result,
         )
-        return Either.match(result, {
-          onLeft: (error): ScenarioObservation => ({
+        return Result.match(result, {
+          onFailure: (error): ScenarioObservation => ({
             kind: "failed",
             failed: {
               code: error.code ?? "unknown",
@@ -58,7 +60,7 @@ export const makeTestConformanceHarness = (): ConformanceHarness => {
               message: error.message,
             },
           }),
-          onRight: (issued): ScenarioObservation => {
+          onSuccess: (issued): ScenarioObservation => {
             const stored = plugin.controller.findInvoiceByReference(
               input.reference,
             )
@@ -96,6 +98,7 @@ export const makeTestConformanceHarness = (): ConformanceHarness => {
                 invoiceId: `${issued.invoiceId}`,
                 invoiceNumber: `${issued.invoiceNumber}`,
                 invoice: observed,
+                lines: issued.lines,
               },
             }
           },

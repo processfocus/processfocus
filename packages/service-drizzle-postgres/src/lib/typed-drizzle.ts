@@ -1,6 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import * as Client from "@effect/sql/SqlClient"
-import { SqlError, SqlErrorTypeId } from "@effect/sql/SqlError"
 import { defineRelations } from "drizzle-orm"
 import { PgAsyncDeleteBase } from "drizzle-orm/pg-core/async/delete"
 import { PgAsyncInsertBase } from "drizzle-orm/pg-core/async/insert"
@@ -11,15 +9,9 @@ import type { DrizzlePgConfig } from "drizzle-orm/pg-core/utils"
 import type { PgRemoteDatabase } from "drizzle-orm/pg-proxy"
 import { drizzle } from "drizzle-orm/pg-proxy"
 import type { AnyRelations } from "drizzle-orm/relations"
-import {
-  Context,
-  Effect,
-  Effectable,
-  Either,
-  Layer,
-  Predicate,
-  Runtime,
-} from "effect"
+import { Context, Effect, Effectable, Layer, Result } from "effect"
+import * as Client from "effect/sql/SqlClient"
+import { SqlError, UnknownError, isSqlError } from "effect/sql/SqlError"
 import * as schema from "@pf/drizzle-postgres"
 
 declare module "drizzle-orm" {
@@ -55,39 +47,51 @@ const relations = defineRelations(schema, (r) => ({
   },
 }))
 
-type TypedPostgresDatabase = Effect.Effect.Success<
+type TypedPostgresDatabase = Effect.Success<
   ReturnType<typeof makePostgresDrizzle<typeof relations>>
 >
 
-const runtimeStorage = new AsyncLocalStorage<Runtime.Runtime<never>>()
+const runtimeStorage = new AsyncLocalStorage<{
+  context: Context.Context<never>
+  signal: AbortSignal
+}>()
 
 const patchEffectCommit = (prototype: object) => {
-  if (Object.hasOwn(prototype, Effect.EffectTypeId)) return
+  if (Object.hasOwn(prototype, Effect.TypeId)) return
 
   // Drizzle async builders are Promise-like. This local adapter makes the
   // Postgres builders returned by this service yieldable as Effects without
   // patching QueryPromise.prototype globally, which previously leaked into
   // SQLite tests.
   Object.assign(prototype, {
-    ...Effectable.CommitPrototype,
-    commit(this: { execute: () => Promise<unknown> }) {
-      return Effect.runtime<never>().pipe(
-        Effect.flatMap((runtime) =>
-          Effect.tryPromise({
-            try: () => runtimeStorage.run(runtime, () => this.execute()),
-            catch: (cause) =>
-              // Preserve structured SqlError from the promise bridge; wrap only
-              // unknown rejections (e.g. raw driver/Drizzle failures).
-              Predicate.hasProperty(cause, SqlErrorTypeId)
-                ? (cause as SqlError)
-                : new SqlError({
-                    cause,
-                    message: "Failed to execute Drizzle query",
-                  }),
-          }),
-        ),
-      )
-    },
+    ...Effectable.Prototype<
+      Effect.Effect<unknown, SqlError> & { execute(): Promise<unknown> }
+    >({
+      label: "ProcessFocusPostgresQuery",
+      evaluate() {
+        return Effect.context<never>().pipe(
+          Effect.flatMap((runtime) =>
+            Effect.tryPromise({
+              try: (signal) =>
+                runtimeStorage.run({ context: runtime, signal }, () =>
+                  this.execute(),
+                ),
+              catch: (cause) =>
+                // Preserve structured SqlError from the promise bridge; wrap only
+                // unknown rejections (e.g. raw driver/Drizzle failures).
+                isSqlError(cause)
+                  ? cause
+                  : new SqlError({
+                      reason: new UnknownError({
+                        cause,
+                        message: "Failed to execute Drizzle query",
+                      }),
+                    }),
+            }),
+          ),
+        )
+      },
+    }),
   })
 }
 
@@ -106,17 +110,28 @@ const ensurePostgresEffectCommitPatches = Effect.sync(() => {
 
 const makeRemoteCallback = Effect.gen(function* () {
   const client = yield* Client.SqlClient
-  const constructionRuntime = yield* Effect.runtime<never>()
+  const constructionRuntime = yield* Effect.context<never>()
 
   return (
     query: string,
     params: Array<unknown>,
     method: "all" | "execute" | "get" | "run" | "values",
   ) => {
-    const runPromise = Runtime.runPromise(
-      runtimeStorage.getStore() ?? constructionRuntime,
+    const runPromise = Effect.runPromiseWith(
+      runtimeStorage.getStore()?.context ?? constructionRuntime,
     )
-    const statement = client.unsafe(query, params)
+    // postgres.js encoded plain objects as JSON; the v4 PG codec requires
+    // their serialized wire value explicitly.
+    const statement = client.unsafe(
+      query,
+      params.map((value) =>
+        value !== null &&
+        typeof value === "object" &&
+        Object.getPrototypeOf(value) === Object.prototype
+          ? JSON.stringify(value)
+          : value,
+      ),
+    )
     const effect =
       method === "execute"
         ? Effect.map(statement.raw, (header) => ({ rows: [header] }))
@@ -130,12 +145,14 @@ const makeRemoteCallback = Effect.gen(function* () {
     // Throw the full SqlError (not only .cause) so query context survives the
     // promise bridge. patchEffectCommit rethrows SqlError as-is and wraps only
     // non-SqlError rejections.
-    return runPromise(Effect.either(effect)).then((result) =>
-      Either.match(result, {
-        onLeft: (error) => {
+    return runPromise(Effect.result(effect), {
+      signal: runtimeStorage.getStore()?.signal,
+    }).then((result) =>
+      Result.match(result, {
+        onFailure: (error) => {
           throw error
         },
-        onRight: (value) => value,
+        onSuccess: (value) => value,
       }),
     )
   }
@@ -175,9 +192,10 @@ const makePostgresDrizzle = <TRelations extends AnyRelations>(
  * )
  * ```
  */
-export class TypedPostgresDrizzle extends Context.Tag(
-  "@pf/service-drizzle-postgres/TypedPostgresDrizzle",
-)<TypedPostgresDrizzle, TypedPostgresDatabase>() {}
+export class TypedPostgresDrizzle extends Context.Service<
+  TypedPostgresDrizzle,
+  TypedPostgresDatabase
+>()("@pf/service-drizzle-postgres/TypedPostgresDrizzle") {}
 
 /**
  * Layer that provides the TypedPostgresDrizzle service.

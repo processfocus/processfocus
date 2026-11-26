@@ -1,6 +1,5 @@
-import { Schema as ES } from "effect"
-import { FormLabel } from "@pf/form-schema"
 import { Form, type OrgUnit, Process, type Role } from "@pf/process"
+import { reportBugForm, reviewBugForm } from "./bug-report-fix-forms"
 
 export class BugReportFix extends Process {
   constructor(
@@ -14,24 +13,26 @@ export class BugReportFix extends Process {
       purpose: "Report and track bug resolution",
     })
 
-    // Steps
     const report_bug = new Form(this, "Report bug", {
       name: "Report bug details",
-      form: () => ({
-        short_description: ES.String.annotations({ [FormLabel]: "Summary" }),
-        full_description: ES.String.annotations({ [FormLabel]: "Description" }),
-        urgency: ES.String,
-      }),
+      form: reportBugForm,
+      browser: {
+        entrypoint: "src/bug-report-fix-forms.ts",
+        exportName: "reportBugForm",
+      },
       role: employeeRole,
     })
 
     const review_bug = new Form(this, "Review bug", {
       name: "Review and assign bug",
-      form: () => ({}),
+      form: reviewBugForm,
+      browser: {
+        entrypoint: "src/bug-report-fix-forms.ts",
+        exportName: "reviewBugForm",
+      },
       role: managerRole,
     })
 
-    // Flow
     this.start(report_bug).end(review_bug)
   }
 }

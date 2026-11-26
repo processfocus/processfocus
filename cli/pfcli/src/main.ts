@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
-import { Args, Command, Options, ValidationError } from "@effect/cli"
-import { NodeContext, NodeRuntime } from "@effect/platform-node"
+import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { DATABASE_UPLOAD_MODES } from "@processfocus/hosting-contract"
 import { Config, Console, Effect, Option } from "effect"
+import { Argument, CliError as CliParseError, Command, Flag } from "effect/cli"
 import { runAuthLogin } from "./commands/auth/login"
 import { runBuild } from "./commands/build"
 import { runConfigCopyNew } from "./commands/config/copy-new"
@@ -16,7 +16,7 @@ import { runDownloadDb } from "./commands/db/download"
 import { runRollbackDb } from "./commands/db/rollback"
 import { runDatabaseShell } from "./commands/db/shell"
 import { runUploadDb } from "./commands/db/upload"
-import { runDeploy } from "./commands/deploy"
+import { runDeploy, runDeployStatus } from "./commands/deploy"
 import { runDestroy } from "./commands/destroy"
 import { runEnvAdd } from "./commands/env/add"
 import { runEnvList } from "./commands/env/list"
@@ -24,15 +24,23 @@ import { runGetFrontendJwt } from "./commands/get-frontend-jwt"
 import { runGrantRole } from "./commands/grant-role"
 import { runImport, runImportWatch } from "./commands/import"
 import { SUPPORTED_PROVIDERS, runInit } from "./commands/init"
+import { runInvitationCreate } from "./commands/invitation-create"
 import { runInvitationRegistrationLink } from "./commands/invitation-registration-link"
 import { runCanaryLogs, runLogs } from "./commands/logs"
 import { runMigrate } from "./commands/migrate"
 import { runMigrateCustom } from "./commands/migrate-custom"
+import { runProjectCreate } from "./commands/project-create"
 import { runProjects } from "./commands/projects"
 import { runRefreshFrontendJwt } from "./commands/refresh-frontend-jwt"
 import { runSkillsGet, runSkillsList } from "./commands/skills"
 import { runStageAdd } from "./commands/stage/add"
 import { runStageList } from "./commands/stage/list"
+import {
+  runWorkloadEnroll,
+  runWorkloadList,
+  runWorkloadRemove,
+  runWorkloadSave,
+} from "./commands/workload"
 import {
   BuildError,
   CliError,
@@ -41,226 +49,260 @@ import {
   PolicyFileError,
 } from "./errors"
 import { CLI_PACKAGE_VERSION } from "./package-metadata"
-import {
-  HIDDEN_CI_PROVIDER_USER_ENV,
-  extractHiddenCiProviderUserArgs,
-} from "./utils/hidden-ci-provider-user-args"
+import { validateUrlOption } from "./utils/operator-inputs"
 import { normalizeRollbackTimestamp } from "./utils/rollback-timestamp"
 
 // Arguments
-const orgPath = Args.directory({ name: "org-path", exists: "either" }).pipe(
-  Args.withDescription("Path to the organisation directory"),
+const orgPath = Argument.Directory("org-path").pipe(
+  Argument.withDescription("Path to the organisation directory"),
 )
 
-const initOrgPath = Args.directory({
-  name: "org-path",
-  exists: "either",
-}).pipe(
-  Args.withDescription("Path to the organisation directory to initialise"),
-  Args.withFallbackConfig(Config.string("PF_ORG")),
+const initOrgPath = Argument.Directory("org-path").pipe(
+  Argument.withDescription("Path to the organisation directory (or PF_ORG)"),
+  Argument.withFallbackConfig(Config.String("PF_ORG")),
 )
 
 // Options
-const outputDir = Options.directory("output", { exists: "either" }).pipe(
-  Options.withAlias("o"),
-  Options.withDefault("dist"),
-  Options.withDescription("Output directory for build artifacts"),
+const databasePath = Flag.String("database-path").pipe(
+  Flag.optional,
+  Flag.withDescription(
+    "Database path (overrides SQLITE_DATABASE_PATH; not available with --project/--env)",
+  ),
 )
 
-const projectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription("Project number (or internal ID) to deploy"),
+const issuerUrl = Flag.String("issuer-url").pipe(
+  Flag.optional,
+  Flag.withDescription("Frontend JWT issuer URL (overrides OAUTH_ISSUER_URL)"),
 )
 
-const environmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name to deploy to"),
+const frontendUrl = Flag.String("frontend-url").pipe(
+  Flag.optional,
+  Flag.withDescription(
+    "Local link frontend HTTP(S) origin, including port (overrides frontend URL environment variables)",
+  ),
 )
 
-const logsProjectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription(
+// The build handler resolves relative output paths against the organisation.
+const outputDir = Flag.String("output").pipe(
+  Flag.withAlias("o"),
+  Flag.withDefault("dist"),
+  Flag.withDescription("Output directory for build artifacts"),
+)
+
+const projectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription("Project number (or internal ID) to deploy"),
+)
+
+const environmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name to deploy to"),
+)
+
+const logsProjectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription(
     "Project number (or internal ID) whose runtime logs to read",
   ),
 )
 
-const logsEnvironmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name whose runtime logs to read"),
+const logsEnvironmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name whose runtime logs to read"),
 )
 
-const noWait = Options.boolean("no-wait").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Return after starting the deployment without waiting",
-  ),
+const noWait = Flag.Boolean("no-wait").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Return after starting the deployment without waiting"),
 )
 
-const importWatch = Options.boolean("watch").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
+const importWatch = Flag.Boolean("watch").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
     "Run an experimental watched import loop with debounce, timing and recovery",
   ),
 )
 
-const importWatchSkipInitial = Options.boolean("watch-skip-initial").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
+const importWatchSkipInitial = Flag.Boolean("watch-skip-initial").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
     "Start watch mode without its initial import after a separate bootstrap import has completed",
   ),
 )
 
-const customDomainProjectId = Options.text("project").pipe(
-  Options.withDescription("Project number or internal ID"),
+const customDomainProjectId = Flag.String("project").pipe(
+  Flag.withDescription("Project number or internal ID"),
 )
 
-const customDomainEnvironmentId = Options.text("env").pipe(
-  Options.withDescription("Environment name"),
+const customDomainEnvironmentId = Flag.String("env").pipe(
+  Flag.withDescription("Environment name"),
 )
 
-const rollbackProjectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription("Project number (or internal ID) to roll back"),
+const rollbackProjectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription("Project number (or internal ID) to roll back"),
 )
 
-const rollbackEnvironmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name to roll back"),
+const rollbackEnvironmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name to roll back"),
 )
 
-const rollbackTimestamp = Options.text("timestamp").pipe(
-  Options.optional,
-  Options.withDescription(
+const rollbackTimestamp = Flag.String("timestamp").pipe(
+  Flag.optional,
+  Flag.withDescription(
     "RFC3339 / ISO-8601 rollback timestamp; if no timezone is supplied, the local terminal timezone is used (for example 2026-04-16T18:00:00)",
   ),
 )
 
-const rollbackNoWait = Options.boolean("no-wait").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Return after starting the rollback without waiting"),
+const rollbackNoWait = Flag.Boolean("no-wait").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Return after starting the rollback without waiting"),
 )
 
-const destroyProjectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription("Project number (or internal ID) to destroy from"),
+const destroyProjectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription("Project number (or internal ID) to destroy from"),
 )
 
-const destroyEnvironmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name (or internal ID) to destroy"),
+const destroyEnvironmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name (or internal ID) to destroy"),
 )
 
-const destroyConfirmed = Options.boolean("yes").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
+const destroyConfirmed = Flag.Boolean("yes").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
     "Confirm deletion of the environment's AWS stacks and environment record",
   ),
 )
 
-const destroyNoWait = Options.boolean("no-wait").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Return after starting destruction without waiting"),
+const destroyNoWait = Flag.Boolean("no-wait").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Return after starting destruction without waiting"),
 )
 
-const downloadProjectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription("Project number (or internal ID) to download from"),
+const downloadProjectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription("Project number (or internal ID) to download from"),
 )
 
-const downloadEnvironmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name to download from"),
+const downloadEnvironmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name to download from"),
 )
 
-const downloadOutputPath = Options.text("output").pipe(
-  Options.optional,
-  Options.withDescription("Output SQLite file path"),
+const downloadOutputPath = Flag.String("output").pipe(
+  Flag.optional,
+  Flag.withDescription("Output SQLite file path"),
 )
 
-const shellProjectId = Options.text("project").pipe(
+const shellProjectId = Flag.String("project").pipe(
   // Keep this optional so --project and --env can be reported together.
-  Options.optional,
-  Options.withDescription(
+  Flag.optional,
+  Flag.withDescription(
     "Project number (or internal ID) to open a database shell for",
   ),
 )
 
-const shellEnvironmentId = Options.text("env").pipe(
+const shellEnvironmentId = Flag.String("env").pipe(
   // Keep this optional so --project and --env can be reported together.
-  Options.optional,
-  Options.withDescription("Environment name to open a database shell for"),
+  Flag.optional,
+  Flag.withDescription("Environment name to open a database shell for"),
 )
 
-const shellTtl = Options.text("ttl").pipe(
-  Options.optional,
-  Options.withDescription(
+const shellTtl = Flag.String("ttl").pipe(
+  Flag.optional,
+  Flag.withDescription(
     'Database Shell session TTL; bare numbers are seconds, for example "900", "15m", or "1h"',
   ),
 )
 
-const uploadProjectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription("Project number (or internal ID) to upload to"),
+const uploadProjectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription("Project number (or internal ID) to upload to"),
 )
 
-const uploadEnvironmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name to upload to"),
+const uploadEnvironmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name to upload to"),
 )
 
-const uploadMode = Options.choice("mode", [...DATABASE_UPLOAD_MODES]).pipe(
-  Options.withDefault("data-copy"),
-  Options.withDescription(
+const uploadMode = Flag.Literals("mode", [...DATABASE_UPLOAD_MODES]).pipe(
+  Flag.withDefault("data-copy"),
+  Flag.withDescription(
     "Upload mode: preserve destination authentication identity (data-copy) or restore all database state (exact-restore)",
   ),
 )
 
-const uploadSqliteFile = Args.text({ name: "sqlite-file" }).pipe(
+const uploadSqliteFile = Argument.String("sqlite-file").pipe(
   // Keep this optional so missing options and the missing positional file can
   // be reported together using the same concise pfcli error style.
-  Args.optional,
-  Args.withDescription("Local SQLite database file to upload"),
+  Argument.optional,
+  Argument.withDescription("Local SQLite database file to upload"),
 )
 
-const initProviders = Options.choice("identity-provider", [
+const initProviders = Flag.Literals("identity-provider", [
   ...SUPPORTED_PROVIDERS,
 ]).pipe(
-  Options.repeated,
-  Options.withDescription(
+  Flag.atLeast(0),
+  Flag.withDescription(
     `Identity provider to scaffold (repeatable: ${SUPPORTED_PROVIDERS.join(", ")})`,
   ),
 )
 
-const initEmail = Options.text("email").pipe(
-  Options.withDescription(
+const initEmail = Flag.String("email").pipe(
+  Flag.withDescription(
     "Admin email used for the scaffolded invitation and Cedar policy",
   ),
 )
 
-const skillName = Args.text({ name: "name" }).pipe(
-  Args.withDescription("Skill name to print"),
+const skillName = Argument.String("name").pipe(
+  Argument.withDescription("Skill name to print"),
 )
 
 // Commands
+const reportOperatorInputError = (error: CliError) =>
+  Effect.gen(function* () {
+    yield* Console.error(`\n❌ ${error.message}`)
+    process.exitCode = 1
+  })
+
 const importCommand = Command.make(
   "import",
   {
     orgPath: initOrgPath,
     watch: importWatch,
     watchSkipInitial: importWatchSkipInitial,
+    databasePath,
+    issuerUrl,
   },
-  ({ orgPath, watch, watchSkipInitial }) =>
-    watch
-      ? runImportWatch(orgPath, { skipInitialImport: watchSkipInitial })
-      : Effect.gen(function* () {
-          if (watchSkipInitial) {
-            yield* Console.warn(
-              "--watch-skip-initial is ignored unless --watch is also set",
-            )
-          }
-
-          return yield* runImport(orgPath)
-        }),
+  ({ orgPath, watch, watchSkipInitial, databasePath, issuerUrl }) =>
+    Effect.gen(function* () {
+      const options = {
+        databasePath: Option.getOrUndefined(databasePath),
+        issuerUrl: Option.isSome(issuerUrl)
+          ? yield* validateUrlOption(issuerUrl.value, "--issuer-url")
+          : undefined,
+      }
+      if (watch) {
+        return yield* runImportWatch(orgPath, {
+          ...options,
+          skipInitialImport: watchSkipInitial,
+        })
+      }
+      if (watchSkipInitial) {
+        yield* Console.warn(
+          "--watch-skip-initial is ignored unless --watch is also set",
+        )
+      }
+      return yield* runImport(orgPath, options)
+    }).pipe(
+      Effect.catchIf(
+        (error: unknown): error is CliError => error instanceof CliError,
+        reportOperatorInputError,
+      ),
+    ),
 ).pipe(
   Command.withDescription(
     "Import organisation to SQLite database (uses PF_ORG, SQLITE_DATABASE_PATH, or $org-path/db/pf.db)",
@@ -292,6 +334,73 @@ const buildCommand = Command.make(
   ),
 )
 
+const workloadCommand = Command.make("workload").pipe(
+  Command.withDescription(
+    "Manage OIDC federation registrations for GitHub Actions",
+  ),
+  Command.withSubcommands([
+    Command.make(
+      "list",
+      {
+        project: Flag.String("project"),
+        clientId: Flag.String("client-id").pipe(Flag.optional),
+      },
+      ({ project, clientId }) =>
+        runWorkloadList(project, Option.getOrUndefined(clientId)),
+    ),
+    Command.make(
+      "save",
+      {
+        project: Flag.String("project"),
+        clientId: Flag.String("client-id").pipe(Flag.optional),
+        name: Flag.String("name"),
+        repository: Flag.String("repository"),
+        branch: Flag.String("branch"),
+        workflow: Flag.String("workflow"),
+        environment: Flag.String("environment").pipe(
+          Flag.optional,
+          Flag.withDescription(
+            "GitHub Environment name; omit for jobs without an environment (also clears the setting on edits)",
+          ),
+        ),
+        permissions: Flag.String("permissions").pipe(
+          Flag.withDescription(
+            "Comma-separated deploy,create-environment,destroy-environment,database-download,database-upload",
+          ),
+        ),
+        disabled: Flag.Boolean("disabled").pipe(Flag.withDefault(false)),
+        events: Flag.String("events").pipe(
+          Flag.withDefault("push,workflow_dispatch"),
+        ),
+      },
+      ({
+        project,
+        clientId,
+        environment,
+        permissions,
+        events,
+        disabled,
+        ...input
+      }) =>
+        runWorkloadSave(project, Option.getOrUndefined(clientId), {
+          ...input,
+          environment: Option.getOrUndefined(environment),
+          permissions: permissions.split(","),
+          events: events.split(","),
+          enabled: !disabled,
+        }),
+    ),
+    Command.make(
+      "remove",
+      { project: Flag.String("project"), clientId: Flag.String("client-id") },
+      ({ project, clientId }) => runWorkloadRemove(project, clientId),
+    ),
+    Command.make("enroll", {}, () => runWorkloadEnroll()).pipe(
+      Command.withDescription("Enroll federated identity"),
+    ),
+  ]),
+)
+
 const projectsCommand = Command.make("projects", {}, () =>
   runProjects().pipe(
     Effect.catchTag("CliError", (error) =>
@@ -309,10 +418,73 @@ const projectsCommand = Command.make("projects", {}, () =>
   ),
 )
 
+const projectCommand = Command.make("project", {}).pipe(
+  Command.withDescription("Manage projects"),
+  Command.withSubcommands([
+    Command.make(
+      "create",
+      { name: Flag.String("name"), region: Flag.String("region") },
+      (input) =>
+        runProjectCreate(input).pipe(
+          Effect.catchTag("CliError", (error) =>
+            Effect.gen(function* () {
+              yield* Console.error(error.message)
+              process.exitCode = 1
+            }),
+          ),
+        ),
+    ).pipe(
+      Command.withDescription(
+        "Create a project and wait for its project-number receipt",
+      ),
+    ),
+  ]),
+)
+
+const executionId = Flag.String("execution-id").pipe(
+  Flag.withDescription(
+    "Persisted execution identity for automation receipt reconciliation",
+  ),
+  Flag.optional,
+)
+
+const deployStatusCommand = Command.make(
+  "status",
+  {
+    project: Flag.String("project"),
+    env: Flag.String("env"),
+  },
+  ({ project, env }) =>
+    runDeployStatus(project, env).pipe(
+      Effect.catchTag("CliError", (error) =>
+        Effect.gen(function* () {
+          yield* Console.error(`\n❌ ${error.message}`)
+          process.exitCode = 1
+        }),
+      ),
+    ),
+).pipe(
+  Command.withDescription(
+    "Check the active Backend deployment without starting one",
+  ),
+)
+
 const deployCommand = Command.make(
   "deploy",
-  { orgPath, projectId, environmentId, noWait },
-  ({ orgPath, projectId, environmentId, noWait }) =>
+  {
+    orgPath,
+    projectId,
+    environmentId,
+    noWait,
+    executionId,
+    waitTimeoutMs: Flag.Int("wait-timeout-ms").pipe(
+      Flag.optional,
+      Flag.withDescription(
+        "Positive deployment inactivity timeout in milliseconds (overrides PFCLI_DEPLOY_WAIT_TIMEOUT_MS; incompatible with --no-wait)",
+      ),
+    ),
+  },
+  ({ orgPath, projectId, environmentId, noWait, executionId, waitTimeoutMs }) =>
     Effect.gen(function* () {
       const missing: string[] = []
       if (Option.isNone(projectId)) {
@@ -343,6 +515,8 @@ const deployCommand = Command.make(
         resolvedEnvironmentId,
         {
           waitForCompletion: !noWait,
+          waitTimeoutMs: Option.getOrUndefined(waitTimeoutMs),
+          executionId: Option.getOrUndefined(executionId),
         },
       )
     }).pipe(
@@ -357,8 +531,9 @@ const deployCommand = Command.make(
     ),
 ).pipe(
   Command.withDescription(
-    "Build org, upload dist artifact, start deploy process, and wait for completion by default",
+    "Build and deploy an organisation. Ctrl-C stops waiting, not deployment. Use deploy status before retrying.",
   ),
+  Command.withSubcommands([deployStatusCommand]),
 )
 
 const destroyCommand = Command.make(
@@ -368,8 +543,9 @@ const destroyCommand = Command.make(
     environmentId: destroyEnvironmentId,
     confirmed: destroyConfirmed,
     noWait: destroyNoWait,
+    executionId,
   },
-  ({ projectId, environmentId, confirmed, noWait }) =>
+  ({ projectId, environmentId, confirmed, noWait, executionId }) =>
     Effect.gen(function* () {
       const missing: string[] = []
       if (Option.isNone(projectId)) {
@@ -397,6 +573,7 @@ Example: pfcli destroy --project <project-number> --env <environment-name> --yes
 
       return yield* runDestroy(resolvedProjectId, resolvedEnvironmentId, {
         waitForCompletion: !noWait,
+        executionId: Option.getOrUndefined(executionId),
       })
     }).pipe(
       Effect.catchTag("CliError", (error) =>
@@ -710,21 +887,25 @@ const canaryLogsCommand = makeLogsCommand(
   runCanaryLogs,
 )
 
-// MigrationError is caught here for user-friendly output, then
-// re-thrown so the command exits non-zero. @effect/cli treats an
-// unhandled tagged error as a silent exit(1).
-const migrateCommand = Command.make("migrate", { orgPath }, ({ orgPath }) =>
-  runMigrate(orgPath).pipe(
-    Effect.catchTag("MigrationError", (error) =>
-      Effect.gen(function* () {
-        yield* Console.error(`\n❌ Migration failed: ${error.reason}`)
-        if (error.statement) {
-          yield* Console.error(`   Statement: ${error.statement}`)
-        }
-        return yield* error
-      }),
+// Print the migration-specific message before propagating the failure
+// so the command exits non-zero.
+const migrateCommand = Command.make(
+  "migrate",
+  { orgPath, databasePath },
+  ({ orgPath, databasePath }) =>
+    runMigrate(orgPath, {
+      databasePath: Option.getOrUndefined(databasePath),
+    }).pipe(
+      Effect.catchTag("MigrationError", (error) =>
+        Effect.gen(function* () {
+          yield* Console.error(`\n❌ Migration failed: ${error.reason}`)
+          if (error.statement) {
+            yield* Console.error(`   Statement: ${error.statement}`)
+          }
+          return yield* error
+        }),
+      ),
     ),
-  ),
 ).pipe(
   Command.withDescription(
     "Run system and org schema migrations (uses SQLITE_DATABASE_PATH or $org-path/db/pf.db)",
@@ -733,8 +914,11 @@ const migrateCommand = Command.make("migrate", { orgPath }, ({ orgPath }) =>
 
 const migrateCustomCommand = Command.make(
   "migrate-custom",
-  { orgPath },
-  ({ orgPath }) => runMigrateCustom(orgPath),
+  { orgPath, databasePath },
+  ({ orgPath, databasePath }) =>
+    runMigrateCustom(orgPath, {
+      databasePath: Option.getOrUndefined(databasePath),
+    }),
 ).pipe(
   Command.withDescription(
     "Run custom schema migrations for organisation (uses SQLITE_DATABASE_PATH or $org-path/db/pf.db)",
@@ -753,8 +937,11 @@ const initCommand = Command.make(
 
 const getFrontendJwtCommand = Command.make(
   "get-frontend-jwt",
-  { orgPath: initOrgPath },
-  ({ orgPath }) => runGetFrontendJwt(orgPath),
+  { orgPath: initOrgPath, databasePath },
+  ({ orgPath, databasePath }) =>
+    runGetFrontendJwt(orgPath, {
+      databasePath: Option.getOrUndefined(databasePath),
+    }),
 ).pipe(
   Command.withDescription(
     "Output the stored frontend JWT token (created during import)",
@@ -763,8 +950,16 @@ const getFrontendJwtCommand = Command.make(
 
 const refreshFrontendJwtCommand = Command.make(
   "refresh-frontend-jwt",
-  { orgPath: initOrgPath },
-  ({ orgPath }) => runRefreshFrontendJwt(orgPath),
+  { orgPath: initOrgPath, databasePath, issuerUrl },
+  ({ orgPath, databasePath, issuerUrl }) =>
+    runRefreshFrontendJwt(
+      orgPath,
+      {},
+      {
+        databasePath: Option.getOrUndefined(databasePath),
+        issuerUrl: Option.getOrUndefined(issuerUrl),
+      },
+    ).pipe(Effect.catchTag("CliError", reportOperatorInputError)),
 ).pipe(
   Command.withDescription(
     "Regenerate the frontend JWT token with the current issuer URL and signing keys",
@@ -772,54 +967,52 @@ const refreshFrontendJwtCommand = Command.make(
 )
 
 // Config commands options
-const configProjectId = Options.text("project").pipe(
-  Options.withDescription("Project number (or internal ID)"),
+const configProjectId = Flag.String("project").pipe(
+  Flag.withDescription("Project number (or internal ID)"),
 )
 
-const configStageId = Options.text("stage").pipe(
-  Options.withDescription("Stage name"),
+const configStageId = Flag.String("stage").pipe(
+  Flag.withDescription("Stage name"),
 )
 
-const configKey = Args.text({ name: "key" }).pipe(
-  Args.withDescription("Configuration parameter name"),
+const configKey = Argument.String("key").pipe(
+  Argument.withDescription("Configuration parameter name"),
 )
 
-const configSetArgs = Args.repeated(Args.text({ name: "assignment" })).pipe(
-  Args.withDescription("One of KEY, KEY=VALUE, or KEY VALUE"),
+const configSetArgs = Argument.String("assignment")
+  .pipe(Argument.variadic())
+  .pipe(Argument.withDescription("One of KEY, KEY=VALUE, or KEY VALUE"))
+
+const configSecret = Flag.Boolean("secret").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Store as a secret (SecureString in SSM)"),
 )
 
-const configSecret = Options.boolean("secret").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Store as a secret (SecureString in SSM)"),
+const configFromStageId = Flag.String("from-stage").pipe(
+  Flag.withDescription("Source stage name"),
 )
 
-const configFromStageId = Options.text("from-stage").pipe(
-  Options.withDescription("Source stage name"),
+const stageProjectId = Flag.String("project").pipe(
+  Flag.withDescription("Project number (or internal ID)"),
 )
 
-const stageProjectId = Options.text("project").pipe(
-  Options.withDescription("Project number (or internal ID)"),
+const envProjectId = Flag.String("project").pipe(
+  Flag.withDescription("Project number (or internal ID)"),
 )
 
-const envProjectId = Options.text("project").pipe(
-  Options.withDescription("Project number (or internal ID)"),
+const envStageId = Flag.String("stage").pipe(Flag.withDescription("Stage name"))
+
+const envListStageId = Flag.String("stage").pipe(
+  Flag.optional,
+  Flag.withDescription("Stage name"),
 )
 
-const envStageId = Options.text("stage").pipe(
-  Options.withDescription("Stage name"),
+const stageNameArg = Argument.String("stage-name").pipe(
+  Argument.withDescription("Stage name to create"),
 )
 
-const envListStageId = Options.text("stage").pipe(
-  Options.optional,
-  Options.withDescription("Stage name"),
-)
-
-const stageNameArg = Args.text({ name: "stage-name" }).pipe(
-  Args.withDescription("Stage name to create"),
-)
-
-const envNameArg = Args.text({ name: "env-name" }).pipe(
-  Args.withDescription("Environment name to create"),
+const envNameArg = Argument.String("env-name").pipe(
+  Argument.withDescription("Environment name to create"),
 )
 
 // Config subcommands
@@ -956,29 +1149,39 @@ const envCommand = Command.make("env", {}).pipe(
 )
 
 // Auth commands
-const authLoginCommand = Command.make("login", {}, () =>
-  Effect.gen(function* () {
-    const baseUrl = yield* Config.string("BASE_URL").pipe(
-      Config.withDefault("https://console.processfocus.com"),
-    )
-    const ciProviderUserOption = yield* Config.option(
-      Config.string(HIDDEN_CI_PROVIDER_USER_ENV),
-    )
-    const ciProviderUser = Option.getOrUndefined(ciProviderUserOption)
-    yield* runAuthLogin(
-      baseUrl,
-      ciProviderUser === undefined ? {} : { ciProviderUser },
-    )
-  }).pipe(
-    Effect.catchTag("AuthLoginError", (error) =>
-      Effect.gen(function* () {
-        yield* Console.error(`\n❌ Login failed: ${error.message}`)
-        yield* Effect.sync(() => {
-          process.exitCode = 1
-        })
-      }),
+const authLoginCommand = Command.make(
+  "login",
+  {
+    baseUrl: Flag.String("base-url").pipe(
+      Flag.optional,
+      Flag.withDescription("Console HTTP(S) origin (overrides BASE_URL)"),
     ),
-  ),
+  },
+  ({ baseUrl: explicitBaseUrl }) =>
+    Effect.gen(function* () {
+      if (Option.isSome(explicitBaseUrl) && process.env["PFCLI_AUTH_MODE"]) {
+        return yield* new CliError({
+          message:
+            "--base-url is not available in OIDC federation auth mode; use its configured endpoint.",
+        })
+      }
+      const baseUrl = Option.isSome(explicitBaseUrl)
+        ? yield* validateUrlOption(explicitBaseUrl.value, "--base-url", true)
+        : yield* Config.String("BASE_URL").pipe(
+            Config.withDefault("https://console.processfocus.com"),
+          )
+      yield* runAuthLogin(baseUrl)
+    }).pipe(
+      Effect.catchTag("CliError", reportOperatorInputError),
+      Effect.catchTag("AuthLoginError", (error) =>
+        Effect.gen(function* () {
+          yield* Console.error(`\n❌ Login failed: ${error.message}`)
+          yield* Effect.sync(() => {
+            process.exitCode = 1
+          })
+        }),
+      ),
+    ),
 ).pipe(
   Command.withDescription(
     "Login via browser-based OAuth (uses BASE_URL env var, defaults to https://console.processfocus.com)",
@@ -1014,27 +1217,29 @@ const skillsCommand = Command.make("skills", {}).pipe(
 )
 
 // Grant commands options
-const grantRoleOption = Options.text("role").pipe(
-  Options.withDescription("Role path to grant (e.g. /Administrator)"),
+const grantRoleOption = Flag.String("role").pipe(
+  Flag.withDescription("Role path to grant (e.g. /Administrator)"),
 )
 
-const grantUserOption = Options.text("user").pipe(
-  Options.withDescription("Email address of the provider user"),
+const grantUserOption = Flag.String("user").pipe(
+  Flag.withDescription("Email address of the provider user"),
 )
 
-const grantProjectId = Options.text("project").pipe(
-  Options.optional,
-  Options.withDescription("Project number or internal ID (remote mode)"),
+const grantProjectId = Flag.String("project").pipe(
+  Flag.optional,
+  Flag.withDescription("Project number or internal ID (remote mode)"),
 )
 
-const grantEnvironmentId = Options.text("env").pipe(
-  Options.optional,
-  Options.withDescription("Environment name (remote mode)"),
+const grantEnvironmentId = Flag.String("env").pipe(
+  Flag.optional,
+  Flag.withDescription("Environment name (remote mode)"),
 )
 
-const grantOrgPath = Args.text({ name: "org-path" }).pipe(
-  Args.optional,
-  Args.withDescription("Path to the organisation directory (local mode only)"),
+const grantOrgPath = Argument.String("org-path").pipe(
+  Argument.optional,
+  Argument.withDescription(
+    "Path to the organisation directory (local mode only)",
+  ),
 )
 
 // Grant subcommands
@@ -1046,9 +1251,11 @@ const grantRoleCommand = Command.make(
     projectId: grantProjectId,
     environmentId: grantEnvironmentId,
     orgPath: grantOrgPath,
+    databasePath,
   },
-  ({ role, user, projectId, environmentId, orgPath }) => {
+  ({ role, user, projectId, environmentId, orgPath, databasePath }) => {
     const opts = {
+      databasePath: Option.getOrUndefined(databasePath),
       orgPath: Option.getOrUndefined(orgPath),
       rolePath: role,
       email: user,
@@ -1072,35 +1279,34 @@ const invitationProjectOptionName = "project"
 const invitationEnvironmentOptionName = "env"
 const invitationEmailOptionName = "email"
 
-const invitationProjectId = Options.text(invitationProjectOptionName).pipe(
-  Options.optional,
-  Options.withDescription("Project number or internal ID (remote mode)"),
+const invitationProjectId = Flag.String(invitationProjectOptionName).pipe(
+  Flag.optional,
+  Flag.withDescription("Project number or internal ID (remote mode)"),
 )
 
-const invitationEnvironmentId = Options.text(
+const invitationEnvironmentId = Flag.String(
   invitationEnvironmentOptionName,
-).pipe(
-  Options.optional,
-  Options.withDescription("Environment name (remote mode)"),
-)
+).pipe(Flag.optional, Flag.withDescription("Environment name (remote mode)"))
 
-const invitationEmail = Options.text(invitationEmailOptionName).pipe(
-  Options.optional,
-  Options.withDescription(
+const invitationEmail = Flag.String(invitationEmailOptionName).pipe(
+  Flag.optional,
+  Flag.withDescription(
     "Normalized Email of the Invitation or existing account",
   ),
 )
 
-const invitationRotate = Options.boolean("rotate").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
+const invitationRotate = Flag.Boolean("rotate").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
     "Replace an active or expired Registration Link, or issue an existing account's Passkey Recovery Link",
   ),
 )
 
-const invitationOrgPath = Args.text({ name: "org-path" }).pipe(
-  Args.optional,
-  Args.withDescription("Path to the organisation directory (local mode only)"),
+const invitationOrgPath = Argument.String("org-path").pipe(
+  Argument.optional,
+  Argument.withDescription(
+    "Path to the organisation directory (local mode only)",
+  ),
 )
 
 const invitationRegistrationLinkCommand = Command.make(
@@ -1111,9 +1317,21 @@ const invitationRegistrationLinkCommand = Command.make(
     email: invitationEmail,
     rotate: invitationRotate,
     orgPath: invitationOrgPath,
+    databasePath,
+    frontendUrl,
   },
-  ({ projectId, environmentId, email, rotate, orgPath }) =>
+  ({
+    projectId,
+    environmentId,
+    email,
+    rotate,
+    orgPath,
+    databasePath,
+    frontendUrl,
+  }) =>
     runInvitationRegistrationLink({
+      databasePath: Option.getOrUndefined(databasePath),
+      frontendUrl: Option.getOrUndefined(frontendUrl),
       orgPath: Option.getOrUndefined(orgPath),
       projectId: Option.getOrUndefined(projectId),
       environmentId: Option.getOrUndefined(environmentId),
@@ -1126,19 +1344,50 @@ const invitationRegistrationLinkCommand = Command.make(
   ),
 )
 
+const invitationCreateCommand = Command.make(
+  "create",
+  {
+    orgPath: invitationOrgPath,
+    databasePath,
+    email: Flag.String("email").pipe(
+      Flag.withDescription("Invitee email address"),
+    ),
+    roles: Flag.String("role").pipe(
+      Flag.atLeast(1),
+      Flag.withDescription("Exact role path; repeat for multiple roles"),
+    ),
+  },
+  ({ orgPath, email, roles, databasePath }) =>
+    runInvitationCreate({
+      databasePath: Option.getOrUndefined(databasePath),
+      orgPath: Option.getOrUndefined(orgPath),
+      email,
+      roles,
+    }),
+).pipe(
+  Command.withDescription(
+    "Create a pending Invitation directly in a local organisation database",
+  ),
+)
+
 const invitationCommand = Command.make("invitation", {}).pipe(
   Command.withDescription("Invitation operations"),
-  Command.withSubcommands([invitationRegistrationLinkCommand]),
+  Command.withSubcommands([
+    invitationCreateCommand,
+    invitationRegistrationLinkCommand,
+  ]),
 )
 
 // Main CLI
-const app = Command.make("pfcli", {}).pipe(
+export const pfcliCommand = Command.make("pfcli", {}).pipe(
   Command.withDescription("Process Focus CLI Tool"),
   Command.withSubcommands([
     initCommand,
     importCommand,
     buildCommand,
     projectsCommand,
+    projectCommand,
+    workloadCommand,
     deployCommand,
     destroyCommand,
     logsCommand,
@@ -1159,8 +1408,7 @@ const app = Command.make("pfcli", {}).pipe(
   ]),
 )
 
-const cli = Command.run(app, {
-  name: "pfcli",
+const cli = Command.runWith(pfcliCommand, {
   version: CLI_PACKAGE_VERSION,
 })
 
@@ -1244,6 +1492,9 @@ const invitationRegistrationLinkValueOptions = [
   `--${invitationProjectOptionName}`,
   `--${invitationEnvironmentOptionName}`,
   `--${invitationEmailOptionName}`,
+  "--role",
+  "--frontend-url",
+  "--database-path",
 ]
 
 const findMissingInvitationRegistrationLinkOptionValue = (
@@ -1294,7 +1545,8 @@ const normalizeInvitationRegistrationLinkArgOrder = (
 
   if (
     argv[invitationCommandIndex] !== "invitation" ||
-    argv[registrationLinkCommandIndex] !== "registration-link"
+    (argv[registrationLinkCommandIndex] !== "registration-link" &&
+      argv[registrationLinkCommandIndex] !== "create")
   ) {
     return { ok: true, argv: [...argv] }
   }
@@ -1337,23 +1589,8 @@ export const runPfcliCommand = (argv: readonly string[]) =>
     ).pipe(
       Effect.flatMap(() =>
         Effect.gen(function* () {
-          const hiddenArgs = extractHiddenCiProviderUserArgs(argv)
-          if (hiddenArgs.error) {
-            yield* Console.error(`\n❌ ${hiddenArgs.error}`)
-            yield* Effect.sync(() => {
-              process.exitCode = 1
-            })
-            return
-          }
-
-          if (hiddenArgs.providerUser !== undefined) {
-            // Hidden side-channel: @effect/cli should not know about this CI-only
-            // flag, so full-entrypoint tests must restore this env var after use.
-            process.env[HIDDEN_CI_PROVIDER_USER_ENV] = hiddenArgs.providerUser
-          }
-
           const registrationLinkArgs =
-            normalizeInvitationRegistrationLinkArgOrder(hiddenArgs.argv)
+            normalizeInvitationRegistrationLinkArgOrder(argv)
           if (!registrationLinkArgs.ok) {
             yield* Console.error(`\n❌ ${registrationLinkArgs.error}`)
             yield* Effect.sync(() => {
@@ -1362,14 +1599,15 @@ export const runPfcliCommand = (argv: readonly string[]) =>
             return
           }
 
-          yield* cli(registrationLinkArgs.argv)
+          yield* cli(registrationLinkArgs.argv.slice(2))
         }).pipe(
-          Effect.catchIf(ValidationError.isValidationError, (error) =>
+          Effect.catchIf(CliParseError.isCliError, (error) =>
             Effect.sync(() => {
-              if (!ValidationError.isHelpRequested(error)) {
+              if (!(error._tag === "ShowHelp" && error.errors.length === 0)) {
                 maybeShowConfigSubcommandHint(argv)
               }
-              process.exitCode = ValidationError.isHelpRequested(error) ? 0 : 1
+              process.exitCode =
+                error._tag === "ShowHelp" && error.errors.length === 0 ? 0 : 1
             }),
           ),
         ),
@@ -1379,7 +1617,7 @@ export const runPfcliCommand = (argv: readonly string[]) =>
 
 if (import.meta.main) {
   runPfcliCommand(process.argv).pipe(
-    Effect.provide(NodeContext.layer),
+    Effect.provide(NodeServices.layer),
     NodeRuntime.runMain,
   )
 }

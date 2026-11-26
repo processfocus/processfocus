@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import ts from "typescript"
 import { PUBLIC_SOURCE_PROJECT_ROOTS } from "../tools/project-boundaries/policy"
 import { releaseConfiguration } from "../tools/public-release/policy"
@@ -109,6 +109,7 @@ export const preparePublicSourceWorkspace = (
   if (Array.isArray(nx["plugins"]))
     nx["plugins"] = nx["plugins"].filter(
       (plugin) =>
+        plugin !== "./scripts/nx-quiet-plugin.ts" &&
         !(
           object(plugin) &&
           (plugin["plugin"] === "@berenddeboer/nx-aws-cdk/plugin" ||
@@ -172,14 +173,49 @@ export const preparePublicSourceWorkspace = (
       "NODE_ENV=production DASHBOARD_DISTRIBUTION=generic bash scripts/build-public-dashboard.sh"
   }
   json("runtime/local/project.json", runtime)
-  const graphqlSteps = "apps/graphql-e2e/steps/index.ts"
-  write(
-    graphqlSteps,
-    readFileSync(join(directory, graphqlSteps), "utf8").replace(
-      'export * from "./cloud-org.steps"\n',
-      "",
-    ),
-  )
+  const hostedDemoCi = "examples/demo/src/hosted-ci.ts"
+  if (existsSync(join(directory, hostedDemoCi))) {
+    write(
+      hostedDemoCi,
+      'import { Effect } from "effect"\n\n// The standalone demo has no hosted CI identities.\nexport const hostedCiFields = {}\nexport const hostedCiPolicyFiles: string[] = []\nexport const hostedCiClients = Effect.succeed({})\n',
+    )
+    const hostedDemoDependencies = ["@pf/auth-local-cedar", "@pf/auth-policy"]
+    const demoManifestPath = "examples/demo/package.json"
+    const demo = read(demoManifestPath)
+    if (object(demo["devDependencies"]))
+      for (const dependency of hostedDemoDependencies)
+        delete demo["devDependencies"][dependency]
+    json(demoManifestPath, demo)
+
+    const demoTsconfigPath = "examples/demo/tsconfig.app.json"
+    const demoTsconfig = read(demoTsconfigPath)
+    const hostedDemoReferences = new Set(
+      hostedDemoDependencies.flatMap((dependency) => {
+        const root = resolve(
+          directory,
+          "packages",
+          dependency.slice("@pf/".length),
+        )
+        return [
+          root,
+          join(root, "tsconfig.json"),
+          join(root, "tsconfig.lib.json"),
+        ]
+      }),
+    )
+    if (Array.isArray(demoTsconfig["references"]))
+      demoTsconfig["references"] = demoTsconfig["references"].filter(
+        (reference) =>
+          !(
+            object(reference) &&
+            typeof reference["path"] === "string" &&
+            hostedDemoReferences.has(
+              resolve(directory, dirname(demoTsconfigPath), reference["path"]),
+            )
+          ),
+      )
+    json(demoTsconfigPath, demoTsconfig)
+  }
   const lock = read("bun.lock")
   if (!object(lock["workspaces"]) || !object(lock["packages"]))
     throw new Error("Unsupported Bun lockfile structure")
@@ -224,8 +260,8 @@ export const preparePublicSourceWorkspace = (
     `# Process Focus\n\nSource-available tools for modelling and executing business processes. See\n[LICENSE.md](LICENSE.md) for the O'Saasy license.\n\n## Development\n\nInstall the Bun and Node versions in mise.toml, then run:\n\n\`\`\`sh\nbun install --frozen-lockfile\nbun run lint\nbun run lint:project-boundaries\nbun scripts/nx-quiet.ts run @pf/demo:build\n\`\`\`\n\nThe examples are examples/demo and examples/on-boarding. Set MY_EMAIL for\nyour own invitation when using the on-boarding example. Hosted CLI commands\ncommunicate with the hosting API; the hosted service implementation is separate.\n\nTo build the generic Dashboard with a temporary local backend:\n\n\`\`\`sh\nbun scripts/nx-quiet.ts run @processfocus/runtime-local:dashboard-build\n\`\`\`\n\nThe Dashboard build requires Linux, Git, curl, flock, and setsid. It supervises\nits own temporary database and local servers.\n`,
   )
   write(
-    "CONTEXT-MAP.md",
-    "# Context map\n\nThis source workspace owns process authoring, generic execution, authentication,\nforms, the Dashboard, local runtime, CLI, and official plugins. The demo and\non-boarding organisations demonstrate authoring. See each project's README\nand the documentation site in apps/www/src/content/docs/.\n",
+    "GLOSSARY-MAP.md",
+    "# Glossary map\n\nThis source workspace owns process authoring, generic execution, authentication,\nforms, the Dashboard, local runtime, CLI, and official plugins. The demo and\non-boarding organisations demonstrate authoring. See each project's README\nand the documentation site in apps/www/src/content/docs/.\n",
   )
   return edits
 }

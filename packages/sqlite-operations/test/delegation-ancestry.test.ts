@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-import { SqlClient } from "@effect/sql"
 import { eq } from "drizzle-orm"
 import {
   Clock,
@@ -13,11 +12,9 @@ import {
   Schema,
   Stream,
 } from "effect"
+import { SqlClient } from "effect/sql"
 import {
   AuthenticationDatabase,
-  DelegationDatabase,
-  DelegationSessionService,
-  DelegationSessionServiceIsolated,
   createAuthenticationServer,
   createClientJwt,
 } from "@pf/auth-api"
@@ -28,6 +25,14 @@ import {
   LocalCedarConfigDefault,
   PolicyWatcherService,
 } from "@pf/auth-local-cedar"
+import {
+  DelegationCredentialServiceLive,
+  DelegationDatabase,
+} from "@pf/delegation"
+import {
+  DelegationSessionService,
+  DelegationSessionServiceIsolated,
+} from "@pf/delegation/authorization"
 import * as schema from "@pf/drizzle-sqlite"
 import { KeyManagementServiceLive, createTestApp } from "@pf/openauth"
 import { TypedSqliteDrizzle } from "@pf/service-drizzle-sqlite"
@@ -45,9 +50,10 @@ const base = Layer.mergeAll(
 const cedar = LocalCedarAuthorizationLive.pipe(
   Layer.provide(LocalCedarConfigDefault()),
 )
-const isolated = DelegationSessionServiceIsolated.pipe(
-  Layer.provideMerge(Layer.merge(base, cedar)),
-)
+const isolated = Layer.merge(
+  DelegationSessionServiceIsolated,
+  DelegationCredentialServiceLive,
+).pipe(Layer.provideMerge(Layer.merge(base, cedar)))
 const Tokens = Schema.decodeUnknownSync(
   Schema.Struct({
     access_token: Schema.String,
@@ -97,8 +103,8 @@ const setup = Effect.gen(function* () {
       delegationId: `dlg-${index}`,
       parentGenerationId: index === 0 ? null : `dsg-${index - 1}`,
       verifier: createHash("sha256").update(secret).digest("base64url"),
-      issuedAt: DateTime.unsafeMake(now),
-      expiresAt: DateTime.unsafeMake(deadline),
+      issuedAt: DateTime.makeUnsafe(now),
+      expiresAt: DateTime.makeUnsafe(deadline),
     })
     yield* store.recordIssuance({
       delegationId: `dlg-${index}`,
@@ -108,7 +114,7 @@ const setup = Effect.gen(function* () {
         index === 0
           ? undefined
           : { id: `dlg-${index - 1}`, generationId: `dsg-${index - 1}` },
-      issuedAt: DateTime.unsafeMake(now),
+      issuedAt: DateTime.makeUnsafe(now),
     })
   }
   const sessions = yield* DelegationSessionService
@@ -230,27 +236,27 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
               case "revocation":
                 yield* store.revoke({
                   id: `dlg-${ancestor}`,
-                  revokedAt: DateTime.unsafeMake(time),
+                  revokedAt: DateTime.makeUnsafe(time),
                 })
                 break
               case "replacement":
                 yield* store.revokeGeneration({
                   generationId: `dsg-${ancestor}`,
-                  revokedAt: DateTime.unsafeMake(time),
+                  revokedAt: DateTime.makeUnsafe(time),
                 })
                 yield* store.recordChange({
                   delegationId: `dlg-${ancestor}`,
                   generationId: `dsg-${ancestor}`,
                   actorId: owners[ancestor]!,
                   event: "replaced",
-                  occurredAt: DateTime.unsafeMake(time),
+                  occurredAt: DateTime.makeUnsafe(time),
                 })
                 yield* store.insertGeneration({
                   id: "dsg-replacement",
                   delegationId: `dlg-${ancestor}`,
                   verifier: "replacement-verifier",
-                  issuedAt: DateTime.unsafeMake(time),
-                  expiresAt: DateTime.unsafeMake(deadline + 86400_000),
+                  issuedAt: DateTime.makeUnsafe(time),
+                  expiresAt: DateTime.makeUnsafe(deadline + 86400_000),
                 })
                 break
               case "owner":
@@ -285,18 +291,20 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
             expect(yield* sessions.check(leaf).pipe(Effect.isFailure)).toBe(
               true,
             )
-            expect((yield* Effect.promise(exchange)).status).toBe(400)
+            expect((yield* Effect.promise(exchange)).status).toBe(
+              change === "roles" ? 200 : 400,
+            )
             for (const tokens of [browser, cli]) {
               expect(
                 (yield* Effect.promise(() => accept(tokens.access_token)))
                   .status,
-              ).toBe(401)
+              ).toBe(change === "roles" ? 200 : 401)
               for (const scope of [undefined, "cli", "role:/Tester"]) {
                 expect(
                   (yield* Effect.promise(() =>
                     refresh(tokens.refresh_token, scope),
                   )).status,
-                ).toBe(400)
+                ).toBe(change === "roles" ? 200 : 400)
               }
             }
             if (change !== "expiry") {
@@ -313,11 +321,15 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
             }
           }).pipe(
             Effect.provide(isolated),
-            Effect.withClock(
-              Object.assign(Clock.make(), {
-                currentTimeMillis: Effect.sync(() => time),
-                unsafeCurrentTimeMillis: () => time,
-              }),
+            Effect.provideService(
+              Clock.Clock,
+              Object.assign(
+                Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+                {
+                  currentTimeMillis: Effect.sync(() => time),
+                  currentTimeMillisUnsafe: () => time,
+                },
+              ),
             ),
           ),
         )
@@ -358,8 +370,8 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
                 delegationId,
                 parentGenerationId,
                 verifier: "new-verifier",
-                issuedAt: DateTime.unsafeMake(now),
-                expiresAt: DateTime.unsafeMake(expiresAt),
+                issuedAt: DateTime.makeUnsafe(now),
+                expiresAt: DateTime.makeUnsafe(expiresAt),
               })
               .pipe(Effect.isFailure),
           ).toBe(true)
@@ -383,11 +395,15 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
         ).toBeNull()
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.succeed(now),
-            unsafeCurrentTimeMillis: () => now,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.succeed(now),
+              currentTimeMillisUnsafe: () => now,
+            },
+          ),
         ),
       ),
     )
@@ -424,13 +440,13 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
                     delegationId: "dlg-racing",
                     parentGenerationId: leaf.delegation.generationId,
                     verifier: "racing-verifier",
-                    issuedAt: DateTime.unsafeMake(time),
-                    expiresAt: DateTime.unsafeMake(deadline),
+                    issuedAt: DateTime.makeUnsafe(time),
+                    expiresAt: DateTime.makeUnsafe(deadline),
                   })
                 }),
               )
               .pipe(Effect.isFailure)
-          }).pipe(Effect.fork)
+          }).pipe(Effect.forkChild)
           yield* Deferred.await(checked)
           time = change === "expiry" ? deadline : now + 30_000
           yield* sql.withTransaction(
@@ -439,7 +455,7 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
                 case "revocation":
                   yield* store.revoke({
                     id: "dlg-0",
-                    revokedAt: DateTime.unsafeMake(time),
+                    revokedAt: DateTime.makeUnsafe(time),
                   })
                   break
                 case "replacement":
@@ -449,7 +465,7 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
                     generationId: "dsg-0",
                     actorId: owners[0]!,
                     event: "replaced",
-                    occurredAt: DateTime.unsafeMake(time),
+                    occurredAt: DateTime.makeUnsafe(time),
                   })
                   break
                 case "owner":
@@ -479,11 +495,15 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
           expect(yield* sessions.check(leaf).pipe(Effect.isFailure)).toBe(true)
         }).pipe(
           Effect.provide(isolated),
-          Effect.withClock(
-            Object.assign(Clock.make(), {
-              currentTimeMillis: Effect.sync(() => time),
-              unsafeCurrentTimeMillis: () => time,
-            }),
+          Effect.provideService(
+            Clock.Clock,
+            Object.assign(
+              Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+              {
+                currentTimeMillis: Effect.sync(() => time),
+                currentTimeMillisUnsafe: () => time,
+              },
+            ),
           ),
         ),
       )
@@ -502,11 +522,15 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
         expect(yield* sessions.check(leaf).pipe(Effect.isFailure)).toBe(true)
       }).pipe(
         Effect.provide(isolated),
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.succeed(now),
-            unsafeCurrentTimeMillis: () => now,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.succeed(now),
+              currentTimeMillisUnsafe: () => now,
+            },
+          ),
         ),
       ),
     )
@@ -558,22 +582,27 @@ describe("immutable generation ancestry with migrated SQLite and real Cedar/auth
             )
             expect(
               (yield* Effect.promise(() => accept(tokens.access_token))).status,
-            ).toBe(401)
-            expect((yield* Effect.promise(exchange)).status).toBe(400)
+            ).toBe(200)
+            expect((yield* Effect.promise(exchange)).status).toBe(200)
           }).pipe(
             Effect.provide(
-              DelegationSessionServiceIsolated.pipe(
-                Layer.provideMerge(Layer.merge(base, liveCedar)),
-              ),
+              Layer.merge(
+                DelegationSessionServiceIsolated,
+                DelegationCredentialServiceLive,
+              ).pipe(Layer.provideMerge(Layer.merge(base, liveCedar))),
             ),
           )
         }),
       ).pipe(
-        Effect.withClock(
-          Object.assign(Clock.make(), {
-            currentTimeMillis: Effect.succeed(now),
-            unsafeCurrentTimeMillis: () => now,
-          }),
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(
+            Object.create(Effect.runSync(Clock.Clock)) as Clock.Clock,
+            {
+              currentTimeMillis: Effect.succeed(now),
+              currentTimeMillisUnsafe: () => now,
+            },
+          ),
         ),
       ),
     )

@@ -1,5 +1,5 @@
-import { SqlError } from "@effect/sql/SqlError"
 import { Effect } from "effect"
+import { SqlError, UnknownError } from "effect/sql/SqlError"
 import {
   isTransientTursoServerError,
   retryTransientTursoServerError,
@@ -24,8 +24,10 @@ describe("isTransientTursoServerError", () => {
 
   it("matches Turso HTTP 502 errors wrapped in SqlError", () => {
     const error = new SqlError({
-      message: "Failed to execute QueryPromise",
-      cause: new Error("SERVER_ERROR: Server returned HTTP status 502"),
+      reason: new UnknownError({
+        message: "Failed to execute QueryPromise",
+        cause: new Error("SERVER_ERROR: Server returned HTTP status 502"),
+      }),
     })
 
     expect(isTransientTursoServerError(error)).toBe(true)

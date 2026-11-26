@@ -159,14 +159,13 @@ export interface OAuthProviderRecord {
 }
 
 export interface OAuthClientRecord {
+  readonly workloadTrust?: unknown
   readonly clientId: string
   readonly secretHash: string
   readonly audience: string
 }
 
-export class AuthenticationDatabase extends Context.Tag(
-  "@pf/auth-api/AuthenticationDatabase",
-)<
+export class AuthenticationDatabase extends Context.Service<
   AuthenticationDatabase,
   {
     readonly findRootOrgUnit: () => Effect.Effect<
@@ -224,10 +223,6 @@ export class AuthenticationDatabase extends Context.Tag(
       newCounter: number,
       lastUsedAt?: DateTime.Utc,
     ) => Effect.Effect<boolean, DatabaseWriteError>
-    readonly updateLastLoggedIn: (
-      userId: string,
-      lastLoggedIn: DateTime.Utc,
-    ) => Effect.Effect<void, DatabaseWriteError>
     /**
      * Updates provider user profile picture.
      */
@@ -344,6 +339,12 @@ export class AuthenticationDatabase extends Context.Tag(
       OAuthClientRecord[],
       DatabaseQueryError
     >
+    /** Compare-and-set enrollment: concurrent edits/disable/delete invalidate the proof. */
+    readonly enrollProjectWorkload: (
+      clientId: string,
+      expected: Record<string, unknown>,
+      enrolled: Record<string, unknown>,
+    ) => Effect.Effect<boolean, DatabaseWriteError>
     /**
      * Find an OAuth client by its client ID.
      * Used for dynamic client lookup at request time.
@@ -361,21 +362,27 @@ export class AuthenticationDatabase extends Context.Tag(
     /**
      * Find or create an M2M (machine-to-machine) user for client_credentials authentication.
      * Uses provider "client_credentials" and the client ID as sub.
-     * Creates the user if it doesn't exist, updates last_logged_in if requested.
+     * Creates the user if it doesn't exist; existing users are not updated.
      * Returns the database user ID for use in JWT tokens.
      */
     readonly upsertM2MUser: (
       clientId: string,
-      lastLoggedIn: DateTime.Utc,
-      options?: { readonly updateLastLoggedIn?: boolean },
+      createdAt: DateTime.Utc,
     ) => Effect.Effect<string, DatabaseWriteError>
-    /**
-     * Find permitted roles with their org unit info for a provider user by their user ID.
-     * Queries the permitted_role table which is populated by Cedar authorization checks.
-     * Returns role paths with org unit info for use in role switching.
-     * When switching to a permitted role, the session's org unit context is updated
-     * to match the role's org unit.
-     */
+    /** Persist a bounded, session-bound preparation authorized by GraphQL. */
+    readonly prepareRoleSwitch: (input: {
+      readonly key: string
+      readonly value: { readonly version: string; readonly expiresAt: number }
+      readonly expiresAt: DateTime.Utc
+    }) => Effect.Effect<void, DatabaseWriteError>
+    readonly consumeRoleSwitch: (
+      key: string,
+    ) => Effect.Effect<unknown, DatabaseWriteError>
+    /** Snapshot identity for revoking prepared and temporary authority on assignment edits. */
+    readonly findProviderUserAuthorityVersion: (
+      userId: string,
+    ) => Effect.Effect<string, DatabaseQueryError>
+    /** Read legacy permitted-role rows; these do not confer Provider User authority. */
     readonly findPermittedRolesWithOrgUnit: (
       userId: string,
     ) => Effect.Effect<
@@ -426,18 +433,5 @@ export class AuthenticationDatabase extends Context.Tag(
     readonly findRoleIdsByPaths: (
       paths: readonly string[],
     ) => Effect.Effect<string[], DatabaseQueryError>
-    /**
-     * Find the permitted provider user email for a confidential client (M2M).
-     * Looks up the oauth_client by clientId, then joins permitted_client_email.
-     * Returns the email and updatedAt timestamp.
-     * Returns Option.none() if no permission exists for this client/email combination.
-     */
-    readonly findPermittedClientEmail: (
-      clientId: string,
-      email: string,
-    ) => Effect.Effect<
-      Option.Option<{ email: string; updatedAt: DateTime.Utc }>,
-      DatabaseQueryError
-    >
   }
->() {}
+>()("@pf/auth-api/AuthenticationDatabase") {}

@@ -1,0 +1,179 @@
+---
+title: Assigning permissions to roles
+---
+
+Assign permissions to a role so that users with that role can perform
+the same work without a separate policy for each user.
+
+## Define a department role
+
+Roles are always part of an organisational unit. For example, define a `manager`
+role under the `accounts` department, and an organisation-wide `employee` role:
+
+```typescript
+import { Organisation, OrgUnit, Role } from "@pf/process"
+
+const org = new Organisation({ name: "Example" })
+
+const accounts = new OrgUnit(org, "accounts", {
+  name: "Accounts",
+  type: "department",
+})
+
+export const accountsManager = new Role(accounts, "manager", {
+  name: "Accounts manager",
+})
+
+export const employee = new Role(org, "employee", {
+  name: "Employee",
+})
+```
+
+The role paths are `/accounts/manager` and `/employee`: paths use the identifiers
+supplied to the constructs, not the display names. Assign each role to users who need it;
+see [Roles](/docs/reference/authorisation/roles/#assigning-roles).
+
+## Assign roles to steps
+
+Assign roles directly to the human steps in your process. The default
+Cedar policies grant access based on these assignments, so you do not
+need to write a policy for each step.
+
+For example, employees can submit a reimbursement, while only accounts
+managers can authorise it:
+
+```typescript
+import { Form, Process } from "@pf/process"
+
+const reimbursement = new Process(accounts, "reimbursement", {
+  name: "Reimbursement",
+  purpose: "Submit and authorise a reimbursement",
+})
+
+const submitReimbursement = new Form(reimbursement, "Submit reimbursement", {
+  role: employee,
+  form: () => ({}),
+})
+
+const authoriseReimbursement = new Form(reimbursement, "Authorise reimbursement", {
+  role: accountsManager,
+  form: () => ({}),
+})
+
+reimbursement.start(submitReimbursement).end(authoriseReimbursement)
+```
+
+Users with the `/employee` role can start the process by completing
+**Submit reimbursement**. The next step, **Authorise reimbursement**, requires
+the `/accounts/manager` role under the default policies; the employee role
+alone does not grant that permission. Start permission comes from the start
+step's role, rather than a separate role assigned to the process.
+
+Note that this is a contrived example: in the real-world there would
+be subsequent steps to actually record these payments in the
+accounting system, perhaps even upload to bank for payment and such.
+
+## Permit a step with Cedar
+
+You could also grant step access explicitly in Cedar. This policy permits
+provider users in the `/accounts/manager` role to authorise reimbursements:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/accounts/manager",
+    action == PF::Action::"complete",
+    resource == PF::Step::"/accounts/reimbursement/Authorise reimbursement"
+);
+```
+
+Replace the role and step paths with the paths in your organisation. The
+`in` operator checks role membership; the resource comparison limits this grant
+to that step. This policy applies to provider users, not service accounts or
+delegations.
+
+Writing these policies for each step means maintaining role and step paths
+separately from the process definition. Assigning the role on the step avoids
+that extra work. Use custom Cedar policies when you need permissions beyond
+the default role assignments.
+
+To grant the CEO permission to authorise all reimbursement Todos, including
+those assigned to someone else, you could add this policy:
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/ceo",
+    action == PF::Action::"complete",
+    resource == PF::Step::"/accounts/reimbursement/Authorise reimbursement"
+);
+```
+
+The policies above add permissions; they do not remove or
+replace other grants, and a matching `forbid` still takes precedence.
+
+Both starting a process and completing a Todo check `complete` against the
+relevant `PF::Step`. These examples grant access to **Authorise reimbursement**,
+not the separate **Submit reimbursement** start step.
+
+These explicit grants do not restrict access by direct user assignment.
+To respect an assignment, include the `unless` condition from the default
+policy below.
+
+For more about policy syntax, see [Cedar policies](/docs/reference/authorisation/cedar-policies/).
+
+## Default step permission
+
+The default policy starts with a role check: a provider user can complete a
+step when their roles include the role assigned to that step in the process
+definition. Leaving delegations and direct user assignments aside for now, the
+role check looks like this:
+
+```cedar
+permit (
+    principal is PF::ProviderUser,
+    action == PF::Action::"complete",
+    resource is PF::Step
+)
+when {
+    resource has role &&
+    principal has roles &&
+    principal.roles.contains(resource.role)
+};
+```
+
+It permits a provider user to complete a step when the principal's roles
+include the step's assigned role. The `has` checks ensure the attributes exist
+before reading them.
+
+This role check covers starting the reimbursement process as an employee and
+completing its authorisation Todo as an accounts manager.
+
+## Default permission for an assigned Todo
+
+A Todo can also be assigned to a specific user. The default policy then requires
+both the step's role and that user assignment: another accounts manager cannot
+complete a reimbursement Todo assigned to someone else.
+
+The runtime supplies the assigned user as `context.assignedTo`. The full
+built-in policy also supports delegations and adds an `unless` condition:
+
+```cedar
+permit (
+    principal,
+    action == PF::Action::"complete",
+    resource is PF::Step
+)
+when {
+    (principal is PF::ProviderUser || principal is PF::Delegation) &&
+    resource has role &&
+    principal has roles &&
+    principal.roles.contains(resource.role)
+}
+unless {
+    context has assignedTo && !(principal in context.assignedTo)
+};
+```
+
+The `unless` condition excludes anyone other than the assigned user or their
+delegation from this default grant. The assignee still needs the step's role.
+For unassigned Todos and process starts, `context.assignedTo` is absent, so the
+role check is enough.

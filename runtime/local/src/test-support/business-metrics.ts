@@ -19,8 +19,8 @@ const PrometheusVectorResponse = Schema.Struct({
     resultType: Schema.Literal("vector"),
     result: Schema.Array(
       Schema.Struct({
-        metric: Schema.Record({ key: Schema.String, value: Schema.String }),
-        value: Schema.Tuple(Schema.Unknown, Schema.String),
+        metric: Schema.Record(Schema.String, Schema.String),
+        value: Schema.Tuple([Schema.Unknown, Schema.String]),
       }),
     ),
   }),
@@ -34,8 +34,8 @@ const PrometheusMatrixResponse = Schema.Struct({
     resultType: Schema.Literal("matrix"),
     result: Schema.Array(
       Schema.Struct({
-        metric: Schema.Record({ key: Schema.String, value: Schema.String }),
-        values: Schema.Array(Schema.Tuple(Schema.Number, Schema.String)),
+        metric: Schema.Record(Schema.String, Schema.String),
+        values: Schema.Array(Schema.Tuple([Schema.Number, Schema.String])),
       }),
     ),
   }),

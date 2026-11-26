@@ -15,7 +15,6 @@ import {
 describe("hosting contract inventory", () => {
   it("covers every hosted CLI area", () => {
     expect(HOSTED_CAPABILITIES).toEqual([
-      "auth",
       "projects",
       "deploy",
       "logs",

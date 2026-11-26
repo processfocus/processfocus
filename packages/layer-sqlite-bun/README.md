@@ -1,5 +1,8 @@
-# About
+# @pf/layer-sqlite-bun
 
-This is an Effect layer providing the `@effect/sql-sqlite-bun/SqliteClient`.
+An Effect SQL driver layer using Bun's SQLite support, for local file and
+in-memory databases.
 
-The bun `SqliteLive` and `SqliteTest` are used for our cli and for testing.
+Combine it with
+[`@pf/service-drizzle-sqlite`](../service-drizzle-sqlite/README.md)
+when typed access to the Process Focus schema is needed.

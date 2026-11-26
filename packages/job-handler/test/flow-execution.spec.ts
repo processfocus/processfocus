@@ -1,13 +1,8 @@
+import { EnqueueError, QueueService } from "@processfocus/runtime"
 import { eq } from "drizzle-orm"
-import {
-  DateTime,
-  type Duration,
-  Effect,
-  FiberRef,
-  Layer,
-  Option,
-  Schema,
-} from "effect"
+import type { Context } from "effect"
+import { DateTime, Duration, Effect, Layer, Option, Schema } from "effect"
+import { SqlClient } from "effect/sql"
 import * as schema from "@pf/drizzle-sqlite"
 import {
   CompletedJobOperations,
@@ -15,6 +10,8 @@ import {
   FlowExecutionOperations,
   SYSTEM_STEP_EXECUTION_QUEUE,
   ScheduledFlowOperations,
+  StepCompletionOperations,
+  TodoQueries,
   UserDetails,
   type UserDetailsValue,
   encodeDelegationAudit,
@@ -48,7 +45,6 @@ import {
   makeForEachItemsResolver,
   makeScheduleEvaluator,
 } from "@pf/process"
-import { EnqueueError, QueueService } from "@pf/queue-service"
 import { RequestTime } from "@pf/request-time"
 import {
   DatabaseTest,
@@ -75,12 +71,12 @@ interface EnqueuedJob {
 }
 
 type FlowExecutionOpsTransform = (
-  base: FlowExecutionOperations["Type"],
-) => FlowExecutionOperations["Type"]
+  base: Context.Service.Shape<typeof FlowExecutionOperations>,
+) => Context.Service.Shape<typeof FlowExecutionOperations>
 
 type ScheduledFlowOpsTransform = (
-  base: ScheduledFlowOperations["Type"],
-) => ScheduledFlowOperations["Type"]
+  base: Context.Service.Shape<typeof ScheduledFlowOperations>,
+) => Context.Service.Shape<typeof ScheduledFlowOperations>
 
 /**
  * Creates a mock QueueService that captures enqueued jobs.
@@ -131,6 +127,8 @@ const createMockQueueService = ({
         return `mock-job-${enqueuedJobs.length}`
       }),
     rawClaim: () => Effect.succeed(Option.none()),
+    rawClaimBatch: () => Effect.succeed([]),
+    acknowledgeBatch: () => Effect.succeed([]),
     acknowledge: () => Effect.void,
     fail: () => Effect.void,
     extendVisibility: () => Effect.void,
@@ -204,15 +202,12 @@ const createTestLayersForOrg = ({
   )
   const RequestTimeLive = Layer.succeed(
     RequestTime,
-    FiberRef.unsafeMake(DateTime.unsafeMake(Date.now())),
+    DateTime.makeUnsafe(Date.now()),
   )
-  const UserDetailsLive = Layer.succeed(
-    UserDetails,
-    FiberRef.unsafeMake({
-      by: "TEST_USER",
-      id: "TEST_USER",
-    }) as FiberRef.FiberRef<UserDetailsValue>,
-  )
+  const UserDetailsLive = Layer.succeed(UserDetails, {
+    by: "TEST_USER",
+    id: "TEST_USER",
+  } as UserDetailsValue)
 
   // Base database layer - provides TypedSqliteDrizzle
   const BaseDbLayer = Layer.provideMerge(SqliteDbOperationsLive, DatabaseTest)
@@ -389,7 +384,7 @@ const insertProviderUser = (params: {
       id: params.userId,
       provider: "test",
       sub: params.email,
-      lastLoggedIn: now,
+      createdAt: now,
     })
 
     const [firstName, ...rest] = params.name.split(" ")
@@ -514,7 +509,7 @@ const createPublicCompletionOrg = () => {
         email: String(state["externalEmail"]),
         displayName: "External Reviewer",
       }),
-      expiresAt: () => DateTime.unsafeMake("2099-01-01T10:00:00.000Z"),
+      expiresAt: () => DateTime.makeUnsafe("2099-01-01T10:00:00.000Z"),
       from: "Award Leader <award.leader@example.com>",
       subject: (_state, _ctx, _item, publicUrl) => `Please review ${publicUrl}`,
       body: (state) => `Review request ${String(state["reference"])}`,
@@ -683,6 +678,731 @@ const runProvidedTestProgram = <A, E, R, LE>(
 ) => Effect.runPromise(Effect.provide(program, layers).pipe(Effect.asVoid))
 
 describe("Flow Execution Handler", () => {
+  for (const scenario of [
+    "completion-first",
+    "interrupt-completion-first",
+    "interrupt-trigger-first",
+    "interrupt-correction-required",
+    "interrupt-race",
+    "interrupt-without-waiting",
+    "interrupt-rollback",
+    "interrupt-external-recovery",
+    "interrupt-active-sibling",
+    "staged-escalation",
+    "suppress-escalation",
+    "trigger-first",
+    "without-waiting",
+    "external-recovery",
+    "persisted-timestamp",
+    "automated-timestamp",
+    "nested-timestamp",
+    "array-timestamp",
+    "empty-array-timestamp",
+    "optional-timestamp",
+    "nullable-timestamp",
+    "absent-optional-timestamp",
+    "null-timestamp",
+    "failed-execution-restart",
+    "failed-owner-restart",
+    "invalid",
+  ] as const) {
+    it(`durable task deadline: ${scenario}`, async () => {
+      const interrupting = scenario.startsWith("interrupt-")
+      const withoutWaiting =
+        scenario === "without-waiting" ||
+        scenario === "interrupt-without-waiting"
+      const org = new Organisation({ name: "Deadline test" })
+      const role = new Role(org, "employee", { name: "Employee" })
+      const process = new Process(org, "deadline", {
+        name: "Deadline",
+        purpose: "Deadline lifecycle",
+      })
+      const recordDelivery = new NodeStep(process, "record-delivery", {
+        input: () => Effect.succeed({}),
+        output: {
+          automatedAt: Schema.DateTimeUtc,
+          delivery: Schema.Struct({ at: Schema.DateTimeUtc }),
+          deliveries: Schema.Array(Schema.Struct({ at: Schema.DateTimeUtc })),
+          optionalAt: Schema.optional(Schema.DateTimeUtc),
+          nullableAt: Schema.NullOr(Schema.DateTimeUtc),
+        },
+        execute: () =>
+          Effect.succeed({
+            automatedAt: DateTime.makeUnsafe("1999-12-25T00:00:00Z"),
+            delivery: { at: DateTime.makeUnsafe("1999-12-25T00:00:00Z") },
+            deliveries: [],
+            nullableAt: null,
+          }),
+      })
+      const deliveryRecorded = process.start(recordDelivery)
+      const submit = new Form(deliveryRecorded, "submit", {
+        role,
+        form: Schema.Struct({ deliveredAt: Schema.DateTimeUtcFromString }),
+      })
+      const started = deliveryRecorded.next(submit)
+      const approve = new Form(started, "approve", {
+        role,
+        form: Schema.Struct({}),
+      })
+      started.next(approve)
+      // This graph's normal path terminates at the owner; the reminder is independent.
+      if (interrupting) {
+        const normal = new Form(started, "normal", {
+          role,
+          form: Schema.Struct({}),
+        })
+        approve.next(normal).end()
+      } else {
+        process.addEndEdge(approve)
+      }
+      const reminder = new NodeStep(process, "remind", {
+        name: "Reminder",
+        input: () => Effect.succeed({}),
+        output: {},
+        execute: () => Effect.succeed({}),
+      })
+      let evaluations = 0
+      const dueAt = DateTime.makeUnsafe("2000-01-01T00:00:00Z")
+      if (withoutWaiting) {
+        approve.onDeadline("reminder", {
+          after: Duration.days(7),
+          handler: reminder,
+          interrupting,
+        })
+      } else {
+        approve.onDeadline("reminder", {
+          at: (state) => {
+            evaluations++
+            if (scenario === "invalid") throw new Error("bad timestamp")
+            if (scenario === "persisted-timestamp")
+              return DateTime.add(state.deliveredAt, { days: 7 })
+            if (scenario === "automated-timestamp")
+              return DateTime.add(state.automatedAt, { days: 7 })
+            if (scenario === "nested-timestamp")
+              return DateTime.add(state.delivery.at, { days: 7 })
+            if (
+              scenario === "array-timestamp" ||
+              scenario === "empty-array-timestamp"
+            ) {
+              const last = state.deliveries.at(-1)
+              return last ? DateTime.add(last.at, { days: 7 }) : dueAt
+            }
+            if (
+              scenario === "optional-timestamp" ||
+              scenario === "absent-optional-timestamp"
+            )
+              return state.optionalAt === undefined
+                ? dueAt
+                : DateTime.add(state.optionalAt, { days: 7 })
+            if (
+              scenario === "nullable-timestamp" ||
+              scenario === "null-timestamp"
+            )
+              return state.nullableAt === null
+                ? dueAt
+                : DateTime.add(state.nullableAt, { days: 7 })
+            return dueAt
+          },
+          handler: reminder,
+          interrupting,
+        })
+      }
+      if (!interrupting) process.addEndEdge(reminder)
+      if (scenario === "invalid") {
+        const laterInvalid = new Form(started, "later-invalid-work", {
+          role,
+          form: Schema.Struct({}),
+        })
+        const laterValid = new Form(started, "later-valid-work", {
+          role,
+          form: Schema.Struct({}),
+        })
+        approve
+          .onDeadline("later-invalid", {
+            at: () => {
+              throw new Error("later timestamp failure")
+            },
+            handler: laterInvalid,
+          })
+          .end()
+        approve
+          .onDeadline("later-valid", {
+            after: Duration.days(1),
+            handler: laterValid,
+          })
+          .end()
+      }
+      if (interrupting) {
+        const alternate = new Form(started, "alternate", {
+          role,
+          form: Schema.Struct({}),
+        })
+        reminder.next(alternate).end()
+        const sibling = new Form(started, "sibling", {
+          role,
+          form: Schema.Struct({}),
+        })
+        approve
+          .onDeadline("sibling", { at: () => dueAt, handler: sibling })
+          .end()
+      }
+      let publicationFailed = false
+      let failInterruptDispatch = false
+      const staged =
+        scenario === "staged-escalation" || scenario === "suppress-escalation"
+      if (staged) {
+        const manager = new Form(started, "manager", {
+          role,
+          form: Schema.Struct({ managerDecision: Schema.String }),
+        })
+        approve
+          .onDeadline("escalation", {
+            at: () => DateTime.add(dueAt, { hours: 1 }),
+            handler: manager,
+          })
+          .end()
+        const followUp = new Form(started, "follow-up", {
+          role,
+          form: Schema.Struct({}),
+        })
+        manager
+          .onDeadline("reminder", { at: () => dueAt, handler: followUp })
+          .end()
+      }
+      const { layer } = createMockQueueService({
+        queueInTransaction:
+          scenario !== "external-recovery" &&
+          scenario !== "interrupt-external-recovery",
+        onEnqueue: (queue) => {
+          if (
+            failInterruptDispatch &&
+            queue === SYSTEM_STEP_EXECUTION_QUEUE &&
+            !publicationFailed
+          ) {
+            publicationFailed = true
+            return Effect.fail(
+              new EnqueueError({
+                queue,
+                message: "Interrupt handoff unavailable",
+              }),
+            )
+          }
+          if (
+            scenario === "external-recovery" &&
+            queue === FLOW_EXECUTION_QUEUE &&
+            !publicationFailed
+          ) {
+            publicationFailed = true
+            return Effect.fail(
+              new EnqueueError({
+                queue,
+                message: "External queue unavailable",
+              }),
+            )
+          }
+          return Effect.void
+        },
+      })
+      const { layers } = createTestLayersForOrg({
+        org,
+        mockQueueServiceLayer: layer,
+      })
+      await runProvidedTestProgram(
+        Effect.gen(function* () {
+          yield* storeOrganisation(org)
+          const db = yield* TypedSqliteDrizzle
+          const sql = yield* SqlClient.SqlClient
+          const schedules = yield* ScheduledFlowOperations
+          const completions = yield* StepCompletionOperations
+          const processRow = (yield* db.select().from(schema.process))[0]!
+          const steps = yield* db.select().from(schema.step)
+          const submitId = steps.find(
+            (step) => step.path === `/${submit.node.path}`,
+          )!.id
+          const ownerId = steps.find(
+            (step) => step.path === `/${approve.node.path}`,
+          )!.id
+          yield* db.insert(schema.processState).values({
+            id: "deadline-state",
+            processId: processRow.id,
+            startStepId: submitId,
+            state: {
+              deliveredAt: "1999-12-25T00:00:00.000Z",
+              automatedAt: DateTime.makeUnsafe("1999-12-25T00:00:00Z"),
+              delivery: { at: DateTime.makeUnsafe("1999-12-25T00:00:00Z") },
+              deliveries:
+                scenario === "empty-array-timestamp"
+                  ? []
+                  : [
+                      { at: DateTime.makeUnsafe("1999-12-24T00:00:00Z") },
+                      { at: DateTime.makeUnsafe("1999-12-25T00:00:00Z") },
+                    ],
+              ...(scenario === "absent-optional-timestamp"
+                ? {}
+                : { optionalAt: DateTime.makeUnsafe("1999-12-25T00:00:00Z") }),
+              nullableAt:
+                scenario === "null-timestamp"
+                  ? null
+                  : DateTime.makeUnsafe("1999-12-25T00:00:00Z"),
+            },
+          })
+          yield* db.insert(schema.processExecution).values({
+            id: "deadline-execution",
+            processStateId: "deadline-state",
+            withoutWaiting,
+          })
+          const now = yield* DateTime.now
+          const deliver = (id: string, jobId: string) =>
+            flowExecutionHandler.handle({
+              jobId,
+              queue: FLOW_EXECUTION_QUEUE,
+              payload: { scheduledFlowId: id },
+              attempts: 1,
+              maxAttempts: 3,
+              availableAt: now,
+              lockedUntil: now,
+            })
+          const activation = yield* schedules.insertScheduledFlow(
+            "deadline-execution",
+            submitId,
+          )
+          if (scenario === "external-recovery") {
+            const first = yield* deliver(activation, "activate").pipe(
+              Effect.result,
+            )
+            expect(first._tag).toBe("Failure")
+            expect(yield* db.select().from(schema.taskDeadline)).toHaveLength(1)
+            expect(
+              yield* schedules.hasPendingScheduledFlows("deadline-execution"),
+            ).toBe(true)
+          } else {
+            yield* deliver(activation, "activate")
+          }
+          yield* deliver(activation, "activate")
+          const owner = (yield* db.select().from(schema.toDo))[0]!
+          if (interrupting) {
+            if (scenario === "interrupt-correction-required") {
+              yield* db
+                .update(schema.toDo)
+                .set({
+                  correctionRequiredAt: now,
+                  correctionFailureReason: "Recipient address rejected",
+                })
+                .where(eq(schema.toDo.id, owner.id))
+              const queries = yield* TodoQueries
+              expect(
+                yield* queries.listTodos({
+                  state: { kind: "correction-required" },
+                  limit: 100,
+                  offset: 0,
+                }),
+              ).toHaveLength(1)
+            }
+            const deadlines = yield* db.select().from(schema.taskDeadline)
+            const interrupt = deadlines.find(
+              (entry) => entry.deadlineName === "reminder",
+            )!
+            const sibling = deadlines.find(
+              (entry) => entry.deadlineName === "sibling",
+            )!
+            expect(interrupt.interrupting).toBe(true)
+            const hydrated = (yield* db.select().from(schema.flow)).find(
+              (entry) => entry.id === interrupt.flowId,
+            )!
+            expect(hydrated.interrupting).toBe(true)
+            const complete = (todoId: string) =>
+              sql.withTransaction(
+                Effect.gen(function* () {
+                  const details =
+                    yield* completions.queryTodoForCompletionById(todoId)
+                  const result = yield* completions.completeToDoIfOpen({
+                    todoId,
+                    userId: null,
+                    externalParticipantId: null,
+                    completedByRoleId: null,
+                    businessDurationMs: 1,
+                  })
+                  if (result.kind !== "completed") return result
+                  yield* schedules.disarmTaskDeadlines(todoId)
+                  const next = yield* schedules.insertScheduledFlow(
+                    "deadline-execution",
+                    details!.targetStepId,
+                  )
+                  return { kind: "completed" as const, next }
+                }),
+              )
+            const finish = (todoId: string) =>
+              Effect.gen(function* () {
+                const result = yield* complete(todoId)
+                expect(result.kind).toBe("completed")
+                if (result.kind === "completed")
+                  yield* deliver(result.next, `finish-${todoId}`)
+              })
+            const raced =
+              scenario === "interrupt-race"
+                ? (yield* Effect.all(
+                    [
+                      complete(owner.id),
+                      deliver(interrupt.id, "racing-interrupt"),
+                    ],
+                    { concurrency: "unbounded" },
+                  ))[0]
+                : undefined
+            if (
+              scenario === "interrupt-completion-first" ||
+              raced?.kind === "completed"
+            ) {
+              if (raced?.kind === "completed")
+                yield* deliver(raced.next, "racing-completion")
+              else yield* finish(owner.id)
+              yield* deliver(interrupt.id, "lost-interrupt")
+              yield* deliver(sibling.id, "lost-sibling")
+              expect(
+                (yield* schedules.getTaskDeadline(interrupt.id))!.disarmedAt,
+              ).not.toBeNull()
+              const active = (yield* db.select().from(schema.toDo)).filter(
+                (todo) => !todo._deleted,
+              )
+              expect(active).toHaveLength(1)
+              expect(
+                (yield* completions.queryTodoById(active[0]!.id))!
+                  .targetStepPath,
+              ).toEndWith("/normal")
+              yield* finish(active[0]!.id)
+            } else {
+              if (scenario === "interrupt-active-sibling")
+                yield* deliver(sibling.id, "sibling-first")
+              failInterruptDispatch =
+                scenario === "interrupt-rollback" ||
+                scenario === "interrupt-external-recovery"
+              if (failInterruptDispatch) {
+                const result = yield* deliver(interrupt.id, "interrupt").pipe(
+                  Effect.result,
+                )
+                expect(result._tag).toBe("Failure")
+                const savedOwner = (yield* db.select().from(schema.toDo)).find(
+                  (todo) => todo.id === owner.id,
+                )!
+                if (scenario === "interrupt-rollback") {
+                  expect(savedOwner._deleted).toBe(false)
+                  expect(savedOwner.interruptedAt).toBeNull()
+                  expect(
+                    (yield* schedules.getTaskDeadline(interrupt.id))!
+                      .triggeredAt,
+                  ).toBeNull()
+                  expect(
+                    Option.isSome(
+                      yield* schedules.getScheduledFlow(interrupt.id),
+                    ),
+                  ).toBe(true)
+                  expect(yield* db.select().from(schema.toDo)).toHaveLength(1)
+                } else {
+                  expect(savedOwner.interruptedAt).not.toBeNull()
+                  const flows = yield* FlowExecutionOperations
+                  expect(
+                    yield* flows.queryFlowDispatchJobs(interrupt.id),
+                  ).not.toHaveLength(0)
+                }
+              }
+              yield* deliver(interrupt.id, "interrupt")
+              yield* deliver(interrupt.id, "recovered-interrupt")
+              yield* deliver(sibling.id, "obsolete-sibling")
+              const retired = (yield* db.select().from(schema.toDo)).find(
+                (todo) => todo.id === owner.id,
+              )!
+              expect(retired._deleted).toBe(true)
+              if (scenario === "interrupt-correction-required") {
+                const queries = yield* TodoQueries
+                expect(
+                  yield* queries.listTodos({
+                    state: { kind: "correction-required" },
+                    limit: 100,
+                    offset: 0,
+                  }),
+                ).toHaveLength(0)
+              }
+              expect(retired.interruptedAt).not.toBeNull()
+              expect(retired.completedByUserId).toBeNull()
+              expect(retired.completedByExternalParticipantId).toBeNull()
+              expect(retired.businessDuration).toBeNull()
+              expect(yield* complete(owner.id)).toEqual({ kind: "not-found" })
+              expect(
+                yield* completions.queryTodoForCompletionById(owner.id),
+              ).toBeNull()
+              const saved = (yield* schedules.getTaskDeadline(interrupt.id))!
+              expect(DateTime.toEpochMillis(saved.dueAt)).toBe(
+                DateTime.toEpochMillis(interrupt.scheduledAt),
+              )
+              expect(
+                (yield* schedules.getTaskDeadline(sibling.id))!.disarmedAt ===
+                  null,
+              ).toBe(scenario === "interrupt-active-sibling")
+              expect(
+                (yield* db.select().from(schema.processExecution))[0]!
+                  .finishedAt,
+              ).toBeNull()
+              const active = (yield* db.select().from(schema.toDo)).filter(
+                (todo) => !todo._deleted,
+              )
+              expect(active).toHaveLength(
+                scenario === "interrupt-active-sibling" ? 2 : 1,
+              )
+              const reminderTodo = active.find(
+                (todo) => todo.flowId === interrupt.flowId,
+              )!
+              yield* finish(reminderTodo.id)
+              const human = (yield* db.select().from(schema.toDo)).find(
+                (todo) =>
+                  !todo._deleted &&
+                  !active.some((existing) => existing.id === todo.id),
+              )!
+              expect(
+                (yield* completions.queryTodoById(human.id))!.targetStepPath,
+              ).toEndWith("/alternate")
+              yield* finish(human.id)
+              if (scenario === "interrupt-active-sibling") {
+                expect(
+                  (yield* db.select().from(schema.processExecution))[0]!
+                    .finishedAt,
+                ).toBeNull()
+                yield* finish(
+                  active.find((todo) => todo.id !== reminderTodo.id)!.id,
+                )
+              }
+            }
+            expect(
+              (yield* db.select().from(schema.processExecution))[0]!.finishedAt,
+            ).not.toBeNull()
+            expect(
+              yield* schedules.hasPendingScheduledFlows("deadline-execution"),
+            ).toBe(false)
+            return
+          }
+          if (staged) {
+            const deadlines = yield* db.select().from(schema.taskDeadline)
+            expect(deadlines).toHaveLength(2)
+            const reminderDeadline = deadlines.find(
+              (d) => d.deadlineName === "reminder",
+            )!
+            const escalation = deadlines.find(
+              (d) => d.deadlineName === "escalation",
+            )!
+            expect(
+              Math.abs(
+                DateTime.toEpochMillis(escalation.scheduledAt) -
+                  DateTime.toEpochMillis(reminderDeadline.scheduledAt) -
+                  3_600_000,
+              ),
+            ).toBeLessThanOrEqual(1)
+            const complete = (todo: typeof owner, label: string) =>
+              Effect.gen(function* () {
+                const next = yield* sql.withTransaction(
+                  Effect.gen(function* () {
+                    const details = yield* completions.queryTodoById(todo.id)
+                    yield* completions.completeToDoIfOpen({
+                      todoId: todo.id,
+                      userId: null,
+                      externalParticipantId: null,
+                      completedByRoleId: null,
+                      businessDurationMs: 1,
+                    })
+                    yield* schedules.disarmTaskDeadlines(todo.id)
+                    return yield* schedules.insertScheduledFlow(
+                      "deadline-execution",
+                      details!.targetStepId,
+                    )
+                  }),
+                )
+                yield* deliver(next, label)
+              })
+            yield* deliver(reminderDeadline.id, "reminder-trigger")
+            yield* deliver(reminderDeadline.id, "reminder-duplicate")
+            expect(
+              (yield* schedules.getTaskDeadline(escalation.id))!.disarmedAt,
+            ).toBeNull()
+            expect(
+              (yield* schedules.getTaskDeadline(escalation.id))!.triggeredAt,
+            ).toBeNull()
+            const reminderTodo = (yield* db.select().from(schema.toDo)).find(
+              (todo) => todo.id !== owner.id,
+            )!
+            yield* complete(reminderTodo, "reminder-done")
+            if (scenario === "suppress-escalation") {
+              yield* complete(owner, "owner-done")
+              yield* deliver(escalation.id, "late-escalation")
+              expect(
+                (yield* schedules.getTaskDeadline(escalation.id))!.disarmedAt,
+              ).not.toBeNull()
+              expect(yield* db.select().from(schema.toDo)).toHaveLength(2)
+            } else {
+              yield* deliver(escalation.id, "escalation-trigger")
+              yield* deliver(escalation.id, "escalation-duplicate")
+              const todos = yield* db.select().from(schema.toDo)
+              expect(todos).toHaveLength(3)
+              expect(todos.find((todo) => todo.id === owner.id)!._deleted).toBe(
+                false,
+              )
+              const manager = todos.find(
+                (todo) => !todo._deleted && todo.id !== owner.id,
+              )!
+              const nested = (yield* db
+                .select()
+                .from(schema.taskDeadline)).find(
+                (d) => d.ownerToDoId === manager.id,
+              )!
+              expect(nested.deadlineName).toBe("reminder")
+              yield* complete(owner, "owner-done")
+              expect(
+                (yield* db.select().from(schema.processExecution))[0]!
+                  .finishedAt,
+              ).toBeNull()
+              yield* deliver(nested.id, "nested-trigger")
+              yield* complete(manager, "manager-done")
+              expect(
+                (yield* db.select().from(schema.processExecution))[0]!
+                  .finishedAt,
+              ).toBeNull()
+              const followUp = (yield* db.select().from(schema.toDo)).find(
+                (todo) => !todo._deleted,
+              )!
+              yield* complete(followUp, "follow-up-done")
+              expect(
+                (yield* schedules.getTaskDeadline(nested.id))!.triggeredAt,
+              ).not.toBeNull()
+            }
+            expect(
+              (yield* db.select().from(schema.processExecution))[0]!.finishedAt,
+            ).not.toBeNull()
+            expect(
+              yield* schedules.hasPendingScheduledFlows("deadline-execution"),
+            ).toBe(false)
+            return
+          }
+          if (scenario === "invalid") {
+            expect(owner.failureReason).toContain('Invalid deadline "reminder"')
+            expect(
+              (yield* db.select().from(schema.processExecution))[0]!
+                .abandonedReason,
+            ).toContain('Invalid deadline "reminder"')
+            expect(yield* db.select().from(schema.taskDeadline)).toHaveLength(0)
+            expect(
+              yield* schedules.hasPendingScheduledFlows("deadline-execution"),
+            ).toBe(false)
+            return
+          }
+          const deadline = (yield* db.select().from(schema.taskDeadline))[0]!
+          expect(owner.failureReason).toBeNull()
+          expect(deadline.ownerToDoId).toBe(owner.id)
+          expect(deadline.triggeredAt).toBeNull()
+          if (scenario !== "without-waiting")
+            expect(DateTime.formatIso(deadline.scheduledAt)).toBe(
+              "2000-01-01T00:00:00.000Z",
+            )
+          if (scenario === "failed-owner-restart") {
+            yield* completions.failToDo(
+              owner.id,
+              "Owner failed before deadline delivery",
+            )
+            yield* deliver(deadline.id, "delivery-while-owner-failed")
+            const preserved = yield* schedules.getTaskDeadline(deadline.id)
+            expect(preserved!.triggeredAt).toBeNull()
+            expect(preserved!.disarmedAt).toBeNull()
+            expect(
+              Option.isSome(yield* schedules.getScheduledFlow(deadline.id)),
+            ).toBe(true)
+            yield* completions.clearTodoFailures(
+              [owner.id],
+              "restart-failed-owner",
+            )
+          }
+          if (scenario === "failed-execution-restart") {
+            const flows = yield* FlowExecutionOperations
+            yield* flows.setProcessExecutionFailed(
+              "deadline-execution",
+              "Parallel automated step failed",
+            )
+            yield* deliver(deadline.id, "delivery-while-failed")
+            expect(
+              (yield* schedules.getTaskDeadline(deadline.id))!.triggeredAt,
+            ).toBeNull()
+            expect(
+              Option.isSome(yield* schedules.getScheduledFlow(deadline.id)),
+            ).toBe(true)
+            yield* completions.clearProcessExecutionFinished(
+              "deadline-execution",
+            )
+            const pending =
+              yield* schedules.queryPendingTaskDeadlines("deadline-execution")
+            expect(pending.map((entry) => entry.id)).toEqual([deadline.id])
+            expect(DateTime.formatIso(pending[0]!.scheduledAt)).toBe(
+              DateTime.formatIso(dueAt),
+            )
+          }
+          // Changing state and redelivering activation never re-evaluates a deadline.
+          yield* completions.updateProcessState("deadline-state", {
+            changed: true,
+          })
+          if (scenario !== "without-waiting") expect(evaluations).toBe(1)
+          const completeOwner = sql.withTransaction(
+            Effect.gen(function* () {
+              yield* completions.completeToDoIfOpen({
+                todoId: owner.id,
+                userId: null,
+                externalParticipantId: null,
+                completedByRoleId: null,
+                businessDurationMs: 1,
+              })
+              yield* schedules.disarmTaskDeadlines(owner.id)
+              return yield* schedules.insertScheduledFlow(
+                "deadline-execution",
+                ownerId,
+              )
+            }),
+          )
+          if (scenario === "completion-first") {
+            const next = yield* completeOwner
+            yield* deliver(deadline.id, "late-recovery")
+            yield* deliver(next, "owner-done")
+            expect(yield* db.select().from(schema.toDo)).toHaveLength(1)
+            expect(
+              (yield* db.select().from(schema.taskDeadline))[0]!.disarmedAt,
+            ).not.toBeNull()
+            expect(
+              (yield* db.select().from(schema.processExecution))[0]!.finishedAt,
+            ).not.toBeNull()
+          } else {
+            // Recovered delivery needs only the durable handoff id, no original state/payload.
+            yield* deliver(deadline.id, "recovered-trigger")
+            expect(
+              (yield* db
+                .select()
+                .from(schema.toDo)
+                .where(eq(schema.toDo.id, owner.id)))[0]!._deleted,
+            ).toBe(false)
+            const next = yield* completeOwner
+            yield* deliver(next, "owner-done")
+            yield* deliver(deadline.id, "duplicate-trigger")
+            const todos = yield* db.select().from(schema.toDo)
+            expect(todos).toHaveLength(2)
+            expect(todos.find((todo) => todo.id !== owner.id)!._deleted).toBe(
+              false,
+            )
+            expect(
+              (yield* db.select().from(schema.processExecution))[0]!.finishedAt,
+            ).toBeNull()
+            const saved = (yield* db.select().from(schema.taskDeadline))[0]!
+            expect(saved.triggeredAt).not.toBeNull()
+            expect(saved.disarmedAt).toBeNull()
+            expect(DateTime.toEpochMillis(saved.scheduledAt)).toBe(
+              DateTime.toEpochMillis(deadline.scheduledAt),
+            )
+          }
+        }),
+        layers,
+      )
+    })
+  }
+
   it("ignores onError edges during normal flow execution", async () => {
     const { layer: mockQueueServiceLayer } = createMockQueueService()
     const { org, paths } = createOnErrorFlowOrg()
@@ -1074,11 +1794,13 @@ describe("Flow Execution Handler", () => {
 
         // 6. Create scheduled_flow record (2-phase commit pattern)
         const scheduledFlowOps = yield* ScheduledFlowOperations
-        const userDetails = yield* UserDetails
         const scheduledFlowId = yield* scheduledFlowOps
           .insertScheduledFlow(processExecutionId, flow.sourceStepId)
           .pipe(
-            Effect.locally(userDetails, { by: audit ?? "TEST_USER", id: null }),
+            Effect.provideService(UserDetails, {
+              by: audit ?? "TEST_USER",
+              id: null,
+            }),
           )
 
         // 7. Create and run the job with scheduledFlowId (new payload schema)
@@ -1103,7 +1825,7 @@ describe("Flow Execution Handler", () => {
         expect(dbTodo.processExecutionId).toBe(processExecutionId)
         expect(dbTodo.flowId).toBe(flow.id)
         expect(dbTodo.createdBy).toBe(audit ?? "TEST_USER")
-        expect((yield* FiberRef.get(userDetails)).by).toBe("TEST_USER")
+        expect((yield* UserDetails).by).toBe("TEST_USER")
 
         // 9. Verify jobs were enqueued: todo-event, process-event, execution-event
         expect(enqueuedJobs).toHaveLength(3)
@@ -2281,6 +3003,8 @@ describe("Todo notification fanout", () => {
         const process = (yield* db.select().from(schema.process).limit(1))[0]
         if (!flow || !process) throw new Error("Flow fixture not found")
 
+        const importJobs = yield* db.select().from(schema.jobQueue)
+
         const suffix = String(failureIndex)
         const processStateId = `pst-fanout-recovery-${suffix}`
         const processExecutionId = `pex-fanout-recovery-${suffix}`
@@ -2325,7 +3049,7 @@ describe("Todo notification fanout", () => {
         })
 
         expect(yield* db.select().from(schema.toDo)).toHaveLength(1)
-        expect(yield* db.select().from(schema.jobQueue)).toHaveLength(0)
+        expect(yield* db.select().from(schema.jobQueue)).toEqual(importJobs)
         expect(enqueuedJobs.map((job) => job.queue)).toEqual(expectedQueues)
         const logicalJobIds = enqueuedJobs.map((job) => job.logicalJobId)
         expect(logicalJobIds.every((id) => id !== undefined)).toBe(true)
@@ -2537,7 +3261,7 @@ describe("Scheduled Flow Execution", () => {
       createMockQueueService()
 
     // Create a mock schedule evaluator that returns a future date
-    const futureDate = DateTime.unsafeMake(Date.now() + 3600000) // 1 hour from now
+    const futureDate = DateTime.makeUnsafe(Date.now() + 3600000) // 1 hour from now
     const mockScheduleEvaluator: ScheduleEvaluatorService = {
       evaluate: () => Effect.succeed(futureDate),
     }
@@ -2573,7 +3297,7 @@ describe("Scheduled Flow Execution", () => {
         id: userId,
         provider: "test",
         sub: "test@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3020,7 +3744,7 @@ describe("Business Calendar Schedule Resolution", () => {
 
     // Create a mock schedule evaluator that returns a BusinessHoursSchedule marker
     // This simulates: Schedule.businessHours(completedAt, 2) - 2 business hours from now
-    const baseTime = DateTime.unsafeMake(
+    const baseTime = DateTime.makeUnsafe(
       // Monday 2099-01-05 at 16:00 UTC (4pm)
       new Date("2099-01-05T16:00:00Z").getTime(),
     )
@@ -3075,7 +3799,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3162,7 +3886,7 @@ describe("Business Calendar Schedule Resolution", () => {
 
     // Create a mock schedule evaluator that returns a BusinessDaysSchedule marker
     // This simulates: Schedule.businessDays(completedAt, 2) - 2 business days from Friday
-    const baseTime = DateTime.unsafeMake(
+    const baseTime = DateTime.makeUnsafe(
       // Friday 2099-01-09 at 14:00 UTC
       new Date("2099-01-09T14:00:00Z").getTime(),
     )
@@ -3217,7 +3941,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test2@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3296,7 +4020,7 @@ describe("Business Calendar Schedule Resolution", () => {
       createMockQueueService()
 
     // Create a mock schedule evaluator that returns a BusinessHoursSchedule marker
-    const baseTime = DateTime.unsafeMake(
+    const baseTime = DateTime.makeUnsafe(
       // Monday 2099-01-05 at 16:00 UTC
       new Date("2099-01-05T16:00:00Z").getTime(),
     )
@@ -3337,7 +4061,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test3@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3415,7 +4139,7 @@ describe("Business Calendar Schedule Resolution", () => {
     // Simulate: Schedule.fromPoint(state.start_date, { days: -7 })
     // Start date is Monday Jan 19 2099, subtract 7 days = Jan 12 2099
     // Jan 12 is a Monday (business day), no snap needed
-    const startDate = DateTime.unsafeMake(
+    const startDate = DateTime.makeUnsafe(
       // Monday 2099-01-19 at 10:00 UTC
       new Date("2099-01-19T10:00:00Z").getTime(),
     )
@@ -3471,7 +4195,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3553,7 +4277,7 @@ describe("Business Calendar Schedule Resolution", () => {
     // Simulate: Schedule.fromPoint(state.start_date, { days: 7 })
     // Start date is Friday 2099-01-09, add 7 days = 2099-01-16 (Friday)
     // Both are business days, no snap needed
-    const startDate = DateTime.unsafeMake(
+    const startDate = DateTime.makeUnsafe(
       // Friday 2099-01-09 at 10:00 UTC
       new Date("2099-01-09T10:00:00Z").getTime(),
     )
@@ -3609,7 +4333,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test2@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3685,7 +4409,7 @@ describe("Business Calendar Schedule Resolution", () => {
 
     // Simulate: Schedule.fromPoint(state.start_date, { days: -7 })
     // With no calendar configured, should use plain calendar math
-    const startDate = DateTime.unsafeMake(
+    const startDate = DateTime.makeUnsafe(
       // Monday 2099-01-19 at 10:00 UTC
       new Date("2099-01-19T10:00:00Z").getTime(),
     )
@@ -3727,7 +4451,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test3@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3808,7 +4532,7 @@ describe("Business Calendar Schedule Resolution", () => {
 
     // Simulate: Schedule.fromPoint(state.start_date, { days: 0 })
     // When the target date is in the future, it should be deferred
-    const startDate = DateTime.unsafeMake(
+    const startDate = DateTime.makeUnsafe(
       // Monday 2099-01-19 at 14:30 UTC (during business hours, in future)
       new Date("2099-01-19T14:30:00Z").getTime(),
     )
@@ -3864,7 +4588,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test4@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution
@@ -3941,7 +4665,7 @@ describe("Business Calendar Schedule Resolution", () => {
 
     // Simulate: Schedule.fromPoint(state.start_date, { days: 0 })
     // When the target date is a Saturday (non-business day), should snap forward to Monday
-    const startDate = DateTime.unsafeMake(
+    const startDate = DateTime.makeUnsafe(
       // Saturday 2099-01-10 at 10:00 UTC (weekend)
       new Date("2099-01-10T10:00:00Z").getTime(),
     )
@@ -3997,7 +4721,7 @@ describe("Business Calendar Schedule Resolution", () => {
         id: userId,
         provider: "test",
         sub: "test5@example.com",
-        lastLoggedIn: userCreatedAt,
+        createdAt: userCreatedAt,
       })
 
       // Create process state and execution

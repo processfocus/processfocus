@@ -23,12 +23,6 @@
       "path": "../form-schema/tsconfig.lib.json"
     },
     {
-      "path": "../form-rule/tsconfig.lib.json"
-    },
-    {
-      "path": "../form-client-representation/tsconfig.lib.json"
-    },
-    {
       "path": "../business-calendar/tsconfig.lib.json"
     }
   ],

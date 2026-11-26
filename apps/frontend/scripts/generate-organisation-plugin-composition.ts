@@ -98,7 +98,7 @@ const assertRequiredBrowserPluginArtifacts = (options: {
 
 type BrowserPluginArtifactPathField = "path" | "preparation.path"
 
-const stageVerifiedBrowserPluginArtifact = (options: {
+export const stageVerifiedBrowserPluginArtifact = (options: {
   readonly identity: string
   readonly artifactPath: string
   readonly artifactPathField: BrowserPluginArtifactPathField

@@ -1,10 +1,10 @@
 import { Construct, type IConstruct } from "constructs"
-import { Config } from "effect"
 import {
   POSTHOG_FRONTEND_CLIENT_PLUGIN_TYPE,
   parsePostHogFrontendClientPluginConfig,
 } from "./frontend-client-plugin"
 import { PostHog } from "./posthog"
+import { makePostHogConfiguration } from "./posthog-configuration"
 import { describe, expect, it } from "bun:test"
 
 class RootConstruct extends Construct {
@@ -149,7 +149,7 @@ describe("PostHog", () => {
     }
   })
 
-  it("resolves apiKey from Effect Config when serializing the manifest entry", () => {
+  it("resolves shared configuration when serializing the manifest entry", () => {
     const root = new RootConstruct()
     const originalToken = process.env["TEST_POSTHOG_PROJECT_TOKEN"]
 
@@ -157,8 +157,10 @@ describe("PostHog", () => {
 
     try {
       const posthog = new PostHog(root, "posthog", {
-        apiKey: Config.string("TEST_POSTHOG_PROJECT_TOKEN"),
-        host: "https://us.i.posthog.com",
+        configuration: makePostHogConfiguration(
+          { apiKey: "TEST_POSTHOG_PROJECT_TOKEN" },
+          { host: "https://us.i.posthog.com", enabled: true },
+        ),
       })
 
       expect(posthog.buildFrontendClientPluginManifest()).toEqual({
@@ -166,6 +168,7 @@ describe("PostHog", () => {
         type: POSTHOG_FRONTEND_CLIENT_PLUGIN_TYPE,
         config: {
           apiKey: "phc_test_from_env",
+          enabled: true,
           host: "https://us.i.posthog.com",
         },
       })

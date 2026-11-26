@@ -29,12 +29,11 @@ When(
         timestamp: string
       }
     }>(mutation, {
-      input: { item, value },
+      input: { item: this.purchaseItem(item), value },
     })
 
     this.startProcessResult = result.startFinancePurchaseRequest
 
-    // Verify process started successfully
     assert.ok(this.startProcessResult, "Start process result should be defined")
     assert.ok(
       this.startProcessResult.executionId,

@@ -36,6 +36,7 @@ input ListSortInput {
 
 "A process this caller may start from a List."
 type ListStartProcess {
+  path: String!
   name: String!
   startStepPath: String!
 }
@@ -44,9 +45,70 @@ type ListStartProcess {
 Information about a list that the user can access.
 Used by the frontend sidebar to display available lists.
 """
+type AnonymousPageLink {
+  name: String!
+  path: String!
+}
+
+type AnonymousPage {
+  name: String!
+  stepPath: String!
+  formPath: String!
+  afterSubmit: String!
+  defaultValues: JSON!
+  requestData: JSON!
+  pluginConfiguration: JSON!
+}
+
+"A field in the executable GraphQL schema, with caller-filtered input metadata."
+type ListSchemaField {
+  name: String!
+  "Authored form label, when available for an input field."
+  label: String
+  "Whether the authored input uses a lookup control rather than free text."
+  lookup: Boolean!
+  "GraphQL type expression, including list and non-null wrappers."
+  type: String!
+  description: String
+  "Required by GraphQL; form defaults do not remove this requirement."
+  required: Boolean!
+  hasDefault: Boolean!
+  defaultValue: JSON
+  "Authored literal choices (which may use a GraphQL scalar rather than enum)."
+  enumValues: [JSON!]!
+  fields: [ListSchemaField!]!
+}
+
+type ListOperationMetadata {
+  configured: Boolean!
+  "Operation-level permission; input/target validation remains authoritative."
+  authorized: Boolean!
+  name: String
+  "Empty when unauthorized or unconfigured."
+  arguments: [ListSchemaField!]!
+  result: ListSchemaField
+}
+
+type ListMetadata {
+  path: String!
+  name: String!
+  browse: ListOperationMetadata!
+  detail: ListOperationMetadata!
+  create: ListOperationMetadata!
+  update: ListOperationMetadata!
+  delete: ListOperationMetadata!
+  sortableFields: [String!]!
+  "Number of related Process starts configured on the List."
+  configuredProcessStartCount: Int!
+  "Related Processes whose start step the caller may complete."
+  authorizedProcessStarts: [ListStartProcess!]!
+}
+
 type ListInfo {
   "Optional start button, omitted when the caller cannot start the process."
   startProcess: ListStartProcess
+  additionalStartProcesses: [ListStartProcess!]!
+  anonymousPage: AnonymousPageLink
   "Whether this caller may create records in this List."
   canCreate: Boolean!
   id: ID!
@@ -137,6 +199,14 @@ Complete form metadata needed to render a dynamic form
 """
 type FormMetadata {
   """
+  Hydrated process identity for saving a draft without replicating the catalog.
+  """
+  processId: ID
+  """
+  Whether this caller may start this process without schedule waits.
+  """
+  canSkipScheduleWaits: Boolean
+  """
   Path to the step (format: orgUnit/processName/stepName)
   """
   stepPath: String!
@@ -177,19 +247,18 @@ type FormMetadata {
   """
   totalFields: Int!
   """
-  Structured browser-safe form definition. Components and serialized rules
-  have separate authoritative members.
-  """
-  formDefinition: JSON
-  """
   Default values for form initialization.
   When todoId is provided, state-referenced defaults are resolved.
   """
   defaultValues: JSON
   """
-  JSON Schema for client-side validation
+  Request-resolved public plugin data, keyed by field path.
   """
-  jsonSchema: JSON
+  pluginConfiguration: JSON
+  """
+  Request-local presentation and authorized field applicability, without schema structure.
+  """
+  requestData: JSON
 }
 
 enum PublicTodoStatus {
@@ -279,6 +348,8 @@ type WorkflowStep {
 Flow connection between workflow steps
 """
 type WorkflowFlow {
+  "Named deadline attached to the source task"
+  deadlineName: String
   id: ID!
   sourceStepId: ID!
   targetStepId: ID!
@@ -359,6 +430,21 @@ type ProcessListPage {
   page: Int!
   limit: Int!
   hasNextPage: Boolean!
+}
+
+"""
+The authored start form evaluated against the current chat draft.
+"""
+type ProcessStartForm {
+  startStepPath: String!
+  mutationName: String!
+  inputTypeName: String
+  fields: JSON!
+  defaultValues: JSON!
+  errors: JSON!
+  requiresDashboard: Boolean!
+  unconfirmedDefaults: [String!]!
+  submissionInput: JSON!
 }
 
 """
@@ -507,6 +593,11 @@ input SaveInvitationInput {
 
 type SaveInvitationSuccess {
   invitation: SettingsInvitation!
+  """
+  Secret bearer URL, returned only when explicitly requested during creation.
+  """
+  registrationLinkUrl: String
+  expiresAt: DateTimeISO
 }
 
 type SaveInvitationFailure {
@@ -560,6 +651,8 @@ type SettingsUserDetail {
   provider: String!
   sub: String!
   lastLoggedIn: DateTimeISO!
+  "Whether this organisation can deliver task-assignment email."
+  taskAssignmentEmailAvailable: Boolean!
   providerUser: SettingsProviderUser
 }
 
@@ -620,6 +713,8 @@ input NotificationChannelSettingsInput {
 
 input UpdateProviderUserInput {
   roleIds: [ID!]!
+  firstName: String
+  lastName: String
 }
 
 type UpdateProviderUserSuccess {
@@ -638,6 +733,7 @@ union UpdateProviderUserResult =
 A single item returned by a lookup field query
 """
 type LookupItem {
+  searchText: String
   value: String!
   label: String!
 }
@@ -668,6 +764,14 @@ type SubscriptionTransport {
 }
 
 type Query {
+  """
+  Correlated, expiring runtime deployment verification; frontend credential only.
+  """
+  deploymentProbe(input: JSON!): JSON
+  """
+  Live delegated identity after credential and Cedar application acceptance.
+  """
+  delegatedSession: JSON!
   # Top level, either the Organisation or the Board if the organisation has one
   org: OrgUnit
   """
@@ -687,7 +791,12 @@ type Query {
     limit: Int! = 50
     processPath: String
     status: String
+    requireStartMutation: Boolean! = false
   ): ProcessListPage!
+  """
+  Inspect a startable Process's form without starting an Execution.
+  """
+  processStartForm(processPath: String!, input: JSON): ProcessStartForm
   """
   Todos the current provider user is authorized to complete.
   Pagination is applied after Cedar authorization.
@@ -722,6 +831,10 @@ type Query {
   When todoId is provided, state-referenced defaults are resolved against the process state.
   """
   formMetadata(stepPath: String!, todoId: ID): FormMetadata
+  "Inspect and validate proposed answers for an open To-Do without completing it."
+  todoChatForm(todoId: ID!, answers: JSON!): JSON!
+  "Public start-form data authorized by Cedar viewEmbeddedForm; never accepts Todo state."
+  embeddedFormMetadata(stepPath: String!): FormMetadata
   """
   Resolve the single-email correction form for a Correction Required Public Completion Todo.
   Uses default provider-user auth; the resolver checks correction-specific todo authorization.
@@ -729,10 +842,19 @@ type Query {
   publicCompletionCorrection(todoId: ID!): PublicCompletionCorrection
   """
   Resolve public todo status and form metadata from an encrypted public todo token.
-  Uses the embed tag because frontend route handlers call this with the frontend
-  service-account JWT; the public token is validated inside the resolver.
+  Frontend route handlers use the frontend service-account JWT; the public token
+  is validated inside the resolver.
   """
-  publicTodo(token: String!): PublicTodo! @auth(tag: "embed")
+  publicTodo(token: String!): PublicTodo!
+  "Capability-scoped process start metadata; no participant identity is required."
+  anonymousPage(address: String!): AnonymousPage!
+  anonymousPageLookup(
+    address: String!
+    field: String!
+    filter: String
+    limit: Int
+    selectedValue: String
+  ): [LookupItem!]!
   """
   Resolve lookup suggestions for a public to-do form using its capability token.
   Only token-authorized public completion lookups are exposed by the resolver.
@@ -742,12 +864,12 @@ type Query {
     field: String!
     filter: String
     limit: Int
-  ): [LookupItem!]! @auth(tag: "embed")
+    selectedValue: String
+  ): [LookupItem!]!
   """
   Resolve calendar slots for a public to-do form using its capability token.
   """
   publicTodoCalendarSlots(token: String!, field: String!): [CalendarSlotItem!]!
-    @auth(tag: "embed")
   """
   Get workflow visualization data for a process by its path.
   Returns null if process not found.
@@ -769,6 +891,10 @@ type Query {
   """
   allUsers(page: Int! = 1, limit: Int! = 20): SettingsUserPage!
     @auth(action: "administerUsers")
+  settingsUserCount: Int! @auth(action: "administerUsers")
+  settingsRoleCount: Int! @auth(action: "administerUsers")
+  settingsInvitationCount: Int! @auth(action: "administerUsers")
+  settingsOAuthProviderCount: Int! @auth(action: "administerOAuthProviders")
   """
   Paginated list of OAuth providers
   """
@@ -820,6 +946,8 @@ type Query {
   Returns lists filtered by the user's roles.
   """
   availableLists: [ListInfo!]!
+  "Caller-aware description; null for unknown or inaccessible Lists."
+  listMetadata(listPath: String!): ListMetadata
   """
   Returns stats views filtered by the user's roles.
   """
@@ -844,7 +972,29 @@ type Query {
     filter: String
     limit: Int
     todoId: ID
-  ): [LookupItem!]! @auth(tag: "embed")
+    "Use the List create form at stepPath instead of its edit form."
+    listCreate: Boolean
+  ): [LookupItem!]!
+  "Resolve one eligible selected identity without loading choices."
+  lookupSelection(
+    stepPath: String!
+    field: String!
+    value: String!
+    todoId: ID
+    "Use the List create form at stepPath instead of its edit form."
+    listCreate: Boolean
+  ): LookupItem
+
+  "Server-search results, including whether the user needs to refine the query."
+  lookupSearch(
+    stepPath: String!
+    field: String!
+    filter: String
+    limit: Int
+    todoId: ID
+    "Use the List create form at stepPath instead of its edit form."
+    listCreate: Boolean
+  ): LookupSearchResult!
   """
   Get calendar slots for a calendar slot field within a form step.
   """
@@ -852,7 +1002,7 @@ type Query {
     stepPath: String!
     field: String!
     todoId: ID
-  ): [CalendarSlotItem!]! @auth(tag: "embed")
+  ): [CalendarSlotItem!]!
   """
   Request a presigned URL for downloading a previously uploaded file.
   Returns a URL to GET the file from.
@@ -863,6 +1013,11 @@ type Query {
     documentStore: String!
     fileId: String!
   ): DownloadUrlResult!
+}
+
+type LookupSearchResult {
+  items: [LookupItem!]!
+  hasMore: Boolean!
 }
 
 """
@@ -880,12 +1035,8 @@ type ListFormMetadata {
   updateInputTypeName: String
   "GraphQL mutation name for deleting the item (null if not deletable)"
   deleteMutationName: String
-  "Structured browser-safe form definition"
-  formDefinition: JSON
   "Default values for form initialization, merged with item data"
   defaultValues: JSON
-  "JSON Schema for client-side validation of editable fields"
-  jsonSchema: JSON
 }
 
 """
@@ -900,24 +1051,6 @@ type RequestRoleResult {
   The role path that was requested (if successful)
   """
   rolePath: String
-  """
-  Error message if the request failed
-  """
-  error: String
-}
-
-"""
-Result of a request provider user permissions operation
-"""
-type RequestEmailResult {
-  """
-  Whether the request was successful
-  """
-  success: Boolean!
-  """
-  The provider user email that was requested (if successful)
-  """
-  email: String
   """
   Error message if the request failed
   """
@@ -948,6 +1081,11 @@ type CleanupResult {
   Number of job queue entries deleted
   """
   jobsDeleted: Int!
+}
+
+type TodoChatCompletion {
+  executionId: ID!
+  stepPath: String!
 }
 
 """
@@ -1057,17 +1195,24 @@ union UpdateNotificationPreferencesResult =
 
 type Mutation {
   """
+  Enqueue an inert deployment probe; never starts a business process.
+  """
+  startDeploymentProbe(input: JSON!): JSON!
+  "Start the configured process through its Anonymous Page capability."
+  submitAnonymousPage(address: String!, input: JSON!): Boolean!
+  "Complete a To-Do using chat-compatible answers; replay only the identical submission."
+  completeTodoFromChat(todoId: ID!, answers: JSON!): TodoChatCompletion!
+  """
   Complete the todo bound to an encrypted public todo token.
-  Uses the embed tag because frontend route handlers call this with the frontend
-  service-account JWT; the public token is validated inside the resolver.
+  Frontend route handlers use the frontend service-account JWT; the public token
+  is validated inside the resolver.
   """
   completePublicTodo(token: String!, input: JSON): PublicTodo!
-    @auth(tag: "embed")
   """
   Request a fresh public to-do link for a token-bound todo. Expired tokens are
   accepted only after token decryption succeeds; arbitrary todo IDs are not.
   """
-  requestFreshPublicTodoLink(token: String!): PublicTodo! @auth(tag: "embed")
+  requestFreshPublicTodoLink(token: String!): PublicTodo!
   """
   Submit the corrected recipient email for a Correction Required Public Completion Todo.
   Applies the process-authored correction rule and reissues the public invitation.
@@ -1098,12 +1243,6 @@ type Mutation {
   """
   requestRole(rolePath: String!): RequestRoleResult!
   """
-  Request permission to impersonate a provider user. Validates via Cedar authorization
-  and updates the permitted_client_email table so the auth server can issue
-  provider user tokens for M2M clients.
-  """
-  requestProviderUserPermissions(email: String!): RequestEmailResult!
-  """
   Delete all execution-related data for e2e test isolation.
   This includes todos, scheduled flows, process executions,
   process states, and job queue entries.
@@ -1128,8 +1267,10 @@ type Mutation {
   """
   Create a new invitation with assigned roles
   """
-  createInvitation(input: SaveInvitationInput!): SaveInvitationResult!
-    @auth(action: "administerUsers")
+  createInvitation(
+    input: SaveInvitationInput!
+    registrationLink: Boolean! = false
+  ): SaveInvitationResult! @auth(action: "administerUsers")
   """
   Update an existing invitation's email address and role assignments
   """
@@ -1208,7 +1349,5 @@ type Mutation {
 type ListCreateFormMetadata {
   createMutationName: String!
   createInputTypeName: String!
-  formDefinition: JSON
   defaultValues: JSON
-  jsonSchema: JSON
 }

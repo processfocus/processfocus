@@ -22,15 +22,17 @@ export const makeQueueLayer = (
         enqueuedJobs.push({ queue, payload })
         return `job-${enqueuedJobs.length}`
       }),
-    enqueueWithDelay: () => Effect.dieMessage("not used"),
-    rawClaim: () => Effect.dieMessage("not used"),
-    acknowledge: () => Effect.dieMessage("not used"),
-    fail: () => Effect.dieMessage("not used"),
-    extendVisibility: () => Effect.dieMessage("not used"),
-    getStats: () => Effect.dieMessage("not used"),
-  } as unknown as QueueService["Type"])
+    enqueueWithDelay: () => Effect.die(new Error("not used")),
+    rawClaim: () => Effect.die(new Error("not used")),
+    rawClaimBatch: () => Effect.succeed([]),
+    acknowledgeBatch: () => Effect.succeed([]),
+    acknowledge: () => Effect.die(new Error("not used")),
+    fail: () => Effect.die(new Error("not used")),
+    extendVisibility: () => Effect.die(new Error("not used")),
+    getStats: () => Effect.die(new Error("not used")),
+  } as unknown as QueueService["Service"])
 
-export type AuthorizationServiceStub = AuthorizationService["Type"]
+export type AuthorizationServiceStub = AuthorizationService["Service"]
 
 /**
  * Base AuthorizationService test stub. All methods deny by default.
@@ -44,13 +46,12 @@ export const makeAuthorizationLayer = (
     canListDelegationTokens: () => Effect.succeed(false),
     canManageDelegation: () => Effect.succeed(false),
     canLogin: () => Effect.succeed(false),
+    policyVersion: Effect.succeed("test-policy"),
     canCompleteStep: () => Effect.succeed(false),
-    canCompleteTodo: () => Effect.succeed(false),
+    canViewEmbeddedForm: () => Effect.succeed(false),
     canCorrectPublicCompletionTodo: () => Effect.succeed(false),
-    canCompletePublicTodo: () => Effect.succeed(false),
     canModifyField: () => Effect.succeed(false),
     canRequestRole: () => Effect.succeed(false),
-    canRequestProviderUserPermissions: () => Effect.succeed(false),
     canActOnBehalfOf: () => Effect.succeed(false),
     canViewExecution: () => Effect.succeed(false),
     canRestartExecution: () => Effect.succeed(false),

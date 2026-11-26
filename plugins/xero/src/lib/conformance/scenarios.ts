@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import {
   type IssueAuthorisedSalesInvoiceInput,
   IssueAuthorisedSalesInvoiceInput as IssueAuthorisedSalesInvoiceInputSchema,
+  type IssuedSalesInvoice,
 } from "../identities"
 import type { XeroInvoiceError } from "../xero-invoice"
 import {
@@ -38,6 +39,7 @@ interface IssuedObservation {
   readonly invoiceId: string
   readonly invoiceNumber: string
   readonly invoice: ObservableInvoice
+  readonly lines: IssuedSalesInvoice["lines"]
 }
 
 interface FailedObservation {
@@ -85,8 +87,7 @@ const scenarioInput = ({
       postalCode: "6011",
       country: "New Zealand",
     },
-    productSku,
-    agreedPrice: CONFORMANCE_AGREED_PRICE,
+    lines: [{ productSku, quantity: 1, unitAmount: CONFORMANCE_AGREED_PRICE }],
     currency: CONFORMANCE_CURRENCY,
     reference: uniqueOrderNumberReference(run, scenario),
     date: run.date,
@@ -134,6 +135,9 @@ export interface SharedScenarioResults {
   readonly gst: IssuedObservation
   readonly replay: IssuedObservation
   readonly unknownItem: FailedObservation
+  readonly multiLine: IssuedObservation
+  readonly multiLineReplay: IssuedObservation
+  readonly partialLineConflict: FailedObservation
 }
 
 export const runSharedConformanceScenarios = (
@@ -190,5 +194,49 @@ export const runSharedConformanceScenarios = (
       yield* harness.issue(unknownInput, uniqueTodoId(run, "unk")),
     )
 
-    return { zeroTax, resolved, gst, replay, unknownItem }
+    const multiLineInput = Schema.decodeUnknownSync(
+      IssueAuthorisedSalesInvoiceInputSchema,
+    )({
+      customer: { name: createName, email: createEmail },
+      shippingAddress: zeroInput.shippingAddress,
+      currency: CONFORMANCE_CURRENCY,
+      reference: uniqueOrderNumberReference(run, "ML"),
+      date: run.date,
+      dueDate: run.date,
+      lines: [
+        { productSku: items.zeroTax, quantity: 3, unitAmount: "0.10" },
+        { productSku: items.gst, quantity: 2, unitAmount: "11.50" },
+      ],
+    })
+    const multiTodo = uniqueTodoId(run, "ml")
+    const multiLine = requireIssued(
+      yield* harness.issue(multiLineInput, multiTodo),
+    )
+    const multiLineReplay = requireIssued(
+      yield* harness.issue(multiLineInput, multiTodo),
+    )
+    const partialLineConflict = requireFailed(
+      yield* harness.issue(
+        Schema.decodeUnknownSync(IssueAuthorisedSalesInvoiceInputSchema)({
+          ...multiLineInput,
+          lines: [
+            { productSku: items.zeroTax, quantity: 3, unitAmount: "0.10" },
+            // Same invoice total, different second-line quantity and unit price.
+            { productSku: items.gst, quantity: 1, unitAmount: "23.00" },
+          ],
+        }),
+        uniqueTodoId(run, "ml-conflict"),
+      ),
+    )
+
+    return {
+      zeroTax,
+      resolved,
+      gst,
+      replay,
+      unknownItem,
+      multiLine,
+      multiLineReplay,
+      partialLineConflict,
+    }
   })

@@ -33,7 +33,7 @@ export class AppSyncEventsAdapter<
   CheckpointType,
 > {
   private pullStream$ = new Subject<
-    DocumentsWithCheckpoint<RxDocType, CheckpointType>
+    DocumentsWithCheckpoint<RxDocType, CheckpointType> | "RESYNC"
   >()
   private client: AppSyncEventsClient | null = null
 
@@ -53,6 +53,7 @@ export class AppSyncEventsAdapter<
       ...(this.config.expiresAt !== undefined
         ? { expiresAt: this.config.expiresAt }
         : {}),
+      onSubscribed: () => this.pullStream$.next("RESYNC"),
       onEvent: (eventData: string) => {
         try {
           // What we possibly should do here is validate input against schema?
@@ -105,15 +106,20 @@ export class AppSyncEventsAdapter<
     }
   }
 
-  getStream(): Observable<DocumentsWithCheckpoint<RxDocType, CheckpointType>> {
+  getStream(): Observable<
+    DocumentsWithCheckpoint<RxDocType, CheckpointType> | "RESYNC"
+  > {
     // Transform documents to use RxDB's _deleted field convention for the stream
     // RxDB will then map _deleted to the configured deletedField ("deleted") in storage
     // Filter out events with null checkpoints (no more documents to sync)
     return this.pullStream$.pipe(
       filter(
-        (bulk) => bulk.checkpoint !== null && bulk.checkpoint !== undefined,
+        (bulk) =>
+          bulk === "RESYNC" ||
+          (bulk.checkpoint !== null && bulk.checkpoint !== undefined),
       ),
       map((bulk) => {
+        if (bulk === "RESYNC") return bulk
         console.log("getStream")
         return {
           documents: bulk.documents.map((doc) => ({

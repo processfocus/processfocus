@@ -6,6 +6,7 @@ export class AuthError extends Data.TaggedError("AuthError")<{
 }> {}
 
 export class CliError extends Data.TaggedError("CliError")<{
+  readonly code?: string
   readonly message: string
   readonly cause?: unknown
 }> {}

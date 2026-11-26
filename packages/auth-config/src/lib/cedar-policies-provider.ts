@@ -1,7 +1,6 @@
 import * as path from "node:path"
-import { FileSystem } from "@effect/platform"
-import { NodeFileSystem } from "@effect/platform-node"
-import { Config, Context, Data, Effect, Layer } from "effect"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import { Config, Context, Data, Effect, FileSystem, Layer } from "effect"
 import { type Organisation, OrganisationProvider } from "@pf/process"
 import { isCustomEntitiesConfig } from "./custom-entities-config"
 import { isPoliciesConfig } from "./policies-config"
@@ -32,9 +31,10 @@ export interface CedarPoliciesProviderService {
 /**
  * Context tag for the CedarPoliciesProvider service.
  */
-export class CedarPoliciesProvider extends Context.Tag(
-  "@pf/auth-config/CedarPoliciesProvider",
-)<CedarPoliciesProvider, CedarPoliciesProviderService>() {}
+export class CedarPoliciesProvider extends Context.Service<
+  CedarPoliciesProvider,
+  CedarPoliciesProviderService
+>()("@pf/auth-config/CedarPoliciesProvider") {}
 
 /**
  * Extract policy files from all PoliciesConfig children in the organisation.
@@ -96,22 +96,19 @@ export const StaticCedarPoliciesProvider = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
 
-    const policiesDir = yield* Config.string("CEDAR_PATH")
+    const policiesDir = yield* Config.String("CEDAR_PATH")
 
-    // Validate directory exists before reading
     const exists = yield* fs.exists(policiesDir)
     if (!exists) {
       return yield* new CedarPoliciesDirNotFoundError({ path: policiesDir })
     }
 
-    // List all .cedar files in the directory
     const dirEntries = yield* fs.readDirectory(policiesDir)
     const cedarFiles = dirEntries.filter((entry) => entry.endsWith(".cedar"))
     const schemaFiles = dirEntries.filter((entry) =>
       entry.endsWith(".cedarschema"),
     )
 
-    // Return absolute paths
     const policyPaths = cedarFiles.map((file) => path.join(policiesDir, file))
     const schemaPaths = schemaFiles.map((file) => path.join(policiesDir, file))
 

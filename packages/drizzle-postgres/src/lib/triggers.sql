@@ -14,6 +14,11 @@ END;
 $$ LANGUAGE plpgsql;
 --> statement-breakpoint
 -- Triggers for all tables
+CREATE TRIGGER pf_audit_event_updated_at_trigger
+BEFORE UPDATE ON "pf_audit_event"
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+--> statement-breakpoint
 CREATE TRIGGER pf_org_unit_updated_at_trigger
 BEFORE UPDATE ON "pf_org_unit"
 FOR EACH ROW
@@ -21,6 +26,11 @@ EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
 CREATE TRIGGER pf_process_updated_at_trigger
 BEFORE UPDATE ON "pf_process"
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+--> statement-breakpoint
+CREATE TRIGGER pf_process_visibility_updated_at_trigger
+BEFORE UPDATE ON "pf_process_visibility"
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
@@ -84,6 +94,11 @@ BEFORE UPDATE ON "pf_scheduled_flow"
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
+CREATE TRIGGER pf_task_deadline_updated_at_trigger
+BEFORE UPDATE ON "pf_task_deadline"
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+--> statement-breakpoint
 CREATE TRIGGER pf_user_updated_at_trigger
 BEFORE UPDATE ON "pf_user"
 FOR EACH ROW
@@ -134,11 +149,6 @@ BEFORE UPDATE ON "pf_permitted_client_role"
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
-CREATE TRIGGER pf_permitted_client_email_updated_at_trigger
-BEFORE UPDATE ON "pf_permitted_client_email"
-FOR EACH ROW
-EXECUTE FUNCTION update_updated_at_column();
---> statement-breakpoint
 CREATE TRIGGER pf_invitation_updated_at_trigger
 BEFORE UPDATE ON "pf_invitation"
 FOR EACH ROW
@@ -181,6 +191,11 @@ EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
 CREATE TRIGGER pf_not_started_job_updated_at_trigger
 BEFORE UPDATE ON "pf_not_started_job"
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+--> statement-breakpoint
+CREATE TRIGGER pf_queue_job_lifecycle_updated_at_trigger
+BEFORE UPDATE ON "pf_queue_job_lifecycle"
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint

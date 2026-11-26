@@ -3,8 +3,9 @@
  * Implements RFC 6749 client authentication methods.
  * @packageDocumentation
  */
-import { HttpServerRequest, HttpServerResponse } from "@effect/platform"
-import { Effect, Either } from "effect"
+
+import { Config, Effect, Result } from "effect"
+import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { jwtVerify } from "jose"
 import { getIssuerUrl } from "../../request"
 import { json } from "../../response"
@@ -38,13 +39,12 @@ const normalizeIssuerPathname = (pathname: string): string => {
   return normalized === "" ? "/" : normalized
 }
 
-const isDevelopment = (): boolean => process.env["NODE_ENV"] === "development"
-
 export const issuerMatchesIgnoringLoopbackPort = (
   tokenIssuer: unknown,
   requestIssuer: string,
+  nodeEnv: string,
 ): boolean => {
-  if (!isDevelopment()) {
+  if (nodeEnv !== "development") {
     return false
   }
 
@@ -76,7 +76,7 @@ function sanitizeAuthenticateDescription(input: string): string {
 }
 
 /**
- * Decode base64 string safely, returning an Either-like result.
+ * Decode base64 string safely, returning an Result-like result.
  */
 function decodeBase64(
   encoded: string,
@@ -94,7 +94,7 @@ function decodeBase64(
 }
 
 /**
- * Decode URI components safely, returning an Either-like result.
+ * Decode URI components safely, returning an Result-like result.
  */
 function decodeUriComponents(
   clientPart: string,
@@ -157,11 +157,11 @@ const verifyClientJwt = (
             issuer: issuerUrl,
           },
         ),
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
 
-      const strictClientId = yield* Either.match(verifyResult, {
-        onLeft: () => Effect.succeed(undefined as string | undefined),
-        onRight: (verified) => {
+      const strictClientId = yield* Result.match(verifyResult, {
+        onFailure: () => Effect.succeed(undefined as string | undefined),
+        onSuccess: (verified) => {
           const claimedClientId = verified.payload.properties?.clientId
           if (
             typeof claimedClientId !== "string" ||
@@ -186,13 +186,17 @@ const verifyClientJwt = (
         jwtVerify<ClientJwtPayload>(token, () =>
           Promise.resolve(signingKeyPair.public),
         ),
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
 
-      const loopbackClientId = yield* Either.match(loopbackVerifyResult, {
-        onLeft: () => Effect.succeed(undefined as string | undefined),
-        onRight: (verified) => {
+      const nodeEnv = yield* Config.String("NODE_ENV").pipe(
+        Config.withDefault(""),
+        Effect.mapError(() => new ClientAuthError({ description: "Invalid client JWT" })),
+      )
+      const loopbackClientId = yield* Result.match(loopbackVerifyResult, {
+        onFailure: () => Effect.succeed(undefined as string | undefined),
+        onSuccess: (verified) => {
           if (
-            !issuerMatchesIgnoringLoopbackPort(verified.payload.iss, issuerUrl)
+            !issuerMatchesIgnoringLoopbackPort(verified.payload.iss, issuerUrl, nodeEnv)
           ) {
             return Effect.succeed(undefined as string | undefined)
           }

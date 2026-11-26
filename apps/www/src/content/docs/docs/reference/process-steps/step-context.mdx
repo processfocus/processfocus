@@ -1,0 +1,14 @@
+---
+title: Step context
+description: Access execution and completed-step metadata from process callbacks.
+---
+
+Callbacks such as a system step’s `input` receive process state and flow
+context as separate arguments. [Process state](/docs/reference/processes/process-state/)
+contains values collected or produced by earlier steps. The context contains
+metadata:
+
+- `ctx.process` describes the current execution.
+- `ctx.step` contains metadata about completed steps, keyed by their
+  camel-case IDs. For example, `ctx.step.captureOrder.completedAt` gives
+  the completion time of a step with the ID `Capture order`.

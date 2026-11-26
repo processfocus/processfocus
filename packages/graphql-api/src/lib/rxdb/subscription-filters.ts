@@ -11,28 +11,34 @@
 import { Effect } from "effect"
 import {
   Execution as AuthExecution,
+  Step as AuthStep,
   AuthorizationService,
   type DelegationPrincipal,
   type ProviderUserPrincipal,
   type ServiceAccountPrincipal,
-  TodoRef,
 } from "@pf/auth-policy"
 import {
+  ProcessCollectionQueries,
   StepRoleQueries,
   TodoQueries,
   collectRolePathsToTry,
 } from "@pf/graphql-db-operations"
 import type { Process, Todo } from "@pf/graphql-schema"
+import { checkExecutionAbandonAuthorization } from "@pf/process-execution/authorization"
+import { hasPendingSystemStartRestartDispatch } from "@pf/process-execution/recovery"
 import {
   canPrincipalSkipScheduleWaits,
   tryPublicCompletionCorrectionAuthorization,
-  trySequentialStepAuthorization,
 } from "../authorization"
 import type { DraftProcessExecutionEventDocument } from "../draft-process-events"
-import { checkExecutionAbandonAuthorization } from "../execution-abandon-authorization"
 import type { ExecutionEventDocument } from "../execution-events"
-import { hasPendingSystemStartRestartDispatch } from "../execution-restart"
-import { getProcessPathFromStepPath } from "../resolver-utils"
+import { canSaveStartForm } from "./draft-process-execution"
+import { mapProcessMetadataToGraphql } from "./process"
+import {
+  type ProcessReplicationPrincipal,
+  replicatedProcessRows,
+} from "./process-visibility"
+import { withProcessVisibilityTransaction } from "./process-visibility-transaction"
 
 const isProviderUserPrincipal = (
   principal:
@@ -110,15 +116,20 @@ export const filterAuthorizedTodos = (
 
       let canComplete = false
       for (const rolePath of candidateRolePaths) {
-        canComplete = yield* auth.canCompleteTodo(
+        canComplete = yield* auth.canCompleteStep(
           principal,
-          new TodoRef(row.id, {
+          new AuthStep({
             stepPath: row.stepPath,
             rolePath,
             processPath: row.processPath,
             orgUnitId: row.processOrgUnitPath,
-            assignedToProviderUserEmail: row.assignedToProviderUserEmail,
+            startsProcess: stepRoleInfo.startsProcess,
+            embedded: stepRoleInfo.embedded,
           }),
+          {
+            todoId: row.id,
+            assignedToProviderUserEmail: row.assignedToProviderUserEmail,
+          },
         )
         if (canComplete) break
       }
@@ -159,6 +170,7 @@ export const filterAuthorizedExecutions = (
         doc.processPath,
         doc.stepOrgUnitPaths ?? [],
         doc.startedByRolePath,
+        doc.startedByServiceAccountId,
       )
       const canView = yield* auth.canViewExecution(principal, resource)
       if (canView) {
@@ -202,55 +214,48 @@ export const filterAuthorizedExecutions = (
  */
 export const filterAuthorizedProcesses = (
   documents: readonly Process[],
-  principal:
-    | ProviderUserPrincipal
-    | DelegationPrincipal
-    | ServiceAccountPrincipal,
+  principal: ProcessReplicationPrincipal,
 ) =>
-  Effect.gen(function* () {
-    if (documents.length === 0) {
-      return []
-    }
-
-    const stepRoleQueries = yield* StepRoleQueries
-    const auth = yield* AuthorizationService
-
-    // Batch fetch allowed roles for all start steps
-    const startStepPaths = documents.map((d) => d.startStepPath)
-    const stepRolesMap =
-      yield* stepRoleQueries.queryRolePathsByStepPaths(startStepPaths)
-
-    const authorizedDocs: Process[] = []
-    for (const doc of documents) {
-      const stepRoleInfo = stepRolesMap.get(doc.startStepPath) ?? {
-        rolePath: null,
-        supportingRolePaths: [],
-        embedded: false,
-        startsProcess: true,
-      }
-      const canStart = yield* trySequentialStepAuthorization(
-        stepRoleInfo,
-        doc.startStepPath,
-        doc.path,
-        (resource) => auth.canCompleteStep(principal, resource),
+  withProcessVisibilityTransaction(
+    Effect.gen(function* () {
+      const queries = yield* ProcessCollectionQueries
+      // Events are notifications, not authoritative snapshots. Reload so a late
+      // revoke event cannot overwrite a newer grant (or leak old protected data).
+      const current = yield* queries.getProcessMetadata(
+        documents.map((doc) => doc.id),
       )
-      if (canStart) {
-        const canSkipScheduleWaits = yield* canPrincipalSkipScheduleWaits(
-          principal,
-          doc.path,
-        )
-        authorizedDocs.push({ ...doc, canSkipScheduleWaits })
-      }
-    }
-
-    return authorizedDocs
-  })
+      const snapshots = new Map(documents.map((doc) => [doc.id, doc]))
+      const rows = yield* replicatedProcessRows(principal, current)
+      return yield* Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const doc = yield* mapProcessMetadataToGraphql(row)
+          const canSkipScheduleWaits = row.deleted
+            ? false
+            : yield* canPrincipalSkipScheduleWaits(principal, row.path)
+          const snapshot = snapshots.get(row.id)
+          const result: Process = {
+            ...doc,
+            // Statistics belong to the shared event snapshot. Keep its revision
+            // for live documents so stale statistics cannot advance a checkpoint.
+            updatedAt: row.deleted
+              ? row.updatedAt
+              : (snapshot?.updatedAt ?? row.updatedAt),
+            activeInstances: row.deleted ? 0 : (snapshot?.activeInstances ?? 0),
+            duration: row.deleted
+              ? "Unknown"
+              : (snapshot?.duration ?? "Unknown"),
+            canSkipScheduleWaits,
+          }
+          return result
+        }),
+      )
+    }),
+  )
 
 /**
  * Filter draft process executions by authorization.
- * Uses Cedar policy: principal.roles.contains(resource.role) on start step
- *
- * This uses the new 'draft' action to authorize viewing/editing drafts.
+ * Saved form values go only to their owner, who must still be allowed to
+ * start the process.
  *
  * @param documents - DraftProcessExecution documents to filter
  * @param principal - The user principal performing the action
@@ -266,8 +271,6 @@ export const filterAuthorizedDrafts = (
     }
 
     const stepRoleQueries = yield* StepRoleQueries
-    const auth = yield* AuthorizationService
-
     // Batch fetch allowed roles for all start steps
     const startStepPaths = documents.map((d) => d.startStepPath)
     const stepRolesMap =
@@ -284,20 +287,12 @@ export const filterAuthorizedDrafts = (
         continue
       }
 
-      const stepRoleInfo = stepRolesMap.get(doc.startStepPath) ?? {
-        rolePath: null,
-        supportingRolePaths: [],
-        embedded: false,
-        startsProcess: true,
-      }
-      const processPath = getProcessPathFromStepPath(doc.startStepPath)
-      const canDraft = yield* trySequentialStepAuthorization(
-        stepRoleInfo,
+      const allowed = yield* canSaveStartForm(
+        principal,
         doc.startStepPath,
-        processPath,
-        (resource) => auth.canDraftStep(principal, resource),
+        stepRolesMap.get(doc.startStepPath),
       )
-      if (canDraft) {
+      if (allowed) {
         authorizedDocs.push(doc)
       }
     }

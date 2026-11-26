@@ -186,5 +186,4 @@ export const allTokens = [
   Identifier,
 ]
 
-// Create lexer instance
 export const XplainLexer = new Lexer(allTokens)

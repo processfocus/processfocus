@@ -2,6 +2,8 @@ import { Suspense } from "react"
 import { ProcessStatePageClient } from "../../process-state-page-client"
 import { ProcessStateRouteFallback } from "../../process-state-route-fallback"
 
+export const instant = false
+
 async function Content({
   params,
 }: {

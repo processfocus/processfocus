@@ -3,7 +3,10 @@ import {
   FormGoogleDriveGeneratePdf,
   FormGoogleDriveInput,
 } from "./google-drive-annotations"
-import { readGoogleDrivePickerConfiguration } from "./google-drive-picker-config"
+import {
+  GoogleDriveConfiguration,
+  readGoogleDrivePickerConfiguration,
+} from "./google-drive-configuration"
 import { clearPickerTokenCache } from "./picker-token-cache"
 import type { GoogleDrivePluginData } from "./plugin-data"
 import { GOOGLE_DRIVE_PLUGIN_TYPE } from "./plugin-identity"
@@ -23,7 +26,9 @@ import { GOOGLE_DRIVE_PLUGIN_TYPE } from "./plugin-identity"
  * SRI hashes are not applied because both endpoints serve version-less
  * bundles whose content changes without notice.
  */
-export const registerGoogleDriveWalkerPlugin = (): void => {
+export const registerGoogleDriveWalkerPlugin = (
+  configuration = GoogleDriveConfiguration,
+): void => {
   registerWalkerPlugin({
     type: GOOGLE_DRIVE_PLUGIN_TYPE,
     matchAnnotation(annotations: Record<symbol, unknown>): boolean {
@@ -32,13 +37,15 @@ export const registerGoogleDriveWalkerPlugin = (): void => {
     extractData(annotations: Record<symbol, unknown>): GoogleDrivePluginData {
       // Public Picker configuration is read here on the server and sent to the
       // renderer through field pluginData. These values are not secrets.
+      // Unconfigured environments omit the values so forms degrade to the
+      // "Google Drive is not configured" renderer state.
       const { clientId, appId, developerKey } =
-        readGoogleDrivePickerConfiguration()
+        readGoogleDrivePickerConfiguration(configuration)
       const generatePdf = annotations[FormGoogleDriveGeneratePdf]
       return {
-        ...(clientId !== undefined && { clientId }),
-        ...(appId !== undefined && { appId }),
-        ...(developerKey !== undefined && { developerKey }),
+        ...(clientId !== "" && { clientId }),
+        ...(appId !== "" && { appId }),
+        ...(developerKey !== "" && { developerKey }),
         ...(typeof generatePdf === "object" &&
           generatePdf !== null &&
           "documentStore" in generatePdf &&

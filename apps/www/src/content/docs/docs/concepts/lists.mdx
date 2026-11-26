@@ -1,0 +1,48 @@
+---
+title: Lists
+description: Browse and maintain organisation data through lists.
+---
+
+A **List** is a paginated view of organisation data, with access controlled by
+roles. It presents records as rows and selected fields as columns. For example,
+a list might show customer orders or a register of keys issued to employees.
+
+## Lists and processes
+
+A [process](/docs/concepts/processes/) describes work that moves through steps.
+A list gives people a view of records they need to inspect or maintain.
+
+Where configured, a list can allow users to create records directly, without
+starting a process execution or creating a Todo. Use a process when creating a
+record needs a workflow, such as an approval; use direct list creation for
+record maintenance that does not need those steps.
+
+## Finding records
+
+Lists can expose filters and sortable columns. Filtering narrows the records
+shown, and sorting determines their order across pages. Without a user-selected
+sort, the list uses its defined default order.
+
+Changing a filter returns to the first page while keeping the selected sort.
+Moving between pages preserves both the filter and sort.
+
+## Maintaining records
+
+A list may provide [forms](/docs/concepts/forms/) for creating or editing records.
+The information needed to create a record can differ from the information that
+can be changed later.
+
+Permission to view records does not imply permission to create them. Creation
+requires its own explicit authority, separate from viewing or updating records.
+See [Authorisation](/docs/concepts/authorisation/) for how access is controlled.
+
+## Exporting records
+
+Select **Export CSV** in the Dashboard to download List records for use
+in a spreadsheet or another tool. Anyone who can view the List can export it.
+
+The export uses the current filter and sort, and includes matching records
+across all pages, not just the page you are viewing. If more than 10,000
+records match, narrow the filter before exporting. A List can be configured
+to include different fields in the CSV than it shows in the Dashboard.
+See the [CSV reference](/docs/reference/lists/#csv) for an example.
