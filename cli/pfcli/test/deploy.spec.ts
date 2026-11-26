@@ -137,6 +137,7 @@ const createTempOrg = (options: { includeCustomMigrations?: boolean } = {}) => {
     `${JSON.stringify(
       {
         version: ORGANISATION_DEPLOY_MANIFEST_VERSION,
+        platformRef: "trunk",
         orgBundleSha256: createHash("sha256").update(orgBundle).digest("hex"),
         awsFunctionNames: [],
         hasLongDurationSteps: false,
@@ -470,6 +471,38 @@ describe("pfcli deploy", () => {
     },
   )
 
+  it("rejects a missing platform ref before requesting an upload", async () => {
+    const orgPath = createTempOrg()
+    tempPaths.push(orgPath)
+    writeFileSync(
+      join(orgPath, "dist", ORGANISATION_DEPLOY_MANIFEST_FILE),
+      "{}",
+    )
+    process.env["PFCLI_CREDENTIALS_PATH"] = createCredentialsFile(
+      orgPath,
+      "http://mocked.test",
+      new Date(Date.now() + 60_000).toISOString(),
+    )
+    const fetchMock = createDeployFetchMock({})
+    let uploadRequested = false
+    globalThis.fetch = (async (input, init) => {
+      if (String(init?.body).includes("requestUploadUrl"))
+        uploadRequested = true
+      return fetchMock(input, init)
+    }) as typeof fetch
+    const error = await Effect.runPromise(
+      (
+        await runDeployEffect(orgPath, "1000-2000-3000", "dev", {
+          waitForCompletion: false,
+        })
+      ).pipe(Effect.flip),
+    )
+    expect(error).toMatchObject({
+      message: expect.stringContaining("platformRef"),
+    })
+    expect(uploadRequested).toBe(false)
+  })
+
   it("checks deployment status without an org directory and distinguishes errors from idle", async () => {
     const orgPath = createTempOrg()
     tempPaths.push(orgPath)
@@ -661,7 +694,7 @@ export const form = Schema.Struct({ email: Schema.String })
         join(orgPath, "src/index.ts"),
         `import { Form, Organisation, Process, Role } from "@pf/process"
 import { form } from "./form"
-export const org = new Organisation({ name: "Deploy environment" })
+export const org = new Organisation({ name: "Deploy environment", platformRef: globalThis.process.env["PF_ENV"] })
 const role = new Role(org, "Staff", { name: "Staff" })
 const process = new Process(org, "Enquiry", { name: "Enquiry", purpose: "Enquiry" })
 const entry = new Form(process, "Submit", {
@@ -746,6 +779,14 @@ process.start(entry).end()
               ),
             ),
           ).toMatchObject({ embed: { entries: [{ sites: [origin] }] } })
+          expect(
+            JSON.parse(
+              readFileSync(
+                join(orgPath, "dist", ORGANISATION_DEPLOY_MANIFEST_FILE),
+                "utf8",
+              ),
+            ),
+          ).toMatchObject({ platformRef: environment })
           expect(process.env["PF_ENV"]).toBe("wrong-environment")
         }
       } finally {
@@ -1036,6 +1077,7 @@ process.start(entry).end()
         query: string
         variables?: {
           documentStore?: string
+          platformRef?: string
           stepPath?: string
           executionId?: string
         }
@@ -1073,6 +1115,7 @@ process.start(entry).end()
       if (body.query.includes("startOperationsDeploy")) {
         startCalled = true
         expect(body.variables?.executionId).toBe("pex-durable-canary-receipt")
+        expect(body.variables?.platformRef).toBe("trunk")
         expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual({
           executionId: "pex-durable-canary-receipt",
           attempted: true,

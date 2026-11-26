@@ -34,6 +34,7 @@ export {
   useFieldContext,
   useFormContext,
 } from "./lib/form-context"
+export { LocalDateTimeInput } from "./lib/local-date-time-input"
 export { LookupField, type LookupFieldItem } from "./lib/lookup-field"
 export { RadioField, type RadioFieldOption } from "./lib/radio-field"
 export { SelectField } from "./lib/select-field"

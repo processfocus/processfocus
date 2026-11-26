@@ -68,8 +68,8 @@ const REQUEST_UPLOAD_URL_MUTATION = `
 `
 
 const START_DEPLOY_MUTATION = `
-  mutation StartDeploy($projectId: String!, $environmentId: String!, $fileId: String!, $executionId: ID) {
-    startOperationsDeploy(input: { projectId: $projectId, environmentId: $environmentId, fileId: $fileId }, executionId: $executionId) {
+  mutation StartDeploy($projectId: String!, $environmentId: String!, $fileId: String!, $platformRef: String!, $executionId: ID) {
+    startOperationsDeploy(input: { projectId: $projectId, environmentId: $environmentId, fileId: $fileId, platformRef: $platformRef }, executionId: $executionId) {
       executionId
       processPath
     }
@@ -557,6 +557,26 @@ export const runDeploy = (
     })
 
     yield* Console.log(`Creating artifact from ${distPath}`)
+    const platformRef = yield* Effect.try({
+      try: () => {
+        const { platformRef } = Schema.decodeUnknownSync(
+          Schema.Struct({
+            platformRef: Schema.Trim.check(Schema.isMinLength(1)),
+          }),
+        )(
+          JSON.parse(
+            readFileSync(path.join(distPath, "deploy-manifest.json"), "utf8"),
+          ),
+        )
+        return platformRef
+      },
+      catch: (cause) =>
+        new CliError({
+          message:
+            "Set Organisation.platformRef to a branch or exact commit before deploying.",
+          cause,
+        }),
+    })
     yield* prepareArtifact(absoluteOrgPath, zipPath)
 
     yield* Effect.try({
@@ -636,6 +656,7 @@ export const runDeploy = (
             projectId,
             environmentId,
             fileId: uploadInfo.requestUploadUrl.fileId,
+            platformRef,
             executionId: options.executionId,
           },
         ).pipe(

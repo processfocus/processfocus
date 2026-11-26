@@ -14,6 +14,13 @@ import { getSchemaDefaults } from "./schema-defaults"
 import { describe, expect, it } from "bun:test"
 
 describe("getSchemaDefaults", () => {
+  it("initializes optional checkboxes as unchecked", () => {
+    const defaults = getSchemaDefaults({
+      invoiced: ES.optional(ES.Boolean),
+    })
+    expect(defaults).toEqual({ invoiced: false })
+  })
+
   it("initializes optional and nullable choices with valid empty selections", () => {
     const choices = ES.Literals(["Member", "Guest"])
     const lookup = LookupField({ mode: "server" })

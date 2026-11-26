@@ -26,6 +26,10 @@ export const FormNumberInput = Symbol.for("pf/form/annotation/NumberInput")
 
 export const FormDateInput = Symbol.for("pf/form/annotation/DateInput")
 
+export const FormLocalDateTimeInput = Symbol.for(
+  "pf/form/annotation/LocalDateTimeInput",
+)
+
 export const FormEmailInput = Symbol.for("pf/form/annotation/EmailInput")
 
 export const FormPhoneInput = Symbol.for("pf/form/annotation/PhoneInput")

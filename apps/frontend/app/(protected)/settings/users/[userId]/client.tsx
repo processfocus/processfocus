@@ -114,17 +114,16 @@ export function UserEditClient({ userId }: { userId: string }) {
       <EffectSchemaForm
         key={userId}
         schema={schema}
+        readOnlyCheckboxFields={["taskAssignmentEmail"]}
         defaultValues={{
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
           fullName: user.name,
           roleIds: [...new Set(user.roleIds)],
-          ...(userDetail.taskAssignmentEmailAvailable && {
-            taskAssignmentEmail:
-              user.notificationPreferences?.notifications?.todoAssignment
-                ?.email ?? false,
-          }),
+          taskAssignmentEmail:
+            user.notificationPreferences?.notifications?.todoAssignment
+              ?.email ?? false,
           executionFailureEmail:
             user.notificationPreferences?.notifications?.executionFailure
               ?.email ?? false,
@@ -135,6 +134,9 @@ export function UserEditClient({ userId }: { userId: string }) {
               Schema.Struct({
                 ...schema.fields.assignments.fields,
                 ...schema.fields.notifications.fields,
+                taskAssignmentEmail: Schema.optional(
+                  schema.fields.notifications.fields.taskAssignmentEmail,
+                ),
               }),
             )(values)
             const names =
@@ -151,8 +153,7 @@ export function UserEditClient({ userId }: { userId: string }) {
               user.id,
               userId,
               [...submitted.roleIds],
-              userDetail.taskAssignmentEmailAvailable &&
-                typeof submitted.taskAssignmentEmail === "boolean"
+              userDetail.taskAssignmentEmailAvailable
                 ? submitted.taskAssignmentEmail
                 : undefined,
               submitted.executionFailureEmail,

@@ -52,6 +52,10 @@ it.each([false, true])(
   async (appsync) => {
     const root = mkdtempSync(join(tmpdir(), "workload-deploy-"))
     mkdirSync(join(root, "dist"))
+    writeFileSync(
+      join(root, "dist/deploy-manifest.json"),
+      '{"platformRef":"trunk"}',
+    )
     const key = generateKeyPairSync("rsa", { modulusLength: 2048 })
     const jwk = {
       ...key.publicKey.export({ format: "jwk" }),

@@ -110,6 +110,14 @@ const getDefaultForSchema = (ast: AST.AST, isOptional = false): unknown => {
     ),
     Match.tag("Union", (union) => {
       const members = unionMembers(union)
+      if (
+        members.some((member) => member._tag === "Boolean") &&
+        members.every(
+          (member) => member._tag === "Boolean" || member._tag === "Undefined",
+        )
+      ) {
+        return false
+      }
       const choices = members.filter(
         (member) => member._tag !== "Undefined" && !(member._tag === "Null"),
       )

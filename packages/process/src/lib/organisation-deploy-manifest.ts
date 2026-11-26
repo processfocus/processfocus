@@ -50,6 +50,7 @@ export interface CronEntryMetadata {
 }
 
 export interface OrganisationDeployManifest {
+  readonly platformRef?: string | undefined
   readonly format?: string | undefined
   readonly version: typeof ORGANISATION_DEPLOY_MANIFEST_VERSION
   readonly producer?: ArtifactProducer | undefined
@@ -675,6 +676,10 @@ export const parseOrganisationDeployManifest = (
     }),
     cronEntries: readCronEntries(record["cronEntries"]),
     customDomains: readCustomDomains(record["customDomains"]),
+    platformRef:
+      record["platformRef"] === undefined
+        ? undefined
+        : ensureString(record["platformRef"], "platformRef"),
     extensions: normalizedExtensions,
   }
 }
@@ -807,6 +812,7 @@ export const buildOrganisationDeployManifest = (options: {
       [],
     ),
     cronEntries: buildCronEntries(options.org),
+    platformRef: options.org.platformRef,
     customDomains,
     extensions,
   }

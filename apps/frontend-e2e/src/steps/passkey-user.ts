@@ -133,6 +133,12 @@ export async function createPasskeyUser(
       await page.getByTestId("header-logout-button").click()
       await expect(page).toHaveURL(/\/login(?:\?|$)/)
     }
+    const signIn = async () => {
+      await page
+        .getByRole("button", { name: "Sign in with Passkey", exact: true })
+        .click()
+      await ready()
+    }
     const login = async () => {
       // A protected page may already be redirecting after session loss. Retry
       // that navigation boundary rather than letting ERR_ABORTED prevent login.
@@ -145,10 +151,7 @@ export async function createPasskeyUser(
           }),
         ).toBeVisible()
       }).toPass({ timeout: 30_000 })
-      await page
-        .getByRole("button", { name: "Sign in with Passkey", exact: true })
-        .click()
-      await ready()
+      await signIn()
     }
     if (options.provisionOnly) {
       if (options.account?.kind !== "login") {
@@ -168,8 +171,11 @@ export async function createPasskeyUser(
       if (options.account?.kind !== "login") {
         await ready()
         await logout()
+        await login()
+      } else {
+        // Already on the real login page from the policy check above.
+        await signIn()
       }
-      await login()
     }
     const request = async (
       token: string,
@@ -223,12 +229,18 @@ export async function createPasskeyUser(
       graphql: async (query: string, variables: Record<string, unknown> = {}) =>
         request(await credentials(), query, variables),
       dispose: async () => {
-        if (options.page) {
-          await cdp.send("WebAuthn.removeVirtualAuthenticator", {
-            authenticatorId,
-          })
-          await cdp.detach()
-        } else await context.close()
+        try {
+          // MCP may use the device again after setup. Save its final signature
+          // counter before the next scenario borrows this named persona.
+          if (options.saveCredentials) await retainDevice?.()
+        } finally {
+          if (options.page) {
+            await cdp.send("WebAuthn.removeVirtualAuthenticator", {
+              authenticatorId,
+            })
+            await cdp.detach()
+          } else await context.close()
+        }
       },
     }
   } catch (error) {

@@ -76,6 +76,7 @@ if (!hasExplicitBaseUrl) {
 }
 
 const instantE2E = process.env["PF_INSTANT_E2E"] === "1"
+const isolatedWorkers = process.env["FRONTEND_E2E_ISOLATED_WORKERS"] === "1"
 
 const hasExternalFeatures = !!process.env["FRONTEND_E2E_FEATURES"]
 const featuresGlob =
@@ -191,7 +192,8 @@ export default defineConfig({
   // server, so give tests 60s.
   timeout: 60_000,
   ...(isDelegationJourney ? { expect: { timeout: 30_000 } } : {}),
-  workers: 1,
+  workers: isolatedWorkers ? 4 : 1,
+  fullyParallel: isolatedWorkers,
   globalSetup: "./scripts/setup-passkey-devices.ts",
   ...(process.env["CI"]
     ? {
@@ -203,11 +205,11 @@ export default defineConfig({
       }
     : {}),
   use: {
-    baseURL,
+    ...(isolatedWorkers ? {} : { baseURL }),
     ...delegationArtifactOptions,
   },
   /* Run your local dev server before starting the tests (skip if BASE_URL is set) */
-  ...(hasExplicitBaseUrl
+  ...(hasExplicitBaseUrl || isolatedWorkers
     ? {}
     : {
         webServer: {
@@ -238,5 +240,16 @@ export default defineConfig({
           },
         },
       }),
-  projects: [...projects],
+  // These scenarios start with an empty server-side onboarding draft. Don't
+  // lend them a runtime used by another feature that saves the same user's draft.
+  projects: isolatedWorkers
+    ? projects.flatMap((project) => [
+        {
+          ...project,
+          name: "onboarding",
+          testMatch: "**/without-waiting.feature.spec.js",
+        },
+        { ...project, testIgnore: "**/without-waiting.feature.spec.js" },
+      ])
+    : projects,
 })

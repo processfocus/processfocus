@@ -12,6 +12,7 @@ import {
   FormFileInput,
   FormLabel,
   FormListInput,
+  FormLocalDateTimeInput,
   FormLookupInput,
   FormNumberInput,
   FormPermission,
@@ -598,6 +599,28 @@ export const DateField = (
 ): Schema.Codec<DateTime.Utc, string, never, never> =>
   applyFieldAnnotations(
     Schema.DateTimeUtcFromString.annotate({ [FormDateInput]: true }),
+    options,
+  )
+
+const localDateTimePattern =
+  /\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?/
+
+/** A wall-clock date and time. The caller interprets it in the intended zone. */
+export const LocalDateTimeField = (
+  options?: FieldOptions<string> & { required?: boolean },
+): Schema.Codec<string, string, never, never> =>
+  applyFieldAnnotations(
+    Schema.String.check(
+      Schema.isPattern(
+        new RegExp(
+          `^(?:${localDateTimePattern.source})${options?.required ? "" : "?"}$`,
+        ),
+        { message: "Choose a date and enter a time." },
+      ),
+    ).annotate({
+      [FormLocalDateTimeInput]: true,
+      ...(options?.required ? { [FormRequired]: true } : {}),
+    }),
     options,
   )
 

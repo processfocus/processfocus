@@ -12,6 +12,7 @@ import {
   FormLookupInput,
   FormReadOnly,
   ListField,
+  LocalDateTimeField,
   LookupField,
   NumberFieldFrom,
   RadioField,
@@ -109,6 +110,40 @@ afterEach(async () => {
 })
 
 const draftId = "process-start-draft-/purchase/Submit"
+
+test.each([
+  ["", false],
+  [false, false],
+  [true, true],
+] as const)(
+  "submits a restored checkbox draft with value %p",
+  async (invoiced, expected) => {
+    dom.window.localStorage.setItem(
+      draftId,
+      JSON.stringify({ child: "student-id", invoiced }),
+    )
+    await act(async () =>
+      root.render(
+        <EffectSchemaForm
+          schema={Schema.Struct({
+            child: Schema.String,
+            invoiced: Schema.optional(Schema.Boolean),
+          })}
+          draftId={draftId}
+          defaultValues={{ child: "", invoiced: false }}
+          onSubmit={async (values) => {
+            submissions.push(values)
+          }}
+        >
+          {() => <button type="submit">Submit</button>}
+        </EffectSchemaForm>,
+      ),
+    )
+    expect(input("invoiced").checked).toBe(expected)
+    await submit()
+    expect(submissions).toEqual([{ child: "student-id", invoiced: expected }])
+  },
+)
 
 test("checkbox groups stay locked until prefill completes", async () => {
   const deferred = Promise.withResolvers<Record<string, unknown>>()
@@ -1315,6 +1350,50 @@ test("calendar validity rejects a codec-normalizable impossible date", async () 
   expect(document.activeElement).toBe(input("date"))
 })
 
+test("local date-time fields submit calendar and time together and allow clearing an optional value", async () => {
+  const schema = Schema.Struct({
+    start: LocalDateTimeField({ label: "Starts at", required: true }),
+    end: Schema.optional(LocalDateTimeField({ label: "Ends at" })),
+  }).annotate({ [FormAutoFocus]: false })
+  await act(async () =>
+    root.render(
+      <EffectSchemaForm
+        schema={schema}
+        defaultValues={{
+          start: "2026-11-24 15:10:27",
+          end: "2026-11-24 16:20:00",
+        }}
+        onSubmit={async (values) => {
+          submissions.push(values)
+        }}
+      >
+        {() => <button type="submit">Save</button>}
+      </EffectSchemaForm>,
+    ),
+  )
+  expect(input("start").value).toBe("15:10:27")
+  const click = async (selector: string) => {
+    const button = document.querySelector(selector)
+    if (!(button instanceof dom.window.HTMLButtonElement))
+      throw new Error(`Missing button: ${selector}`)
+    await act(async () => {
+      button.focus()
+      button.click()
+    })
+  }
+  await click('button[aria-label^="Starts at:"]')
+  await click('[data-day="2026-11-23"] button')
+  await edit("start", "")
+  await submit()
+  expect(container.textContent).toContain("Choose a date and enter a time.")
+  expect(submissions).toEqual([])
+
+  await edit("start", "15:20:27")
+  await click('button[aria-label="Clear Ends at"]')
+  await submit()
+  expect(submissions).toEqual([{ start: "2026-11-23 15:20:27", end: "" }])
+})
+
 // Owns the executable renderer seam: an unknown plugin uses real TanStack field
 // state and shared validation. Artifact decoding is covered by installed fixtures.
 test("unknown plugin receives public configuration and submits raw values only after shared validation", async () => {
@@ -1657,6 +1736,8 @@ test("text areas preserve paragraph breaks through editing and submission", asyn
 
 test("read-only details render wrappers and stack list values as rows", async () => {
   const detailSchema = Schema.Struct({
+    enabled: ReadOnly(Schema.Boolean),
+    verified: ReadOnly(Schema.Boolean),
     orderNumber: Schema.String.annotate({
       title: "Order number",
       [FormReadOnly]: true,
@@ -1678,7 +1759,10 @@ test("read-only details render wrappers and stack list values as rows", async ()
       <EffectSchemaForm
         schema={detailSchema}
         draftId="read-only-detail"
+        readOnlyCheckboxFields={["enabled"]}
         defaultValues={{
+          enabled: true,
+          verified: true,
           orderNumber: "INV-0060",
           orderLines: ["MRIB/ABK × 1 — NZD 29.00", "PLANK/2M × 4 — NZD 12.00"],
           price: "41.00",
@@ -1695,6 +1779,14 @@ test("read-only details render wrappers and stack list values as rows", async ()
   if (!(orderNumber instanceof dom.window.HTMLInputElement))
     throw new Error("Missing read-only order number control")
   expect(orderNumber.value).toBe("INV-0060")
+  const enabled = container.querySelector<HTMLInputElement>("#enabled")
+  expect(enabled?.type).toBe("checkbox")
+  expect(enabled?.checked).toBe(true)
+  expect(enabled?.disabled).toBe(true)
+  const verified = container.querySelector<HTMLInputElement>("#verified")
+  expect(verified?.type).toBe("text")
+  expect(verified?.value).toBe("true")
+  expect(verified?.readOnly).toBe(true)
   const rows = [...container.querySelectorAll("fieldset li")].map(
     (row) => row.textContent,
   )

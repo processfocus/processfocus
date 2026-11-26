@@ -1,4 +1,8 @@
-import { NotificationDeliveryConfig, QueueService } from "@processfocus/runtime"
+import {
+  AwaitingJobTrigger,
+  NotificationDeliveryConfig,
+  QueueService,
+} from "@processfocus/runtime"
 import type { Context } from "effect"
 import {
   Cause,
@@ -1607,7 +1611,7 @@ const handleFlowExecutionInner = (job: Job<FlowExecutionPayload>) =>
           // Siblings still active — leave the barrier scheduled_flow in place
           // and leave the logical job uncompleted so a later sibling's delivery
           // with the same deterministic job ID can pick it up.
-          return
+          return AwaitingJobTrigger
         }
 
         // All siblings done. The transaction below atomically claims the barrier
@@ -2445,7 +2449,7 @@ const handleFlowExecutionInner = (job: Job<FlowExecutionPayload>) =>
         createdTodoIds.length,
       )
 
-      yield* Effect.log("Completed flow execution for source step", {
+      return yield* Effect.log("Completed flow execution for source step", {
         sourceStepId,
         scheduledFlowId,
         todosCreated: createdTodoIds.length,

@@ -25,6 +25,7 @@
         "{projectRoot}/playwright.config.ts",
         { "env": "BASE_URL" },
         { "env": "FRONTEND_E2E_FEATURES" },
+        { "env": "FRONTEND_E2E_FEATURES_ROOT" },
         { "env": "FRONTEND_E2E_TAGS" },
         { "env": "PF_INSTANT_E2E" }
       ],
