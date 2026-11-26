@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 /** Fast contract/diagnostic tests only. Real isolation belongs to sandbox-integration.sh. */
-export const createPreflightHarness = () => {
+export const createPreflightHarness = (fixtureParent = tmpdir()) => {
   if (process.env["PF_SANDBOX_DIRECTORY"])
     return {
       env: {
@@ -13,7 +13,7 @@ export const createPreflightHarness = () => {
       },
       cleanup: () => {},
     }
-  const directory = mkdtempSync(join(tmpdir(), "pf-preflight-harness-"))
+  const directory = mkdtempSync(join(fixtureParent, "pf-preflight-harness-"))
   writeFileSync(join(directory, "image-id"), `sha256:${"0".repeat(64)}`)
   const python = join(directory, "python3")
   writeFileSync(

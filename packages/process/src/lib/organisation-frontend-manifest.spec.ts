@@ -1,5 +1,10 @@
-import { randomUUID } from "node:crypto"
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Construct } from "constructs"
@@ -18,7 +23,20 @@ import {
   buildOrganisationFrontendManifestPublicFormBrandingFiles,
   parseOrganisationFrontendManifest,
 } from "../index"
-import { describe, expect, it } from "bun:test"
+import { afterEach, describe, expect, it } from "bun:test"
+
+const tempPaths: string[] = []
+const makeTempDirectory = (prefix: string): string => {
+  const path = mkdtempSync(join(tmpdir(), prefix))
+  tempPaths.push(path)
+  return path
+}
+
+afterEach(() => {
+  for (const path of tempPaths.splice(0)) {
+    rmSync(path, { recursive: true, force: true })
+  }
+})
 
 class FakeFrontendClientPlugin extends Construct {
   readonly isFrontendClientPluginManifestProvider = true as const
@@ -247,8 +265,7 @@ describe("organisation frontend manifest", () => {
   })
 
   it("normalizes App Icons metadata with MIME inference and content-hashed paths", async () => {
-    const orgBasePath = join(tmpdir(), `pf-app-icons-${randomUUID()}`)
-    mkdirSync(orgBasePath, { recursive: true })
+    const orgBasePath = makeTempDirectory("pf-app-icons-")
     writeFileSync(join(orgBasePath, "favicon.png"), "png bytes")
     writeFileSync(join(orgBasePath, "mask.svg"), "<svg />")
 
@@ -291,8 +308,7 @@ describe("organisation frontend manifest", () => {
   })
 
   it("allows App Icons explicit overrides under the public prefix", async () => {
-    const orgBasePath = join(tmpdir(), `pf-app-icons-${randomUUID()}`)
-    mkdirSync(orgBasePath, { recursive: true })
+    const orgBasePath = makeTempDirectory("pf-app-icons-")
     writeFileSync(join(orgBasePath, "favicon.ico"), "ico bytes")
     writeFileSync(join(orgBasePath, "app.png"), "png bytes")
 
@@ -342,11 +358,7 @@ describe("organisation frontend manifest", () => {
   })
 
   it("builds Public Form Branding with rewritten content-hashed asset URLs", async () => {
-    const orgBasePath = join(
-      tmpdir(),
-      `pf-public-form-branding-${randomUUID()}`,
-    )
-    mkdirSync(orgBasePath, { recursive: true })
+    const orgBasePath = makeTempDirectory("pf-public-form-branding-")
     writeFileSync(join(orgBasePath, "logo.svg"), "<svg />")
     writeFileSync(join(orgBasePath, "policy.pdf"), "policy bytes")
 
@@ -392,8 +404,7 @@ describe("organisation frontend manifest", () => {
   })
 
   it("allows metadata and manifest icons to reuse the same App Icons source file", async () => {
-    const orgBasePath = join(tmpdir(), `pf-app-icons-${randomUUID()}`)
-    mkdirSync(orgBasePath, { recursive: true })
+    const orgBasePath = makeTempDirectory("pf-app-icons-")
     writeFileSync(join(orgBasePath, "favicon.png"), "png bytes")
 
     const { org } = makeOrg()
@@ -472,11 +483,7 @@ describe("organisation frontend manifest", () => {
     ).rejects.toThrow("AppIcons publicPath must be inside /_pf/app-icons/")
 
     const duplicatePublicPathOrg = new Organisation({ name: "Test Org" })
-    const duplicatePublicPathBase = join(
-      tmpdir(),
-      `pf-app-icons-${randomUUID()}`,
-    )
-    mkdirSync(duplicatePublicPathBase, { recursive: true })
+    const duplicatePublicPathBase = makeTempDirectory("pf-app-icons-")
     writeFileSync(join(duplicatePublicPathBase, "favicon.ico"), "ico bytes")
     writeFileSync(join(duplicatePublicPathBase, "app.png"), "png bytes")
     new AppIcons(duplicatePublicPathOrg, "app-icons", {
@@ -500,8 +507,8 @@ describe("organisation frontend manifest", () => {
   })
 
   it("rejects App Icons sources that are not relative org-local files", async () => {
-    const orgBasePath = join(tmpdir(), `pf-app-icons-${randomUUID()}`)
-    mkdirSync(join(orgBasePath, "icons"), { recursive: true })
+    const orgBasePath = makeTempDirectory("pf-app-icons-")
+    mkdirSync(join(orgBasePath, "icons"))
     writeFileSync(join(orgBasePath, "icons", "favicon.png"), "png bytes")
     writeFileSync(join(orgBasePath, "outside.png"), "outside")
 
@@ -552,7 +559,7 @@ describe("organisation frontend manifest", () => {
     await expect(
       Effect.runPromise(
         buildOrganisationFrontendManifest(missingBasePathOrg, {
-          basePath: join(tmpdir(), `pf-app-icons-${randomUUID()}`),
+          basePath: join(orgBasePath, "missing-directory"),
         }),
       ),
     ).rejects.toThrow("AppIcons base path not found:")
@@ -571,8 +578,7 @@ describe("organisation frontend manifest", () => {
     ).rejects.toThrow("AppIcons source must be a file: icons")
 
     const symlinkSourceOrg = new Organisation({ name: "Test Org" })
-    const outsideBasePath = join(tmpdir(), `pf-app-icons-${randomUUID()}`)
-    mkdirSync(outsideBasePath, { recursive: true })
+    const outsideBasePath = makeTempDirectory("pf-app-icons-")
     writeFileSync(join(outsideBasePath, "outside.png"), "outside")
     symlinkSync(
       join(outsideBasePath, "outside.png"),

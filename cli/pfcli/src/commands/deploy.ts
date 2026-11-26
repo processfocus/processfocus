@@ -67,9 +67,10 @@ const REQUEST_UPLOAD_URL_MUTATION = `
   }
 `
 
-const START_DEPLOY_MUTATION = `
-  mutation StartDeploy($projectId: String!, $environmentId: String!, $fileId: String!, $platformRef: String!, $executionId: ID) {
-    startOperationsDeploy(input: { projectId: $projectId, environmentId: $environmentId, fileId: $fileId, platformRef: $platformRef }, executionId: $executionId) {
+// Omit the new input field entirely against Backends with the older schema.
+const startDeployMutation = (selectSource: boolean) => `
+  mutation StartDeploy($projectId: String!, $environmentId: String!, $fileId: String!, $platformRef: String!, $executionId: ID${selectSource ? ", $platformSource: String!" : ""}) {
+    startOperationsDeploy(input: { projectId: $projectId, environmentId: $environmentId, fileId: $fileId, platformRef: $platformRef${selectSource ? ", platformSource: $platformSource" : ""} }, executionId: $executionId) {
       executionId
       processPath
     }
@@ -557,23 +558,24 @@ export const runDeploy = (
     })
 
     yield* Console.log(`Creating artifact from ${distPath}`)
-    const platformRef = yield* Effect.try({
-      try: () => {
-        const { platformRef } = Schema.decodeUnknownSync(
+    const { platformRef, platformSource } = yield* Effect.try({
+      try: () =>
+        Schema.decodeUnknownSync(
           Schema.Struct({
             platformRef: Schema.Trim.check(Schema.isMinLength(1)),
+            platformSource: Schema.optional(
+              Schema.Literals(["private", "public"]),
+            ),
           }),
         )(
           JSON.parse(
             readFileSync(path.join(distPath, "deploy-manifest.json"), "utf8"),
           ),
-        )
-        return platformRef
-      },
+        ),
       catch: (cause) =>
         new CliError({
           message:
-            "Set Organisation.platformRef to a branch or exact commit before deploying.",
+            'Set Organisation.platformRef to a branch or exact commit and, if set, Organisation.platformSource to "private" or "public".',
           cause,
         }),
     })
@@ -651,12 +653,13 @@ export const runDeploy = (
         const deployResult = yield* graphqlRequest<StartDeployResponse>(
           endpoint,
           acquireAccessToken(credentials),
-          START_DEPLOY_MUTATION,
+          startDeployMutation(platformSource === "public"),
           {
             projectId,
             environmentId,
             fileId: uploadInfo.requestUploadUrl.fileId,
             platformRef,
+            ...(platformSource === "public" && { platformSource }),
             executionId: options.executionId,
           },
         ).pipe(

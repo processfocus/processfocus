@@ -18,6 +18,13 @@ You need:
   environment.
 - Your organisation source in a GitHub repository.
 
+Set `platformRef` on your `Organisation` to the Process Focus platform branch
+or full commit SHA that the hosted build should use. For example, use
+`platformRef: "trunk"` to test the latest merged platform changes in a
+development environment, or pin a full SHA to repeat a build with the same
+platform code. This ref selects the platform source, not your project's
+GitHub Actions branch.
+
 In the [Console](https://console.processfocus.com), select your project and
 deployment environment, then open the **Info** tab. Use the value under
 **Environment** for `--env` and the project number in the sentence below the

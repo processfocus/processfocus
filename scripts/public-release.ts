@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -159,47 +160,51 @@ export const prepareRelease = (output: string): void => {
     }
   })
   const consumer = mkdtempSync(join(tmpdir(), "pf-release-consumer-"))
-  const dependencies = Object.fromEntries(
-    packages.map(({ name, tarball }) => [name, join(output, tarball)]),
-  )
-  writeFileSync(
-    join(consumer, "package.json"),
-    JSON.stringify(
-      {
-        private: true,
-        type: "module",
-        dependencies,
-        overrides: dependencies,
-      },
-      null,
-      2,
-    ),
-  )
-  console.info(`Installing ${packages.length} tarballs outside the workspace`)
-  writeFileSync(
-    join(output, "consumer-install.txt"),
-    run(["bun", "install", "--ignore-scripts"], consumer),
-  )
-  writeFileSync(
-    join(output, "dependency-closure.txt"),
-    run(["bun", "pm", "ls", "--all"], consumer),
-  )
-  cpSync(join(consumer, "bun.lock"), join(output, "consumer.bun.lock"))
-  writeFileSync(
-    join(output, "consumer-smoke.txt"),
-    run(
-      [
-        "bun",
-        "-e",
-        'await import("processfocus"); await import("@processfocus/runtime"); await import("@processfocus/hosting-contract");',
-      ],
-      consumer,
-    ),
-  )
-  writeFileSync(
-    join(output, "pfcli-help.txt"),
-    run([join(consumer, "node_modules/.bin/pfcli"), "--help"], consumer),
-  )
+  try {
+    const dependencies = Object.fromEntries(
+      packages.map(({ name, tarball }) => [name, join(output, tarball)]),
+    )
+    writeFileSync(
+      join(consumer, "package.json"),
+      JSON.stringify(
+        {
+          private: true,
+          type: "module",
+          dependencies,
+          overrides: dependencies,
+        },
+        null,
+        2,
+      ),
+    )
+    console.info(`Installing ${packages.length} tarballs outside the workspace`)
+    writeFileSync(
+      join(output, "consumer-install.txt"),
+      run(["bun", "install", "--ignore-scripts"], consumer),
+    )
+    writeFileSync(
+      join(output, "dependency-closure.txt"),
+      run(["bun", "pm", "ls", "--all"], consumer),
+    )
+    cpSync(join(consumer, "bun.lock"), join(output, "consumer.bun.lock"))
+    writeFileSync(
+      join(output, "consumer-smoke.txt"),
+      run(
+        [
+          "bun",
+          "-e",
+          'await import("processfocus"); await import("@processfocus/runtime"); await import("@processfocus/hosting-contract");',
+        ],
+        consumer,
+      ),
+    )
+    writeFileSync(
+      join(output, "pfcli-help.txt"),
+      run([join(consumer, "node_modules/.bin/pfcli"), "--help"], consumer),
+    )
+  } finally {
+    rmSync(consumer, { recursive: true, force: true })
+  }
   console.info("Exercising standalone authoring and plugin consumers")
   writeFileSync(
     join(output, "external-fixtures.txt"),

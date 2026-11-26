@@ -51,6 +51,7 @@ export interface CronEntryMetadata {
 
 export interface OrganisationDeployManifest {
   readonly platformRef?: string | undefined
+  readonly platformSource?: Organisation["platformSource"]
   readonly format?: string | undefined
   readonly version: typeof ORGANISATION_DEPLOY_MANIFEST_VERSION
   readonly producer?: ArtifactProducer | undefined
@@ -630,6 +631,14 @@ export const parseOrganisationDeployManifest = (
     extensions[EXECUTOR_DESCRIPTORS_EXTENSION],
   )
 
+  const platformSource = record["platformSource"]
+  if (
+    platformSource !== undefined &&
+    platformSource !== "private" &&
+    platformSource !== "public"
+  )
+    throw new Error('platformSource must be "private" or "public"')
+
   const normalizedExtensions: Record<string, unknown> = { ...extensions }
   if (awsFunctionNames.length > 0 || awsRuntime !== undefined) {
     normalizedExtensions[AWS_RUNTIME_EXTENSION] = {
@@ -680,6 +689,7 @@ export const parseOrganisationDeployManifest = (
       record["platformRef"] === undefined
         ? undefined
         : ensureString(record["platformRef"], "platformRef"),
+    ...(platformSource !== undefined && { platformSource }),
     extensions: normalizedExtensions,
   }
 }
@@ -813,6 +823,9 @@ export const buildOrganisationDeployManifest = (options: {
     ),
     cronEntries: buildCronEntries(options.org),
     platformRef: options.org.platformRef,
+    ...(options.org.platformSource !== undefined && {
+      platformSource: options.org.platformSource,
+    }),
     customDomains,
     extensions,
   }
