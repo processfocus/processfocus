@@ -1,8 +1,12 @@
-import { UTCDate } from "@date-fns/utc"
 import type { StandardSchemaV1Issue } from "@tanstack/react-form"
 import { CalendarIcon } from "lucide-react"
 import { useRef, useState } from "react"
-import { DayPicker } from "react-day-picker"
+import {
+  DateCalendar,
+  calendarDate,
+  formatCalendarDay,
+  parseCalendarDay,
+} from "./date-calendar"
 import { useFieldContext, useFormContext } from "./form-context"
 import { Button } from "./ui/button"
 import { Field, FieldDescription, FieldError, FieldLabel } from "./ui/field"
@@ -15,6 +19,9 @@ const dateFormatter = new Intl.DateTimeFormat("en-NZ", {
   year: "numeric",
   timeZone: "UTC",
 })
+
+export const formatDateInputDay = (date: Date): string =>
+  dateFormatter.format(date)
 
 const months = [
   "jan",
@@ -30,28 +37,6 @@ const months = [
   "nov",
   "dec",
 ]
-
-const utcCalendar = {
-  newDate: (year: number, month: number, day: number): Date =>
-    new UTCDate(year, month, day),
-}
-
-const calendarDate = (
-  year: number,
-  month: number,
-  day: number,
-): Date | undefined => {
-  const date = new UTCDate(0)
-  date.setUTCFullYear(year, month - 1, day)
-  date.setUTCHours(0, 0, 0, 0)
-  return year >= 1 &&
-    year <= 9999 &&
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-    ? date
-    : undefined
-}
 
 const parseInputDate = (value: string): Date | undefined => {
   const text = value.trim()
@@ -72,10 +57,7 @@ const parseInputDate = (value: string): Date | undefined => {
       Number(named[1]),
     )
   }
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
-  return iso
-    ? calendarDate(Number(iso[1]), Number(iso[2]), Number(iso[3]))
-    : undefined
+  return parseCalendarDay(text)
 }
 
 const parseFieldDate = (value: unknown): Date | undefined => {
@@ -101,11 +83,8 @@ export const validateDateField = ({
 }
 
 const toUtcIsoDate = (date: Date): string => {
-  const year = String(date.getUTCFullYear()).padStart(4, "0")
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0")
-  const day = String(date.getUTCDate()).padStart(2, "0")
   // Form state stores a date-only calendar choice as UTC midnight for Effect DateTimeUtc.
-  return `${year}-${month}-${day}T00:00:00.000Z`
+  return `${formatCalendarDay(date)}T00:00:00.000Z`
 }
 
 export const normalizeDateFieldValue = (value: unknown): unknown => {
@@ -150,13 +129,6 @@ export function DateField({
   const errorId = `${field.name}-error`
   const selected = parseFieldDate(field.state.value)
   const calendarMonth = month ?? selected
-  const now = new Date()
-  // Highlight the user's local "today", while doing calendar arithmetic in UTC.
-  const today = calendarDate(
-    now.getFullYear(),
-    now.getMonth() + 1,
-    now.getDate(),
-  )
 
   return (
     <Field>
@@ -172,7 +144,7 @@ export function DateField({
               draft && draft.value === field.state.value
                 ? draft.text
                 : selected
-                  ? dateFormatter.format(selected)
+                  ? formatDateInputDay(selected)
                   : (field.state.value ?? "")
             }
             placeholder="DD/MM/YYYY"
@@ -229,12 +201,9 @@ export function DateField({
               inputRef.current?.focus()
             }}
           >
-            <DayPicker
-              mode="single"
-              dateLib={utcCalendar}
-              {...(today ? { today } : {})}
+            <DateCalendar
               selected={selected}
-              {...(calendarMonth ? { month: calendarMonth } : {})}
+              month={calendarMonth}
               onMonthChange={setMonth}
               onSelect={(date) => {
                 if (!date) return
@@ -243,28 +212,6 @@ export function DateField({
                 setDraft(undefined)
                 setMonth(date)
                 setOpen(false)
-              }}
-              classNames={{
-                root: "text-sm",
-                months: "flex flex-col gap-4",
-                month: "space-y-3",
-                caption_label: "font-medium",
-                nav: "flex items-center gap-1",
-                chevron: "fill-current",
-                button_previous:
-                  "rounded-md p-2 hover:bg-accent hover:text-accent-foreground",
-                button_next:
-                  "rounded-md p-2 hover:bg-accent hover:text-accent-foreground",
-                weekdays: "grid grid-cols-7 text-muted-foreground",
-                weekday: "py-1 text-center text-xs font-medium",
-                week: "grid grid-cols-7",
-                day: "p-0 text-center",
-                day_button:
-                  "size-9 rounded-md hover:bg-accent hover:text-accent-foreground disabled:opacity-50",
-                selected:
-                  "[&_button]:bg-primary [&_button]:text-primary-foreground",
-                today: "[&_button]:border [&_button]:border-primary",
-                outside: "text-muted-foreground opacity-50",
               }}
             />
           </PopoverContent>

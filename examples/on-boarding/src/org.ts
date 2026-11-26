@@ -8,6 +8,7 @@ import { Invitation, Organisation, Role } from "@pf/process"
 import { OnBoarding } from "./on-boarding"
 
 export const org = new Organisation({
+  platformRef: "trunk",
   name: "Org",
 })
 

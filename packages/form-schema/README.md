@@ -17,6 +17,15 @@ Process Forms can defer defaults and presentation until execution data is
 available while keeping their value schema stable. See
 [constructor Form authoring](../../docs/business-process-modelling/constructor-form-authoring.md).
 
+## Date and time fields
+
+Use `DateField` for a date without a time. Use
+`LocalDateTimeField({ label: "Starts at", required: true })` for a calendar date
+and time entered together. It submits `YYYY-MM-DD HH:mm` (optionally with
+seconds), with no timezone offset. Tell users which timezone to enter and
+interpret the value in that zone on the server. Wrap the field in
+`Schema.optional(...)` and omit `required` when it may be left blank.
+
 ## Authenticated server lookups
 
 Lookup fields select IDs; suggestion fields allow free text. For server search,

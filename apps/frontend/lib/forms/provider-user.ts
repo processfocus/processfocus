@@ -45,16 +45,14 @@ export const providerUserForm = (
     ),
     notifications: Wrapper(
       {
-        taskAssignmentEmail: taskAssignmentEmailAvailable
-          ? BooleanField({
-              label: "Task Assignment Emails",
-              description:
-                "Send email notifications when new tasks are assigned",
-              default: false,
-            })
-          : TextBlock(
-              "Task Assignment Emails are unavailable because email delivery is not configured.",
-            ),
+        taskAssignmentEmail: BooleanField({
+          label: "Task Assignment Emails",
+          description: taskAssignmentEmailAvailable
+            ? "Send email notifications when new tasks are assigned"
+            : "Email delivery is not configured.",
+          readOnly: !taskAssignmentEmailAvailable,
+          default: false,
+        }),
         executionFailureEmail: BooleanField({
           label: "Execution failures",
           description: "Send email notifications for fatal execution failures",

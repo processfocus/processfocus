@@ -69,6 +69,7 @@ const businessCalendar: BusinessCalendarConfig = {
 }
 
 export const org = new Organisation({
+  platformRef: "trunk",
   name: "Demo Org",
   acronym: "Demo",
   timeZone: "Pacific/Auckland",

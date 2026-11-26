@@ -128,12 +128,15 @@ function ListCreateForm({
         ]
       }
     },
-    renderActions: ({ formState }: FormActionsContext) => (
+    renderActions: ({ formState, clearLocalStorage }: FormActionsContext) => (
       <div className="flex justify-end gap-3">
         <Button
           type="button"
           variant="outline"
-          onClick={onClose}
+          onClick={() => {
+            clearLocalStorage()
+            onClose()
+          }}
           disabled={formState.isSubmitting}
         >
           Cancel

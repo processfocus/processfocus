@@ -2,6 +2,7 @@ import { instant } from "@next/playwright"
 import { type Page, chromium } from "@playwright/test"
 import { test as base, createBdd } from "playwright-bdd"
 import { getEffectiveGraphqlEndpoint } from "@pf/frontend-endpoints/port-files"
+import { withRegularRuntime } from "../../scripts/regular-worker"
 import { dashboardAccount, dashboardRegistrationLink } from "./dashboard-user"
 import {
   type PasskeyUser,
@@ -33,7 +34,22 @@ interface TestFixtures {
   scenarioState: Map<string, unknown>
 }
 
-export const test = base.extend<TestFixtures>({
+export const test = base.extend<
+  TestFixtures,
+  { regularOrigin: string | undefined }
+>({
+  regularOrigin: [
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture requires destructuring
+    async ({}, use) => {
+      if (process.env["FRONTEND_E2E_ISOLATED_WORKERS"] === "1")
+        await withRegularRuntime(use)
+      else await use(undefined)
+    },
+    { scope: "worker", timeout: 120_000 },
+  ],
+  ...(process.env["FRONTEND_E2E_ISOLATED_WORKERS"] === "1"
+    ? { baseURL: async ({ regularOrigin }, use) => use(regularOrigin) }
+    : {}),
   // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture requires destructuring
   passkeyUsers: async ({}, use) => {
     await use([])
@@ -79,12 +95,12 @@ export const test = base.extend<TestFixtures>({
     }
   },
   authenticateAsProviderUser: async (
-    { browser, page, baseURL, restoreProviderRoles },
+    { browser, page, baseURL, restoreProviderRoles, regularOrigin },
     use,
     testInfo,
   ) => {
     if (!baseURL) throw new Error("Dashboard origin required")
-    if (testInfo.config.workers !== 1)
+    if (testInfo.config.workers !== 1 && baseURL !== regularOrigin)
       throw new Error(
         "Named Dashboard policy personas require one worker per runtime",
       )
@@ -107,13 +123,7 @@ export const test = base.extend<TestFixtures>({
       if (!active) return
       const user = active
       active = undefined
-      try {
-        dashboardAccount(baseURL, user.email).save(
-          await user.virtualCredentials(),
-        )
-      } finally {
-        await user.dispose()
-      }
+      await user.dispose()
     }
     try {
       await use(async (email) => {

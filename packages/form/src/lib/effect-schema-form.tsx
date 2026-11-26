@@ -23,6 +23,7 @@ import {
   FormEmailInput,
   FormLabel,
   FormListInput,
+  FormLocalDateTimeInput,
   FormLookupInput,
   FormNumberInput,
   FormPluginData,
@@ -51,6 +52,7 @@ import {
   CalendarSlotField,
   type CalendarSlotFieldItem,
   DateField,
+  LocalDateTimeInput,
   fieldContext,
   formContext,
   normalizeDateFieldValue,
@@ -86,6 +88,7 @@ export function EffectSchemaForm({
   requestData,
   draftId,
   defaultValues,
+  readOnlyCheckboxFields,
   pluginConfiguration = {},
   onDraftChange,
   onSubmit,
@@ -98,6 +101,7 @@ export function EffectSchemaForm({
   draftId?: string | undefined
   pluginConfiguration?: Readonly<Record<string, unknown>>
   defaultValues: Record<string, unknown>
+  readOnlyCheckboxFields?: readonly string[]
   onDraftChange?: (
     values: Record<string, unknown>,
     clearLocalStorage: () => void,
@@ -130,19 +134,29 @@ export function EffectSchemaForm({
   const [savedValues, setSavedValues, clearLocalStorage] = useLocalStorage<
     Record<string, unknown>
   >(draftId, {})
-  const [initialValues] = useState(() =>
-    Object.fromEntries(
+  const [initialValues] = useState(() => {
+    const schemaDefaults: Record<string, unknown> = getSchemaDefaults(
+      schema.fields,
+    )
+    return Object.fromEntries(
       Object.entries({ ...defaultValues, ...savedValues }).map(
-        ([key, value]) => [
-          key,
-          schema.fields[key] &&
-          fieldAnnotation(schema.fields[key].ast, FormDateInput) !== undefined
-            ? normalizeDateFieldValue(value)
-            : value,
-        ],
+        ([key, value]) => {
+          // Older defaults stored untouched checkboxes as empty strings.
+          if (value === "" && schemaDefaults[key] === false) {
+            const fallback = defaultValues[key]
+            return [key, typeof fallback === "boolean" ? fallback : false]
+          }
+          return [
+            key,
+            schema.fields[key] &&
+            fieldAnnotation(schema.fields[key].ast, FormDateInput) !== undefined
+              ? normalizeDateFieldValue(value)
+              : value,
+          ]
+        },
       ),
-    ),
-  )
+    )
+  })
   const focusFirstError = () => {
     requestAnimationFrame(() => {
       const input = formRef.current?.querySelector<HTMLElement>(
@@ -529,7 +543,12 @@ export function EffectSchemaForm({
           </form.Field>
         )
       }
-      if (isReadOnlyField(fieldSchema)) {
+      const boolean =
+        property.type._tag === "Boolean" ||
+        (property.type._tag === "Union" &&
+          property.type.types.some((member) => member._tag === "Boolean"))
+      const readOnly = isReadOnlyField(fieldSchema)
+      if (readOnly && !(boolean && readOnlyCheckboxFields?.includes(path))) {
         let value: unknown = defaultValues
         for (const part of path.split("."))
           value =
@@ -694,11 +713,9 @@ export function EffectSchemaForm({
         fieldAnnotation(property.type, FormNumberInput) !== undefined
       const lookup =
         fieldAnnotation(property.type, FormLookupInput) !== undefined
-      const boolean =
-        property.type._tag === "Boolean" ||
-        (property.type._tag === "Union" &&
-          property.type.types.some((member) => member._tag === "Boolean"))
       const date = fieldAnnotation(property.type, FormDateInput) !== undefined
+      const localDateTime =
+        fieldAnnotation(property.type, FormLocalDateTimeInput) === true
       const email = fieldAnnotation(property.type, FormEmailInput) !== undefined
       const textArea =
         fieldAnnotation(property.type, FormTextAreaInput) !== undefined
@@ -843,7 +860,7 @@ export function EffectSchemaForm({
                 ]
             return (
               <div className="space-y-1">
-                {!calendar && !boolean && (
+                {!calendar && !boolean && !localDateTime && (
                   <label htmlFor={path} className="block text-sm font-medium">
                     {label}
                   </label>
@@ -867,6 +884,22 @@ export function EffectSchemaForm({
                       />
                     </fieldContext.Provider>
                   </formContext.Provider>
+                ) : localDateTime ? (
+                  <LocalDateTimeInput
+                    id={path}
+                    label={label}
+                    value={
+                      typeof field.state.value === "string"
+                        ? field.state.value
+                        : ""
+                    }
+                    disabled={disabled}
+                    required={state?.required === true}
+                    invalid={errors.length > 0}
+                    describedBy={`${path}-description ${path}-errors`}
+                    onBlur={field.handleBlur}
+                    onChange={field.handleChange}
+                  />
                 ) : radio ? (
                   <div
                     role="radiogroup"
@@ -961,8 +994,13 @@ export function EffectSchemaForm({
                       id={path}
                       name={path}
                       type="checkbox"
-                      className="mt-0.5 size-4 shrink-0"
-                      disabled={disabled}
+                      className={
+                        "peer mt-0.5 size-4 shrink-0 " +
+                        "disabled:grid disabled:appearance-none disabled:place-content-center disabled:rounded-[4px] disabled:border disabled:border-muted-foreground disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed " +
+                        "disabled:checked:before:h-2 disabled:checked:before:w-1 disabled:checked:before:-translate-y-px disabled:checked:before:rotate-45 disabled:checked:before:border-r-2 disabled:checked:before:border-b-2 disabled:checked:before:border-current " +
+                        "forced-colors:disabled:appearance-auto forced-colors:disabled:checked:before:hidden"
+                      }
+                      disabled={readOnly || disabled}
                       aria-required={state?.required}
                       checked={field.state.value === true}
                       onBlur={field.handleBlur}
@@ -975,7 +1013,7 @@ export function EffectSchemaForm({
                     />
                     <label
                       htmlFor={path}
-                      className="min-w-0 text-sm font-medium"
+                      className="min-w-0 text-sm font-medium peer-disabled:text-muted-foreground"
                     >
                       {label}
                     </label>

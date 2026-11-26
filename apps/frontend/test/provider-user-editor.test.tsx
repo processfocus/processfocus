@@ -59,7 +59,7 @@ mock.module("@/lib/graphql/user-queries", () => ({
 const editorScenarios = [
   ["user query failures preserve active edits through recovery", "user"],
   ["role query failures preserve active edits through recovery", "roles"],
-  ["unavailable task-assignment email is not editable or submitted", undefined],
+  ["unavailable task-assignment email stays visible but disabled", undefined],
 ] as const
 
 test.each(editorScenarios)(
@@ -129,10 +129,19 @@ test.each(editorScenarios)(
       }
       await settle("Edit User")
       if (target === undefined) {
-        expect(checked("taskAssignmentEmail")).toBeNull()
-        expect(container.textContent).toContain(
-          "Task Assignment Emails are unavailable because email delivery is not configured.",
+        const checkbox = checked("taskAssignmentEmail")
+        expect(checkbox?.type).toBe("checkbox")
+        expect(checkbox?.labels?.[0]?.textContent).toBe(
+          "Task Assignment Emails",
         )
+        expect(checkbox?.disabled).toBe(true)
+        expect(checkbox?.checked).toBe(true)
+        const description = checkbox
+          ?.getAttribute("aria-describedby")
+          ?.split(/\s+/)
+          .map((id) => document.getElementById(id)?.textContent)
+          .join(" ")
+        expect(description).toContain("Email delivery is not configured.")
       }
       await act(async () => {
         checked("roleIds")?.click()
@@ -149,9 +158,11 @@ test.each(editorScenarios)(
       await settle("Role rejected")
       if (target === undefined) {
         expect(submittedTaskAssignmentEmail).toBeUndefined()
+        expect(checked("taskAssignmentEmail")?.checked).toBe(true)
         expect(checked("executionFailureEmail")?.checked).toBe(true)
         return
       }
+      expect(submittedTaskAssignmentEmail).toBe(true)
       failing = target
       await refetch()
       await settle("refresh failed")

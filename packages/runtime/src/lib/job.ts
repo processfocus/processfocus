@@ -2,15 +2,20 @@ import { Cause, Data, Effect, Exit, Option, Schema } from "effect"
 import type { Job, RawJob } from "./queue.js"
 import { PayloadParseError } from "./queue.js"
 
+/** Acknowledge this delivery while leaving the job eligible for a later trigger. */
+export const AwaitingJobTrigger = Symbol.for(
+  "@processfocus/runtime/AwaitingJobTrigger",
+)
+
 export interface JobHandler<A, I, E = never, R = never> {
   readonly schema: Schema.Codec<A, I>
-  readonly handle: (job: Job<A>) => Effect.Effect<void, E, R>
+  readonly handle: (job: Job<A>) => Effect.Effect<unknown, E, R>
 }
 
 export interface AnyJobHandler<E = never, R = never> {
   readonly execute: (
     job: RawJob,
-  ) => Effect.Effect<void, E | PayloadParseError, R>
+  ) => Effect.Effect<unknown, E | PayloadParseError, R>
 }
 
 export type JobHandlers<E = never, R = never> = Readonly<
@@ -25,7 +30,7 @@ export class UnknownJobQueueError extends Data.TaggedError(
 }> {}
 
 export type JobDisposition =
-  | { readonly kind: "acknowledge" }
+  | { readonly kind: "acknowledge"; readonly outcome?: "awaiting-trigger" }
   | { readonly kind: "retry"; readonly cause: Cause.Cause<unknown> }
   | { readonly kind: "terminal"; readonly cause: Cause.Cause<unknown> }
 
@@ -50,7 +55,8 @@ export const jobHandler = <A, I, E, R>(
             }),
         ),
       )
-      yield* handler.handle({ ...rawJob, payload })
+      const result = yield* handler.handle({ ...rawJob, payload })
+      return result === AwaitingJobTrigger ? AwaitingJobTrigger : undefined
     }),
 })
 
@@ -114,6 +120,9 @@ export const makeJobDispatcher = <E, R, T extends JobHandlers<E, R>>(
         ),
       )
       if (Exit.isSuccess(handlerExit)) {
+        if (handlerExit.value === AwaitingJobTrigger) {
+          return { kind: "acknowledge", outcome: "awaiting-trigger" }
+        }
         return { kind: "acknowledge" } satisfies JobDisposition
       }
       const failure = Cause.findErrorOption(handlerExit.cause)

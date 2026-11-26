@@ -96,3 +96,9 @@ pfcli --completions bash
 The package also includes a generated [command reference](dist/command-reference.md)
 and [Usage spec](dist/pfcli.usage.kdl). These are created during the build and
 shipped with the release.
+
+Hosted `pfcli deploy` requires `platformRef` on the authored `Organisation`.
+Set it to a branch name or full Git commit, for example
+`platformRef: process.env["PF_ENV"] === "prd" ? releaseCommit : "trunk"`.
+The CLI builds with `PF_ENV` set to the target environment and sends the selected
+ref with the artifact. A failed checkout stops deployment.
