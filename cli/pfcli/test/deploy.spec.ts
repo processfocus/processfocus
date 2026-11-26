@@ -126,7 +126,13 @@ const runDeployEffect = async (
     ...dependencies,
   })
 
-const createTempOrg = (options: { includeCustomMigrations?: boolean } = {}) => {
+const createTempOrg = (
+  options: {
+    includeCustomMigrations?: boolean
+    platformRef?: string
+    platformSource?: "public" | "private" | undefined
+  } = {},
+) => {
   const orgPath = mkdtempSync(join(tmpdir(), "pfcli-deploy-org-"))
   const distPath = join(orgPath, "dist")
   const orgBundle = "console.log('bundle')"
@@ -137,7 +143,8 @@ const createTempOrg = (options: { includeCustomMigrations?: boolean } = {}) => {
     `${JSON.stringify(
       {
         version: ORGANISATION_DEPLOY_MANIFEST_VERSION,
-        platformRef: "trunk",
+        platformRef: options.platformRef ?? "trunk",
+        platformSource: options.platformSource,
         orgBundleSha256: createHash("sha256").update(orgBundle).digest("hex"),
         awsFunctionNames: [],
         hasLongDurationSteps: false,
@@ -1041,13 +1048,17 @@ process.start(entry).end()
     }
   })
 
-  it("uploads artifact and starts deployment on happy path", async () => {
+  it.each([
+    { platformRef: "trunk", platformSource: undefined },
+    { platformRef: "release/candidate", platformSource: "public" as const },
+    { platformRef: "1".repeat(40), platformSource: "public" as const },
+  ])("uploads artifact and deploys $platformRef", async (platform) => {
     const testDir = mkdtempSync(join(tmpdir(), "pfcli-deploy-test-"))
     tempPaths.push(testDir)
     const receiptPath = join(testDir, "start.json")
     process.env["PFCLI_START_RECEIPT_PATH"] = receiptPath
 
-    const orgPath = createTempOrg()
+    const orgPath = createTempOrg(platform)
     tempPaths.push(orgPath)
 
     const credentialsPath = createCredentialsFile(
@@ -1078,6 +1089,7 @@ process.start(entry).end()
         variables?: {
           documentStore?: string
           platformRef?: string
+          platformSource?: string
           stepPath?: string
           executionId?: string
         }
@@ -1115,7 +1127,11 @@ process.start(entry).end()
       if (body.query.includes("startOperationsDeploy")) {
         startCalled = true
         expect(body.variables?.executionId).toBe("pex-durable-canary-receipt")
-        expect(body.variables?.platformRef).toBe("trunk")
+        expect(body.variables?.platformRef).toBe(platform.platformRef)
+        expect(body.variables?.platformSource).toBe(platform.platformSource)
+        expect(body.query.includes("platformSource: $platformSource")).toBe(
+          platform.platformSource !== undefined,
+        )
         expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual({
           executionId: "pex-durable-canary-receipt",
           attempted: true,

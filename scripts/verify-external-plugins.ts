@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -60,53 +60,57 @@ const sdkVersion = await packageVersion("packages/sdk")
 const runtimeVersion = await packageVersion("packages/runtime")
 
 const directory = await mkdtemp(join(tmpdir(), "processfocus-plugin-"))
-await cp(resolve(config.fixture), directory, { recursive: true })
+try {
+  await cp(resolve(config.fixture), directory, { recursive: true })
 
-const tsconfigPath = join(directory, "tsconfig.json")
-const tsconfig = JSON.parse(await readFile(tsconfigPath, "utf8")) as {
-  references?: unknown
-}
-delete tsconfig.references
-await writeFile(tsconfigPath, `${JSON.stringify(tsconfig, null, 2)}\n`)
+  const tsconfigPath = join(directory, "tsconfig.json")
+  const tsconfig = JSON.parse(await readFile(tsconfigPath, "utf8")) as {
+    references?: unknown
+  }
+  delete tsconfig.references
+  await writeFile(tsconfigPath, `${JSON.stringify(tsconfig, null, 2)}\n`)
 
-const tarballs: Record<string, string> = {
-  processfocus: resolve(
-    `dist/packages/processfocus/processfocus-${sdkVersion}.tgz`,
-  ),
-  "@processfocus/runtime": resolve(
-    `dist/packages/processfocus-runtime/processfocus-runtime-${runtimeVersion}.tgz`,
-  ),
-  [pluginName]: resolve(
-    `dist/packages/${pluginFilePrefix}/${pluginFilePrefix}-${pluginVersion}.tgz`,
-  ),
-}
+  const tarballs: Record<string, string> = {
+    processfocus: resolve(
+      `dist/packages/processfocus/processfocus-${sdkVersion}.tgz`,
+    ),
+    "@processfocus/runtime": resolve(
+      `dist/packages/processfocus-runtime/processfocus-runtime-${runtimeVersion}.tgz`,
+    ),
+    [pluginName]: resolve(
+      `dist/packages/${pluginFilePrefix}/${pluginFilePrefix}-${pluginVersion}.tgz`,
+    ),
+  }
 
-const packageJsonPath = join(directory, "package.json")
-const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-  dependencies: Record<string, string>
-  overrides?: Record<string, string>
-}
-packageJson.dependencies["processfocus"] = tarballs.processfocus
-packageJson.dependencies[pluginName] = tarballs[pluginName] ?? ""
-packageJson.overrides = {
-  processfocus: tarballs.processfocus,
-  "@processfocus/runtime": tarballs["@processfocus/runtime"] ?? "",
-}
-if (config.runtime) {
-  packageJson.dependencies["@processfocus/runtime"] =
-    tarballs["@processfocus/runtime"] ?? ""
-}
-await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`)
+  const packageJsonPath = join(directory, "package.json")
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+    dependencies: Record<string, string>
+    overrides?: Record<string, string>
+  }
+  packageJson.dependencies["processfocus"] = tarballs.processfocus
+  packageJson.dependencies[pluginName] = tarballs[pluginName] ?? ""
+  packageJson.overrides = {
+    processfocus: tarballs.processfocus,
+    "@processfocus/runtime": tarballs["@processfocus/runtime"] ?? "",
+  }
+  if (config.runtime) {
+    packageJson.dependencies["@processfocus/runtime"] =
+      tarballs["@processfocus/runtime"] ?? ""
+  }
+  await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`)
 
-const run = (command: string[]) => {
-  const result = Bun.spawnSync(command, {
-    cwd: directory,
-    stdout: "inherit",
-    stderr: "inherit",
-  })
-  if (result.exitCode !== 0) throw new Error(`${command.join(" ")} failed`)
-}
+  const run = (command: string[]) => {
+    const result = Bun.spawnSync(command, {
+      cwd: directory,
+      stdout: "inherit",
+      stderr: "inherit",
+    })
+    if (result.exitCode !== 0) throw new Error(`${command.join(" ")} failed`)
+  }
 
-run(["bun", "install", "--ignore-scripts"])
-run(["bun", "run", "typecheck"])
-run(["bun", "run", "exercise"])
+  run(["bun", "install", "--ignore-scripts"])
+  run(["bun", "run", "typecheck"])
+  run(["bun", "run", "exercise"])
+} finally {
+  await rm(directory, { recursive: true, force: true })
+}

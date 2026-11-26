@@ -26,10 +26,31 @@ outside the organisation's default `db/pf.db` location.
 
 ## Cloud hosting
 
+Hosted builds require `platformRef` on the authored `Organisation`. To verify
+merged public-package changes, use an authorized existing Backend and set
+`platformRef: "trunk"`. For a reproducible deployment, select a full commit SHA.
+The CLI builds with `PF_ENV` set to the target customer environment, so the org
+can select a different ref per environment, for example
+`platformRef: process.env["PF_ENV"] === "prd" ? releaseCommit : "trunk"`.
+
+Set `platformSource: "public"` to resolve `platformRef` in the official
+`processfocus/processfocus` mirror. Use a branch name such as `"trunk"` to
+follow that branch. Each Deploy Attempt resolves the branch once and uses the
+same commit for the Dashboard and generic runtime. Starting a new Deploy
+Attempt resolves the branch again and can pick up a newer commit. The build logs
+`Deployment platform SHA` alongside `Deployment Backend SHA`, which identifies
+the revision supplying the AWS deployment code. To reproduce the public inputs
+after the branch advances, keep `platformSource: "public"` and set `platformRef`
+to the logged platform SHA.
+
+Omitting `platformSource` resolves `platformRef` in the private monorepo
+(`processfocus/monorepo`). If the selected ref cannot be checked out, the
+deployment stops without falling back to another source or to published packages.
+
 Log in to the Console, choose a project and environment, then deploy:
 
 ```bash
-pfcli auth login
+pfcli auth login --base-url <console-origin>
 pfcli projects
 pfcli env list --project <project-number>
 pfcli deploy ./my-org --project <project-number> --env <environment-name>
@@ -96,9 +117,3 @@ pfcli --completions bash
 The package also includes a generated [command reference](dist/command-reference.md)
 and [Usage spec](dist/pfcli.usage.kdl). These are created during the build and
 shipped with the release.
-
-Hosted `pfcli deploy` requires `platformRef` on the authored `Organisation`.
-Set it to a branch name or full Git commit, for example
-`platformRef: process.env["PF_ENV"] === "prd" ? releaseCommit : "trunk"`.
-The CLI builds with `PF_ENV` set to the target environment and sends the selected
-ref with the artifact. A failed checkout stops deployment.

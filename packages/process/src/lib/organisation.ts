@@ -58,8 +58,10 @@ type NotificationEmailLayer = Layer.Layer<
 >
 
 export interface OrganisationProps {
-  /** Private platform branch or exact commit selected for a hosted deploy. */
+  /** Platform branch or exact commit selected for a hosted deploy. */
   readonly platformRef?: string | undefined
+  /** Official repository for platformRef. Defaults to the private monorepo. */
+  readonly platformSource?: "private" | "public" | undefined
   /**
    * Full name of organisation.
    */
@@ -121,6 +123,7 @@ export class Organisation extends OrgUnitClass {
    */
   readonly timeZone: string
   readonly platformRef: string | undefined
+  readonly platformSource: OrganisationProps["platformSource"]
 
   /**
    * BCP 47 locale used for organisation-authored date/time display.
@@ -147,6 +150,7 @@ export class Organisation extends OrgUnitClass {
     })
     this.timeZone = timeZone
     this.platformRef = props.platformRef
+    this.platformSource = props.platformSource
     this.locale = props.locale ?? "en"
     this.businessCalendar = props.businessCalendar
     this.notificationEmailLayer = props.notificationEmailLayer
