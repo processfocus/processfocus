@@ -221,6 +221,9 @@ export const PostgresTodoQueriesLive = Layer.effect(
           }
           if (query.state) {
             switch (query.state.kind) {
+              case "open":
+                conditions.push(eq(schema.toDo._deleted, false))
+                break
               case "correction-required":
                 conditions.push(isNotNull(schema.toDo.correctionRequiredAt))
                 break

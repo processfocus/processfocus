@@ -14,7 +14,7 @@ import { OrgSettingsProvider } from "@/components/org-settings-provider"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { getSessionCacheScope } from "@/lib/auth/session-cache-scope"
 import type { CurrentProviderUser } from "@/lib/current-provider-user"
-import { DevImportCompletedQueryInvalidation } from "@/lib/dev/import-completed-query-invalidation"
+import { DevImportCompletedProvider } from "@/lib/dev/import-completed-query-invalidation"
 import type { FeaturePermissions } from "@/lib/feature-permissions"
 import { isExecutionsPath } from "@/lib/mobile-shell-policy"
 import { getQueryClient } from "@/lib/query-client"
@@ -73,7 +73,6 @@ export function AppShell({
 
   return (
     <QueryClientProvider client={queryClient}>
-      <DevImportCompletedQueryInvalidation />
       <FeaturePermissionsProvider value={featurePermissions}>
         <OrgSettingsProvider startDayOfWeek={orgIdentity?.startDayOfWeek ?? 0}>
           <MocksProvider>
@@ -94,7 +93,9 @@ export function AppShell({
                     initialProviderUser={providerUser}
                   />
                   <main className="flex-1 px-4 pt-4 pb-10 sm:px-8 sm:pt-6 sm:pb-16 lg:px-12">
-                    <ListRefreshProvider>{children}</ListRefreshProvider>
+                    <DevImportCompletedProvider>
+                      <ListRefreshProvider>{children}</ListRefreshProvider>
+                    </DevImportCompletedProvider>
                   </main>
                 </div>
               </SidebarProvider>

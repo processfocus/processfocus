@@ -43,6 +43,7 @@ export interface TodoListQuery {
 }
 
 export type TodoListStatePredicate =
+  | { readonly kind: "open" }
   | { readonly kind: "correction-required" }
   | { readonly kind: "correction-free"; readonly deleted: boolean }
 

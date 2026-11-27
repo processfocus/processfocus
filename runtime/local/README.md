@@ -49,6 +49,7 @@ For local testing, `PF_BYPASS_AUTH` can name an existing user's email in
 development mode. Production mode rejects this bypass. The launcher generates
 an `INTERNAL_API_SECRET` when none is supplied; set a stable value if signed
 file links need to survive restarts.
+It also generates a separate MCP storage secret for the Dashboard and GraphQL server.
 
 ## Monorepo development
 
@@ -62,6 +63,8 @@ PF_ORG=/path/to/organisation \
 This imports the organisation and checks worker configuration before starting
 the services, import watcher, and Dashboard development server.
 Set a shared `INTERNAL_API_SECRET` for internal callbacks and signed file routes.
+For MCP connections, set `PF_MCP_STORAGE_SECRET` to a separate random secret
+shared by the Dashboard and GraphQL server. Do not pass it to Docker Steps.
 
 See [architecture](ARCHITECTURE.md) for how the services fit together and which
 edits need a restart. Build and packaging targets are defined in

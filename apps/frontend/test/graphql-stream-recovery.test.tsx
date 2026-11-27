@@ -404,3 +404,56 @@ test("cleanup racing initial startup cannot register or revive the stream", () =
   expect(completed).toHaveBeenCalledTimes(1)
   expect(GRAPHQL_WEBSOCKET_BY_URL.has(url)).toBe(false)
 })
+
+test("replacing the last stream during retry releases the old socket cleanly", async () => {
+  const retrying = Promise.withResolvers<void>()
+  const resumeRetry = Promise.withResolvers<void>()
+  let restart = true
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request, server) {
+      if (!server.upgrade(request)) return new Response(null, { status: 400 })
+    },
+    websocket: {
+      message(socket, raw) {
+        const message = JSON.parse(String(raw))
+        if (message.type === "connection_init") {
+          if (restart) socket.close(1012, "Service Restart")
+          else socket.send(JSON.stringify({ type: "connection_ack" }))
+        }
+      },
+    },
+  })
+  const url = `ws://127.0.0.1:${server.port}/graphql`
+  const onError = mock(() => undefined)
+  const makeStream = () =>
+    createGraphQLStream<Document>({
+      url,
+      cacheScope,
+      onError,
+      queryBuilder: () => ({ query: "subscription { stream }", variables: {} }),
+      retryWait: () => {
+        retrying.resolve()
+        return resumeRetry.promise
+      },
+    })
+  const original = makeStream()
+  const replacement = makeStream()
+  try {
+    original.start()
+    await retrying.promise
+    original.close()
+    restart = false
+    resumeRetry.resolve()
+    const connected = firstValueFrom(replacement.stream$.pipe(timeout(3000)))
+    replacement.start()
+    expect(await connected).toBe("RESYNC")
+    expect(onError).not.toHaveBeenCalled()
+  } finally {
+    resumeRetry.resolve()
+    original.close()
+    replacement.close()
+    await server.stop(true)
+  }
+})

@@ -8,6 +8,7 @@ import { BasePage, runEffect } from "@/lib/effect/runtime"
 import { GraphQLService } from "@/lib/effect/services/graphql"
 import {
   type AvailableList,
+  type ListSortInput,
   availableListsQuery,
   buildListQueryVariables,
   fetchListData,
@@ -37,8 +38,7 @@ interface ListDataSectionProps {
   readonly page: number
   readonly limit: number
   readonly filter: string
-  readonly sortField: string | null
-  readonly sortDirection: string | null
+  readonly sort: ListSortInput | null
 }
 
 function ListDataSkeleton() {
@@ -115,12 +115,9 @@ async function ListDataSection({
   page,
   limit,
   filter,
-  sortField,
-  sortDirection,
+  sort,
 }: ListDataSectionProps) {
   "use memo"
-
-  const sort = parseListSort(sortField, sortDirection)
   const session = await runEffect(
     getSessionWithToken.pipe(Effect.catch(() => Effect.succeed(null))),
   )
@@ -174,10 +171,6 @@ const ListPage = Effect.fn("ListPage")(function* (props: PageProps) {
   const page = parseListPageNumber(searchParams.page, 1)
   const limit = parseListPageSize(searchParams.limit, 20)
   const filter = searchParams.filter ?? ""
-  const sort = parseListSort(
-    searchParams.sort ?? null,
-    searchParams.dir ?? null,
-  )
   const availableLists = yield* graphql
     .request<{ readonly availableLists: readonly AvailableList[] }>(
       availableListsQuery,
@@ -202,6 +195,13 @@ const ListPage = Effect.fn("ListPage")(function* (props: PageProps) {
     return <ListNotFound listPath={listPath} />
   }
 
+  // A saved URL can outlive the column it sorts by.
+  const sort = currentList.outputColumns.some(
+    (column) => column.sortable && column.field === searchParams.sort,
+  )
+    ? parseListSort(searchParams.sort ?? null, searchParams.dir ?? null)
+    : null
+
   return (
     <div className="container mx-auto py-6">
       <Suspense fallback={null}>
@@ -225,8 +225,7 @@ const ListPage = Effect.fn("ListPage")(function* (props: PageProps) {
           page={page}
           limit={limit}
           filter={filter}
-          sortField={searchParams.sort ?? null}
-          sortDirection={searchParams.dir ?? null}
+          sort={sort}
         />
       </Suspense>
     </div>

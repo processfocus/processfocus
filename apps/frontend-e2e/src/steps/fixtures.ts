@@ -100,7 +100,13 @@ export const test = base.extend<
     testInfo,
   ) => {
     if (!baseURL) throw new Error("Dashboard origin required")
-    if (testInfo.config.workers !== 1 && baseURL !== regularOrigin)
+    // The review's policy project runs alone, with one worker, after every
+    // delegation and Passkey context using this database has closed.
+    if (
+      testInfo.config.workers !== 1 &&
+      baseURL !== regularOrigin &&
+      testInfo.project.name !== "policy-personas"
+    )
       throw new Error(
         "Named Dashboard policy personas require one worker per runtime",
       )

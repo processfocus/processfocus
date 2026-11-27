@@ -1,8 +1,9 @@
-import { createHash, randomBytes } from "node:crypto"
+import { createHash, createHmac, randomBytes } from "node:crypto"
 import { Schema } from "effect"
 import { NextRequest } from "next/server"
 import { OAuthMetadataFetchError } from "@pf/openauth/error"
-import { expect, mock, spyOn, test } from "bun:test"
+import { startMcpOAuthStorage } from "./fixtures/mcp-oauth-storage"
+import { afterAll, beforeAll, expect, mock, spyOn, test } from "bun:test"
 
 mock.module("server-only", () => ({}))
 let metadataAvailable = true
@@ -34,18 +35,118 @@ mock.module("@/lib/auth/issuer", () => ({
     issuer: "http://localhost:4020",
   }),
 }))
-const graphqlEndpoint = "http://localhost:4000/graphql"
+let graphqlEndpoint: string
 mock.module("@/lib/graphql/endpoint", () => ({
   getGraphqlEndpoint: () => graphqlEndpoint,
 }))
 
-const { authorize, consent, finishMcpLogin, register, token } = await import(
-  "../lib/mcp/oauth"
-)
+const {
+  authorize,
+  consent,
+  disconnectConnection,
+  finishMcpLogin,
+  listConnections,
+  register,
+  token,
+} = await import("../lib/mcp/oauth")
 const { bucket } = await import("../lib/mcp/store")
+const secret = randomBytes(32).toString("hex")
+const previousEnv = {
+  INTERNAL_API_SECRET: process.env["INTERNAL_API_SECRET"],
+  PF_MCP_STORAGE_SECRET: process.env["PF_MCP_STORAGE_SECRET"],
+  PF_MCP_STORAGE_ORIGIN: process.env["PF_MCP_STORAGE_ORIGIN"],
+  PUBLIC_TODO_TOKEN_SECRET: process.env["PUBLIC_TODO_TOKEN_SECRET"],
+  PF_MCP_DOMAIN: process.env["PF_MCP_DOMAIN"],
+}
+let storage: Awaited<ReturnType<typeof startMcpOAuthStorage>>
+beforeAll(async () => {
+  storage = await startMcpOAuthStorage(secret)
+  graphqlEndpoint = `${storage.origin}/graphql`
+  // The callback and MCP servers use independent credentials.
+  process.env["INTERNAL_API_SECRET"] = randomBytes(32).toString("hex")
+  process.env["PF_MCP_STORAGE_SECRET"] = secret
+  process.env["PF_MCP_STORAGE_ORIGIN"] = storage.origin
+  process.env["PUBLIC_TODO_TOKEN_SECRET"] = secret
+})
+afterAll(async () => {
+  await storage?.stop()
+  for (const [key, value] of Object.entries(previousEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+})
 
-test("renewal survives issuer and metadata outages without depending on GraphQL availability", async () => {
-  const origin = "http://localhost:3000"
+test("the MCP storage route requires its own bearer and validates requests", async () => {
+  const path = "/internal/mcp-oauth"
+  const url = new URL(path, storage.origin)
+  const callbackSecret = process.env["INTERNAL_API_SECRET"] ?? ""
+  const bearer = (key: string) =>
+    `Bearer ${createHmac("sha256", key).update(path).digest("base64url")}`
+  const request = (
+    authorization: string,
+    method: string,
+    body?: Record<string, string>,
+  ) =>
+    fetch(url, {
+      method,
+      headers: { authorization, "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+
+  const unauthorized = await request(bearer(callbackSecret), "POST", {
+    op: "list",
+    partition: "http://localhost:3000#client",
+  })
+  expect(unauthorized.status).toBe(401)
+  expect(await unauthorized.text()).toBe("")
+  expect((await request(bearer(secret), "GET")).status).toBe(405)
+  expect((await request(bearer(secret), "POST", { op: "list" })).status).toBe(
+    400,
+  )
+})
+
+test("only one writer can replace the same MCP record revision", async () => {
+  const originalMode = process.env["PF_RUNTIME_MODE"]
+  process.env["PF_RUNTIME_MODE"] = "local"
+  try {
+    const records = bucket("http://localhost:3003", "client", Schema.Unknown)
+    const initial = await records.put("client", { winner: 0 })
+    if (!initial) throw new Error("Expected to create the MCP record")
+    const updates = await Promise.all([
+      records.put("client", { winner: 1 }, undefined, initial),
+      records.put("client", { winner: 2 }, undefined, initial),
+    ])
+    const successful = updates.filter((update) => update !== undefined)
+    expect(successful).toHaveLength(1)
+    expect(await records.get("client")).toEqual(successful[0])
+  } finally {
+    if (originalMode === undefined) delete process.env["PF_RUNTIME_MODE"]
+    else process.env["PF_RUNTIME_MODE"] = originalMode
+  }
+})
+
+async function expectFreshDashboardStatus(
+  origin: string,
+  accessToken: string,
+  status: number,
+) {
+  const child = Bun.spawn(
+    ["bun", "test", "./test/fixtures/mcp-access-probe.ts"],
+    {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: { ...process.env, GRAPHQL_ENDPOINT: graphqlEndpoint },
+      stdin: new Blob([JSON.stringify({ origin, accessToken, status })]),
+      stderr: "pipe",
+    },
+  )
+  const diagnostics = await child.stderr.text()
+  expect(await child.exited, diagnostics).toBe(0)
+}
+
+async function verifyGrantLifecycle(mode: "local" | "deployed") {
+  const origin =
+    mode === "local" ? "http://localhost:3000" : "https://work.example.test"
+  const host = new URL(origin).host
   const redirect = "http://127.0.0.1:3001/callback"
   const access = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 7200 })).toString("base64url")}.signature`
   const issuerTokens = {
@@ -57,8 +158,11 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
   const env = process.env["PF_RUNTIME_MODE"]
   let graphqlAvailable = true
   const submittedIssuerTokens: string[] = []
+  const fetch = globalThis.fetch
   const issuer = spyOn(globalThis, "fetch").mockImplementation(
     async (input, init) => {
+      if (String(input).startsWith(`${storage.origin}/internal/`))
+        return fetch(input, init)
       if (String(input) === graphqlEndpoint)
         return graphqlAvailable
           ? Response.json({ data: { __typename: "Query" } })
@@ -83,7 +187,8 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
       })
     },
   )
-  process.env["PF_RUNTIME_MODE"] = "local"
+  process.env["PF_RUNTIME_MODE"] = mode
+  process.env["PF_MCP_DOMAIN"] = host
   try {
     const registration = await register(
       new Request(`${origin}/mcp/register`, {
@@ -114,7 +219,7 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
     ).searchParams.get("redirect")
     const signedIn = await finishMcpLogin(
       new NextRequest(`${origin}/api/auth/callback`, {
-        headers: { host: "localhost:3000", cookie: browserCookie ?? "" },
+        headers: { host, cookie: browserCookie ?? "" },
       }),
       returnTo,
       issuerTokens,
@@ -123,7 +228,7 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
       new NextRequest(signedIn?.headers.get("location") ?? "", {
         method: "POST",
         headers: {
-          host: "localhost:3000",
+          host,
           origin,
           cookie: browserCookie ?? "",
         },
@@ -142,14 +247,27 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
         }),
         origin,
       )
-    const exchanged = await requestToken({
+    const exchange = {
       grant_type: "authorization_code",
       code,
       code_verifier: verifier,
       redirect_uri: redirect,
-    })
-    expect(exchanged.status).toBe(200)
-    const { refresh_token } = await exchanged.json()
+    }
+    const exchanges = await Promise.all([
+      requestToken(exchange),
+      requestToken(exchange),
+    ])
+    expect(exchanges.map(({ status }) => status).sort()).toEqual([200, 400])
+    const exchanged = exchanges.find(({ ok }) => ok)!
+    const originalConnections = await listConnections(origin, "alice")
+    expect(originalConnections).toEqual([
+      expect.objectContaining({
+        name: "OpenCode",
+        authorisedAt: expect.any(Number),
+      }),
+    ])
+    const { access_token, refresh_token } = await exchanged.json()
+    await expectFreshDashboardStatus(origin, access_token, 200)
     const renewal = { grant_type: "refresh_token", refresh_token }
     const unavailable = await requestToken(renewal)
     expect(unavailable.status).toBe(503)
@@ -170,6 +288,7 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
       clock.mockRestore(),
     )
     expect(renewed.status).toBe(200)
+    expect(await listConnections(origin, "alice")).toEqual(originalConnections)
     expect(await renewed.json()).toMatchObject({ scope: "work:read" })
     expect(await (await requestToken(renewal)).json()).toEqual({
       error: "invalid_grant",
@@ -179,13 +298,28 @@ test("renewal survives issuer and metadata outages without depending on GraphQL 
       "issuer-refresh",
       "rotated-issuer-refresh",
     ])
+    const { clientId, id: grantId } = originalConnections[0]!
+    expect(
+      await disconnectConnection({
+        origin,
+        userId: "alice",
+        clientId,
+        grantId,
+      }),
+    ).toBe(true)
+    await expectFreshDashboardStatus(origin, access_token, 401)
   } finally {
     metadataAvailable = true
     issuer.mockRestore()
     if (env === undefined) delete process.env["PF_RUNTIME_MODE"]
     else process.env["PF_RUNTIME_MODE"] = env
   }
-})
+}
+
+test.each(["local", "deployed"] as const)(
+  "%s MCP grants persist across Dashboard instances and refresh outages until disconnected",
+  verifyGrantLifecycle,
+)
 
 test("unused registrations stop occupying capacity once they expire", async () => {
   const origin = "http://localhost:3002"

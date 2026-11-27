@@ -18,12 +18,14 @@ You need:
   environment.
 - Your organisation source in a GitHub repository.
 
-Set `platformRef` on your `Organisation` to the Process Focus platform branch
-or full commit SHA that the hosted build should use. For example, use
-`platformRef: "trunk"` to test the latest merged platform changes in a
-development environment, or pin a full SHA to repeat a build with the same
-platform code. This ref selects the platform source, not your project's
-GitHub Actions branch.
+For a published SDK installed from the npm registry with a Bun, npm, pnpm, or
+Yarn lockfile, leave `platformRef` unset. Yarn must install into `node_modules`.
+The Backend verifies the exact installed `processfocus` release and builds
+from its attested public commit.
+
+For workspace builds or unpublished packages, set `platformRef` on your
+`Organisation` to a branch or full commit SHA in the platform repository.
+Set `platformSource: "public"` to select the public mirror.
 
 In the [Console](https://console.processfocus.com), select your project and
 deployment environment, then open the **Info** tab. Use the value under

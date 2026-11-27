@@ -1,5 +1,6 @@
 ---
 title: Roles
+reviewed: true
 description: How roles represent responsibilities and govern access to work in Process Focus.
 ---
 
@@ -15,20 +16,17 @@ unit. For example, define an **Employee** role at the organisation level and an
 **Accounts Manager** role in the Accounts department. Someone who manages
 Accounts can hold both roles.
 
-Defining a role in a unit does not give it to everyone in that unit. Role
-assignments are separate from where the role is defined.
+Defining a role in an org unit does not assign that role to every
+employee part of that unit. Role assignments are separate from where
+the role is defined.
 
 ## How roles affect access
 
-A role's name and place in the organisation do not grant permissions by
-themselves. [Authorisation](/docs/concepts/authorisation/) determines what users
-with that role can do.
+A role's name and place in the organisation does not grant permissions
+by itself. [Authorisation](/docs/concepts/authorisation/) determines
+what users with that role can do.
 
 For example, in a reimbursement process, you can set the submission step's
 role to **Employee** and the approval step's role to **Accounts Manager**. Under
 the default policies, the Employee role lets a user submit a claim but does
 not let them approve one.
-
-See the [Roles reference](/docs/reference/authorisation/roles/) for how to define
-and assign roles, or [Assigning permissions to roles](/docs/reference/authorisation/role-permissions/)
-for how to use them in processes and policies.

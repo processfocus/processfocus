@@ -36,6 +36,7 @@ async function connect({
   signIn = "Passkey",
   googleAccount = "Continue as test user",
   clientLabel = "MCP Test",
+  clientName,
 }: {
   page: Page
   baseURL: string
@@ -43,6 +44,7 @@ async function connect({
   signIn?: "Passkey" | "Google"
   googleAccount?: string
   clientLabel?: string
+  clientName?: string
 }) {
   const resource = new URL("/mcp", baseURL)
   const unauthenticated = await fetch(resource)
@@ -55,6 +57,17 @@ async function connect({
       new URL("/.well-known/oauth-authorization-server", resource),
     ).then((response) => response.json()),
   )
+  const manifest = Schema.decodeUnknownSync(
+    Schema.Struct({
+      name: Schema.String,
+      short_name: Schema.optional(Schema.String),
+    }),
+  )(
+    await fetch(new URL("/manifest.webmanifest", resource)).then((response) =>
+      response.json(),
+    ),
+  )
+  const organisationName = manifest.short_name ?? manifest.name
   const callback = new URL("http://127.0.0.1:43877/mcp-test-callback")
   const register = async (name: string) => {
     const response = await fetch(metadata.registration_endpoint, {
@@ -70,7 +83,8 @@ async function connect({
     return Schema.decodeUnknownSync(Registration)(await response.json())
       .client_id
   }
-  const name = `${clientLabel} ${choice} ${randomBytes(6).toString("hex")}`
+  const name =
+    clientName ?? `${clientLabel} ${choice} ${randomBytes(6).toString("hex")}`
   const clientId = await register(name)
   const requestToken = (form: Record<string, string>) =>
     fetch(metadata.token_endpoint, {
@@ -127,12 +141,16 @@ async function connect({
       expect((await consent).status()).toBe(200)
       await expect(
         browserPage.getByRole("heading", {
-          name: `${reconnecting ? "Reconnect" : "Connect"} ${name} to Process Focus?`,
+          name: `${reconnecting ? "Reconnect" : "Connect"} ${name} to ${organisationName}?`,
+          exact: true,
         }),
       ).toBeVisible()
       await expect(
         browserPage.getByText(`Environment: ${resource.origin}`),
       ).toBeVisible()
+      await expect(
+        browserPage.getByRole("link", { name: "Manage MCP connections" }),
+      ).toHaveAttribute("href", "/connected-apps")
       if (!reconnecting) {
         await browserPage
           .getByRole("radio", { name: choice, exact: true })
@@ -406,20 +424,56 @@ Then(
       })
     }
 
-    const second = await connect({ page, baseURL, choice: "View and act" })
+    const second = await connect({
+      page,
+      baseURL,
+      choice: "View work",
+      clientName: first.name,
+    })
     const secondTokens = await readTokens(
       await second.requestToken(second.exchange),
     )
-    await page.goto("/mcp/connections")
-    await page
-      .getByRole("button", { name: `Disconnect ${first.name}`, exact: true })
-      .click()
+    const retired = await page.request.get("/mcp/connections", {
+      maxRedirects: 0,
+    })
+    expect(retired.status()).toBe(404)
+    await page.goto("/")
+    await page.getByTestId("header-profile-button").click()
+    await page.getByRole("menuitem", { name: "Connected apps" }).click()
     await expect(
-      page.getByRole("button", {
-        name: `Disconnect ${first.name}`,
-        exact: true,
-      }),
+      page.getByRole("heading", { name: "Connected apps", exact: true }),
+    ).toBeVisible({ timeout: 15_000 })
+    await expect(page).toHaveURL(new URL("/connected-apps", baseURL).href)
+    const rows = page.getByRole("listitem").filter({
+      has: page.getByText(first.name, { exact: true }),
+    })
+    await expect(rows.getByText("View work", { exact: true })).toHaveCount(2)
+    await expect(rows.getByText("Authorised on")).toHaveCount(2)
+    const dates = await rows.locator("time").evaluateAll((times) =>
+      times.map((time) => ({
+        displayed: time.textContent?.trim() ?? "",
+        instant: time.getAttribute("datetime") ?? "",
+      })),
+    )
+    dates.sort((first, second) => first.instant.localeCompare(second.instant))
+    const [firstDate, secondDate] = dates
+    expect(firstDate?.displayed).toBeTruthy()
+    expect(secondDate?.displayed).toBeTruthy()
+    expect(firstDate?.displayed).not.toBe(secondDate?.displayed)
+    const disconnectOn = (displayed: string) =>
+      rows
+        .filter({ has: page.getByText(displayed, { exact: true }) })
+        .getByRole("button", { name: `Disconnect ${first.name}`, exact: true })
+    const firstDisconnect = disconnectOn(firstDate?.displayed ?? "")
+    const secondDisconnect = disconnectOn(secondDate?.displayed ?? "")
+    await expect(firstDisconnect).toBeVisible()
+    await expect(secondDisconnect).toBeVisible()
+    await expect(
+      page.getByText(otherActingClient.name, { exact: true }),
     ).toHaveCount(0)
+    await firstDisconnect.click()
+    await expect(firstDisconnect).toHaveCount(0)
+    await expect(secondDisconnect).toBeVisible()
     const list = { id: 1, method: "tools/list" }
     expect((await rpc(resource, tokens, list)).status).toBe(401)
     expect((await rpc(resource, renewed, list)).status).toBe(401)

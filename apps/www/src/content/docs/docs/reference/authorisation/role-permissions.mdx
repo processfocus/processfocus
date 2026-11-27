@@ -1,5 +1,6 @@
 ---
 title: Assigning permissions to roles
+reviewed: true
 ---
 
 Assign permissions to a role so that users with that role can perform
@@ -76,7 +77,7 @@ accounting system, perhaps even upload to bank for payment and such.
 ## Permit a step with Cedar
 
 You could also grant step access explicitly in Cedar. This policy permits
-provider users in the `/accounts/manager` role to authorise reimbursements:
+users with the `/accounts/manager` role to authorise reimbursements:
 
 ```cedar
 permit (
@@ -86,10 +87,11 @@ permit (
 );
 ```
 
-Replace the role and step paths with the paths in your organisation. The
-`in` operator checks role membership; the resource comparison limits this grant
-to that step. This policy applies to provider users, not service accounts or
-delegations.
+Replace the role and step paths with the paths in your
+organisation. The `in` operator checks role membership; the resource
+comparison limits this grant to that step. This policy applies to
+provider users (those with an identity provided by an identity
+system), not service accounts or delegations.
 
 Writing these policies for each step means maintaining role and step paths
 separately from the process definition. Assigning the role on the step avoids
@@ -110,22 +112,14 @@ permit (
 The policies above add permissions; they do not remove or
 replace other grants, and a matching `forbid` still takes precedence.
 
-Both starting a process and completing a Todo check `complete` against the
-relevant `PF::Step`. These examples grant access to **Authorise reimbursement**,
-not the separate **Submit reimbursement** start step.
-
-These explicit grants do not restrict access by direct user assignment.
-To respect an assignment, include the `unless` condition from the default
-policy below.
-
-For more about policy syntax, see [Cedar policies](/docs/reference/authorisation/cedar-policies/).
+Both starting a process and completing a Todo check the `complete`
+action against the relevant `PF::Step`.
 
 ## Default step permission
 
-The default policy starts with a role check: a provider user can complete a
-step when their roles include the role assigned to that step in the process
-definition. Leaving delegations and direct user assignments aside for now, the
-role check looks like this:
+The default policy starts with a role check: a user can complete a
+step when their roles include the role assigned to that step in the
+process definition:
 
 ```cedar
 permit (
@@ -140,21 +134,20 @@ when {
 };
 ```
 
-It permits a provider user to complete a step when the principal's roles
-include the step's assigned role. The `has` checks ensure the attributes exist
-before reading them.
-
-This role check covers starting the reimbursement process as an employee and
-completing its authorisation Todo as an accounts manager.
+It permits a user, the principal, to complete a step when his or her
+roles include the step's assigned role. The `has` checks ensure the
+attributes exist before reading them.
 
 ## Default permission for an assigned Todo
 
-A Todo can also be assigned to a specific user. The default policy then requires
-both the step's role and that user assignment: another accounts manager cannot
-complete a reimbursement Todo assigned to someone else.
+It is possible to assign todos to a specific user. In that case only
+that user can complete that step. So the actual default policy
+requires both the step's role and that user assignment: another
+accounts manager cannot complete a reimbursement Todo assigned to
+someone else.
 
 The runtime supplies the assigned user as `context.assignedTo`. The full
-built-in policy also supports delegations and adds an `unless` condition:
+built-in policy also supports delegations:
 
 ```cedar
 permit (
@@ -173,7 +166,7 @@ unless {
 };
 ```
 
-The `unless` condition excludes anyone other than the assigned user or their
-delegation from this default grant. The assignee still needs the step's role.
-For unassigned Todos and process starts, `context.assignedTo` is absent, so the
-role check is enough.
+The `unless` condition excludes anyone other than the assigned user or
+their delegation from this default grant. For unassigned Todos and
+process starts, `context.assignedTo` is absent, so the role check is
+enough.

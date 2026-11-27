@@ -130,7 +130,6 @@
         "rxdb",
         "@standard-schema/spec",
         "@graphql-typed-document-node/core",
-        "@effect-aws/client-dynamodb",
         "@modelcontextprotocol/sdk",
         "rxjs",
         "graphql-request",
@@ -202,7 +201,8 @@
         "scripts/generate-organisation-plugin-composition.ts",
         "scripts/generate-organisation-form-loaders.ts",
         "scripts/assert-dashboard-client-chunks.ts",
-        "test/fixtures/delegation-ui-probe.tsx"
+        "test/fixtures/delegation-ui-probe.tsx",
+        "test/fixtures/mcp-access-probe.ts"
       ],
       "ignore": [
         "lib/effect/index.ts",

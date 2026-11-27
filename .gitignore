@@ -3,6 +3,7 @@ dist
 tmp
 out-tsc
 __pycache__/
+**/.processfocus/local-graphql/
 
 # dependencies
 node_modules

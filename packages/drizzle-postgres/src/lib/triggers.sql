@@ -169,6 +169,11 @@ BEFORE UPDATE ON "pf_oauth_storage"
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 --> statement-breakpoint
+CREATE TRIGGER pf_mcp_oauth_record_updated_at_trigger
+BEFORE UPDATE ON "pf_mcp_oauth_record"
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+--> statement-breakpoint
 CREATE TRIGGER pf_oauth_provider_updated_at_trigger
 BEFORE UPDATE ON "pf_oauth_provider"
 FOR EACH ROW

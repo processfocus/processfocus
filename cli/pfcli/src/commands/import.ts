@@ -143,23 +143,52 @@ const notifyFrontendDevImportCompleted = (processPaths: readonly string[]) =>
     }).pipe(Effect.mapError((cause) => new NotifyError({ cause })))
     const frontendBaseUrl = getEffectiveFrontendBaseUrl()
 
-    yield* Effect.tryPromise({
+    const response = yield* Effect.tryPromise({
       try: () =>
         fetch(`${frontendBaseUrl}/api/dev/import-completed`, {
           method: "POST",
+          redirect: "manual",
           signal: AbortSignal.timeout(5000),
           headers: { "Content-Type": "application/json" },
           body: requestBody,
         }),
       catch: (cause) => new NotifyError({ cause }),
     })
+    if (response.status !== 204) {
+      return yield* new NotifyError({
+        cause: `Dashboard returned ${response.status}`,
+      })
+    }
   }).pipe(
     Effect.catch((error) =>
       Console.warn(
-        `⚠️  Could not notify frontend dev event stream: ${formatUnknownError(error)}`,
+        `⚠️  Could not notify frontend dev event stream: ${formatUnknownError(error.cause)}`,
       ),
     ),
   )
+
+// Bun watches the published module, not the source tree or in-progress build.
+// Switch slots only after the DB import and both copies have succeeded.
+const prepareLocalGraphqlImport = (orgPath: string, bundlePath: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const directory = resolve(orgPath, ".processfocus/local-graphql")
+    const entry = join(directory, "active.json")
+    const previous = (yield* fs.exists(entry))
+      ? yield* fs.readFileString(entry)
+      : ""
+    const slot = previous.trim() === '"a"' ? "b" : "a"
+    const destination = join(directory, slot)
+    yield* fs.makeDirectory(join(destination, "graphql"), { recursive: true })
+    yield* fs.copyFile(bundlePath, join(destination, "org.js"))
+    yield* fs.copyFile(
+      join(dirname(bundlePath), "graphql/org.graphql"),
+      join(destination, "graphql/org.graphql"),
+    )
+    yield* fs.writeFileString(`${entry}.tmp`, JSON.stringify(slot))
+    // The caller runs this final rename only after the database import succeeds.
+    return fs.rename(`${entry}.tmp`, entry)
+  })
 
 interface BuiltOrgImportModule {
   readonly dbImport?: Effect.Effect<BundledDbImportResult, unknown>
@@ -769,6 +798,10 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
     yield* ensureDatabaseDirectory(databasePath)
 
     const { bundlePath, dbImport } = yield* loadBuiltOrgImport(orgPath)
+    const publishLocalGraphqlImport =
+      process.env["PF_LOCAL_GRAPHQL_IMPORT"] === "1"
+        ? yield* prepareLocalGraphqlImport(orgPath, bundlePath)
+        : undefined
 
     yield* Console.log(`Using built organisation bundle: ${bundlePath}`)
 
@@ -856,13 +889,18 @@ export const runImport = (orgPath: string, options: RunImportOptions = {}) =>
               ),
         ),
         Effect.tap(({ processPaths }) =>
-          Effect.all(
-            [
-              notifyImportCompleted(processPaths),
-              notifyFrontendDevImportCompleted(processPaths),
-            ],
-            { concurrency: "unbounded" },
-          ),
+          publishLocalGraphqlImport
+            ? (process.env["INTERNAL_API_SECRET"]
+                ? notifyImportCompleted(processPaths)
+                : Effect.void
+              ).pipe(Effect.andThen(publishLocalGraphqlImport))
+            : Effect.all(
+                [
+                  notifyImportCompleted(processPaths),
+                  notifyFrontendDevImportCompleted(processPaths),
+                ],
+                { concurrency: "unbounded" },
+              ),
         ),
         Effect.catchTags({
           SqlError: (error: SqlError) =>

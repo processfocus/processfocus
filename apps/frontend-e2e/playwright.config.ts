@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { workspaceRoot } from "@nx/devkit"
 import { nxE2EPreset } from "@nx/playwright/preset"
@@ -87,6 +88,9 @@ const featuresGlob =
 const isDelegationJourney =
   featuresGlob.includes("features-delegated-access") ||
   featuresGlob.includes("features-passkey")
+const combinedReview =
+  isDelegationJourney && featuresGlob.includes("features-lifecycle")
+const policyPersonaSpecs = /\/features-(?:cedar-scale|lifecycle)\//
 if (isDelegationJourney) {
   // Playwright's failure accessibility snapshots are independent of trace capture.
   process.env["PLAYWRIGHT_NO_COPY_PROMPT"] = "1"
@@ -227,7 +231,9 @@ export default defineConfig({
           ...(isDelegationJourney
             ? { stdout: "ignore" as const, stderr: "ignore" as const }
             : {}),
-          url: baseURL,
+          url: process.env["FRONTEND_E2E_BOOT_HEALTH_ORG_MODE"]
+            ? new URL("/_pf/health", baseURL).href
+            : baseURL,
           reuseExistingServer: instantE2E ? false : reuseExistingServer,
           cwd: workspaceRoot,
           // Cold CI boots build the org, import it, and start `next dev`;
@@ -236,6 +242,9 @@ export default defineConfig({
           env: {
             FRONTEND_E2E_RUNTIME_COMMAND: localServerCommand,
             FRONTEND_PORT: localFrontendPort,
+            INTERNAL_API_SECRET:
+              process.env["INTERNAL_API_SECRET"] ?? randomUUID(),
+            PF_MCP_STORAGE_SECRET: randomUUID(),
             ...(instantE2E ? { NODE_ENV: "production" } : {}),
           },
         },
@@ -251,5 +260,20 @@ export default defineConfig({
         },
         { ...project, testIgnore: "**/without-waiting.feature.spec.js" },
       ])
-    : projects,
+    : combinedReview
+      ? [
+          {
+            ...projects[0],
+            name: "chromium",
+            testMatch: /\/features-(?:delegated-access|passkey)\//,
+          },
+          {
+            ...projects[0],
+            name: "policy-personas",
+            dependencies: ["chromium"],
+            workers: 1,
+            testMatch: policyPersonaSpecs,
+          },
+        ]
+      : projects,
 })

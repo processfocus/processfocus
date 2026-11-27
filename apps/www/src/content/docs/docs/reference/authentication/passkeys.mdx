@@ -1,6 +1,7 @@
 ---
 title: Passkeys
 description: Passkey registration, sign-in, and recovery.
+reviewed: true
 ---
 
 Use passkeys if you cannot use Single-Sign-On. Passkeys use the WebAuthn
@@ -30,7 +31,7 @@ export const configureOrg: Effect.Effect<Organisation, Config.ConfigError> =
 ```
 
 Enabling this will offer a login with passkey option on the login page
-in the frontend.
+in the Dashboard.
 
 ## Inviting users with a registration link
 
@@ -41,7 +42,7 @@ In order to allow a user to log in with a passkey:
 
 ### Creating an invitation in the front-end
 
-In the frontend, visit "Users & Sign-in", then click on "Invited User",
+In the Dashboard, visit "Users & Sign-in", then click on "Invited User",
 then on "New invitation". This will take you to the path `settings/invitations/new`.
 
 Fill in the form with an email and tick any applicable roles (a user
@@ -89,7 +90,7 @@ roles together. It prints no Registration Link or secret.
 
 ### Creating a registration link with pfcli
 
-With your local frontend running at `http://localhost:3000/`, generate the
+With your local Dashboard running at `http://localhost:3000/`, generate the
 registration link for that invitation:
 
 ```bash
@@ -104,13 +105,13 @@ expires at: 2026-11-19T01:57:28.000Z
 ```
 
 The command reads the invitation from the local database and prints a
-registration link pointing to your local frontend. Open it on the same
+registration link pointing to your local Dashboard. Open it on the same
 computer to register a passkey. `localhost` on a phone refers to the phone
-itself, so this URL is for testing on your computer. If your frontend uses a
+itself, so this URL is for testing on your computer. If your Dashboard uses a
 different host or port, pass `--frontend-url https://app.example.com` (include
 the port when needed). Use an HTTP(S) origin without a path, query, fragment,
 or credentials. Without an override, the command can discover the local
-frontend port.
+Dashboard port.
 Use `--database-path ./data.db` if the local database is elsewhere. Both options
 are local-only and also apply when rotating a Registration Link or issuing a
 Passkey Recovery Link with `--rotate`.

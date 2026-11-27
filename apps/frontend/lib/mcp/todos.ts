@@ -6,8 +6,8 @@ import { graphql } from "@/lib/generated/gql"
 import { toUrlPath } from "@/lib/utils"
 
 const todos = graphql(`
-  query McpActionableTodos($page: Int!, $status: String!) {
-    todos(page: $page, limit: 25, status: $status) {
+  query McpActionableTodos($page: Int!) {
+    todos(page: $page, limit: 25, status: "Actionable") {
       page
       hasNextPage
       nodes {
@@ -15,6 +15,7 @@ const todos = graphql(`
         processExecutionId
         processName
         stepName
+        stepPath
         status
         priority
         dueAt
@@ -31,21 +32,49 @@ const ToolArguments = Schema.Struct({
       Schema.check(Schema.isBetween({ minimum: 1, maximum: 2147483647 })),
     ),
   ),
-  status: Schema.optionalKey(
-    Schema.Literals(["Active", "Correction Required"]),
-  ),
 })
+
+const todoDashboardUrl = (
+  origin: string,
+  route: "complete" | "correct",
+  stepPath: string,
+  todoId: string,
+): string => {
+  const path = toUrlPath(stepPath).split("/").map(encodeURIComponent).join("/")
+  const url = new URL(`/to-dos/${route}/${path}`, origin)
+  url.searchParams.set("todoId", todoId)
+  return url.href
+}
 
 export const listMyTodos = defineReadTool({
   name: "list_my_todos",
   description:
-    "List actionable To-Dos for the signed-in person. Start at page 1 and continue while hasNextPage is true. Set status to Correction Required to list public invitation corrections instead.",
+    "List or count the signed-in person's actionable To-Dos. Start at page 1 and continue while hasNextPage is true. Give one count or list without a separate correction category or a zero-corrections note. Explain requiredAction only when discussing that specific To-Do. If asked to act on a To-Do with requiredAction, give its dashboardUrl instead of inspecting or submitting a normal form.",
   args: ToolArguments,
   failure: "The runtime did not authorize or return the To-Dos.",
-  read: ({ client }, { page, status }) =>
-    Effect.tryPromise(() =>
-      client.request(todos, { page: page ?? 1, status: status ?? "Active" }),
-    ).pipe(Effect.map((result) => result.todos)),
+  read: ({ client, origin }, { page }) =>
+    Effect.gen(function* () {
+      const { todos: result } = yield* Effect.tryPromise(() =>
+        client.request(todos, { page: page ?? 1 }),
+      )
+      return {
+        ...result,
+        nodes: result.nodes.map(({ stepPath, ...todo }) =>
+          todo.status === "Correction Required"
+            ? {
+                ...todo,
+                requiredAction: "Fix the recipient email for the invitation.",
+                dashboardUrl: todoDashboardUrl(
+                  origin,
+                  "correct",
+                  stepPath,
+                  todo.id,
+                ),
+              }
+            : todo,
+        ),
+      }
+    }),
 })
 
 const todoForm = graphql(`
@@ -90,15 +119,9 @@ const readForm = (
     const form = yield* Schema.decodeUnknownEffect(RuntimeForm)(
       response.todoChatForm,
     )
-    const path = toUrlPath(form.stepPath)
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/")
-    const url = new URL(`/to-dos/complete/${path}`, origin)
-    url.searchParams.set("todoId", todoId)
     return {
       ...form,
-      dashboardUrl: url.href,
+      dashboardUrl: todoDashboardUrl(origin, "complete", form.stepPath, todoId),
       validationBasis:
         "Only the supplied answers and authored defaults were checked. If any answer was not passed to this call or has changed, inspect again with all known answers before deciding what is missing.",
     }
@@ -107,7 +130,7 @@ const readForm = (
 export const inspectTodoForm = defineReadTool({
   name: "inspect_todo_form",
   description:
-    "Read and validate the exact To-Do's form without submitting. The result reflects only the answers passed to this call plus authored defaults. After mapping the person's answers to field names, call again with all known answers before deciding the form is complete: an answer can reveal new required fields. Use the authored labels and choices. Ask for missing or invalid business answers; do not guess. If needsDashboard is true, give the exact dashboardUrl and say the To-Do remains open.",
+    "Read and validate the exact To-Do's form without submitting. Identify the To-Do with list_my_todos first; if it has requiredAction, give its dashboardUrl instead. The result reflects only the answers passed to this call plus authored defaults. After mapping the person's answers to field names, call again with all known answers before deciding the form is complete: an answer can reveal new required fields. Use the authored labels and choices. Ask for missing or invalid business answers; do not guess. If needsDashboard is true, give the exact dashboardUrl and say the To-Do remains open.",
   args: Schema.Struct(formArgs),
   failure: "The runtime did not authorize or return this open To-Do form.",
   read: (context, { todoId, answers }) =>
@@ -136,7 +159,7 @@ const result = (
 const completeMetadata = {
   name: "complete_todo",
   description:
-    "Complete one exact To-Do only after the person explicitly asks you to submit it. Inspect the form with the proposed answers first. Ask for missing business answers and hand off unsupported required fields to the Dashboard. If the response is lost, retry only with the same To-Do and unchanged answers as the same caller.",
+    "Complete one exact To-Do only after the person explicitly asks you to submit it. For a To-Do with requiredAction from list_my_todos, give its dashboardUrl instead. Inspect the form with the proposed answers first. Ask for missing business answers and hand off unsupported required fields to the Dashboard. If the response is lost, retry only with the same To-Do and unchanged answers as the same caller.",
   inputSchema: {
     type: "object",
     properties: {

@@ -44,6 +44,7 @@ import {
   CollectionTableCard,
   type CollectionTableColumn,
 } from "@/components/collections/collection-table-card"
+import { useDevImportRevision } from "@/lib/dev/import-completed-query-invalidation"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 import {
   type AvailableList,
@@ -238,6 +239,14 @@ function triggerDownload(url: string): void {
   link.remove()
 }
 
+function isCurrentList(pathname: string, listPath: string) {
+  try {
+    return decodeURIComponent(pathname) === `/lists${listPath}`
+  } catch {
+    return false
+  }
+}
+
 export function ListControlsClient({
   currentList,
   listPath,
@@ -260,6 +269,20 @@ export function ListControlsClient({
   const isPushingUrl = useRef(false)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const revision = useDevImportRevision()
+  const renderedRevision = useRef(revision)
+  useEffect(() => {
+    if (
+      revision === renderedRevision.current ||
+      creating ||
+      !isCurrentList(pathname, listPath)
+    )
+      return
+    // A retained table catches up once its create, detail or process dialog closes.
+    renderedRevision.current = revision
+    router.refresh()
+  }, [revision, creating, pathname, listPath, router])
 
   useEffect(() => {
     if (!isPushingUrl.current) {
@@ -270,7 +293,7 @@ export function ListControlsClient({
 
   useEffect(() => {
     // Defer pending filters while this List is the background of a process dialog.
-    if (decodeURIComponent(pathname) !== `/lists${listPath}`) return
+    if (!isCurrentList(pathname, listPath)) return
     if (debouncedFilterValue !== filter) {
       isPushingUrl.current = true
       const newSearch = applyListFilterToSearchParams(
@@ -359,6 +382,8 @@ export function ListControlsClient({
           ) : null}
           {currentList.canCreate ? (
             <ListCreateButton
+              open={creating}
+              onOpenChange={setCreating}
               listPath={listPath}
               name={currentList.detailName ?? currentList.name}
             />

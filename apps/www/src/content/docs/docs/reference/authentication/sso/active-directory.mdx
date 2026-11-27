@@ -1,10 +1,46 @@
 ---
 title: Active Directory
-description: Active Directory single sign-on reference.
+description: Configure Microsoft Entra ID single sign-on for Process Focus.
+reviewed: true
 ---
 
-This page is reserved for Active Directory single sign-on configuration,
-including the supported Microsoft identity service and its prerequisites.
+Use Microsoft Entra ID (formerly Azure Active Directory) to let people sign
+in to the Dashboard with their Microsoft work accounts.
 
-Provider setup instructions will be added here. For shared authentication and
-registration terminology, see [Single-Sign-On (SSO)](/docs/reference/authentication/sso/).
+In the [Microsoft Entra admin center](https://entra.microsoft.com/), register
+a single-tenant application. Add a **Web** redirect URI ending in
+`/oauth/microsoft/callback` on your Process Focus authentication server.
+Copy the **Directory (tenant) ID** and **Application (client) ID**, then
+create a client secret and copy its **Value**.
+
+```typescript
+import { AuthenticationConfig } from "@pf/auth-config"
+import { Organisation } from "@pf/process"
+import { Config, Effect } from "effect"
+
+export const org = new Organisation({ name: "My organisation" })
+
+export const configureOrg = Effect.gen(function* () {
+  const tenant = yield* Config.String("MICROSOFT_TENANT_ID")
+  const clientID = yield* Config.String("MICROSOFT_CLIENT_ID")
+  const clientSecret = yield* Config.String("MICROSOFT_CLIENT_SECRET")
+
+  new AuthenticationConfig(org, "auth", {
+    identityProviders: {
+      microsoft: {
+        tenant,
+        clientID,
+        clientSecret,
+        scopes: ["openid", "email", "profile"],
+      },
+    },
+  })
+
+  return org
+})
+```
+
+Set those three values in your Process Focus [configuration](/docs/reference/configuration/).
+Store `MICROSOFT_CLIENT_SECRET` as a secret. Before a new user signs in,
+create a Process Focus [invitation](/docs/reference/authentication/invitations/)
+for their work email and assign their roles.

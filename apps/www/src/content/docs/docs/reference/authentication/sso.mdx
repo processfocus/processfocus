@@ -1,6 +1,7 @@
 ---
 title: Single-Sign-On (SSO)
 description: Identity-provider sign-in for Process Focus.
+reviewed: true
 ---
 
 Single sign-on lets people authenticate using their organisation's identity
@@ -32,25 +33,16 @@ new AuthenticationConfig(org, "auth", {
 
 ## Inviting users
 
-If SSO is enabled, a user cannot simply log in. They must have an
-invitation. And for Google Workspace it is possible to create
-automatic invitations: all members of a particular Organisational Unit
-are automatically invited.
+It is not enough to enable SSO. An identity must also have an
+invitation. For some identity providers, such as Google Workspace, it
+is possible to create automatic invitations. All members of an
+organisational unit or group are automatically invited and can use the
+Process Focus system.
 
 ## Identity providers
 
 - [Google](/docs/reference/authentication/sso/google/)
 - [Entra (Active Directory)](/docs/reference/authentication/sso/active-directory/)
 
-These provider pages are starting points for configuration documentation.
-
-## Registration and sign-in
-
-A configured human identity provider can accept an invitation when it supplies
-verified acceptance evidence. Acceptance creates the provider user and assigns
-the invitation's initial roles.
-
-Open registration allows a human identity to create a provider user without an
-invitation when that mode is enabled. See
-[First user registration](/docs/reference/authentication/first-user-registration/)
-for the distinction between organisation setup and registering a user.
+These provider pages are starting points for configuration
+documentation. Most identity providers are supported.

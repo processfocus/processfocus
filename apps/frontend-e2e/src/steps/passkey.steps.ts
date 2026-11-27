@@ -14,7 +14,8 @@ Then(
     $testInfo.setTimeout(90_000)
     if (!baseURL || !process.env["FRONTEND_E2E_DISPOSABLE_ORG"])
       throw new Error("This scenario requires the disposable runner")
-    const cached = dashboardAccount(baseURL, "ci@example.com")
+    const email = "ci@example.com"
+    const cached = dashboardAccount(baseURL, email)
     expect(cached.account.kind).toBe("register")
     let logoutAttempted = false
     await page.route("**/api/auth/logout", async (route) => {
@@ -33,13 +34,14 @@ Then(
       }),
     ).rejects.toThrow()
     expect(logoutAttempted).toBe(true)
-    const recovered = dashboardAccount(baseURL, "ci@example.com")
+    const recovered = dashboardAccount(baseURL, email)
     expect(recovered.account.kind).toBe("login")
     const user = await createPasskeyUser(browser, {
       baseURL,
       graphqlEndpoint: getEffectiveGraphqlEndpoint(),
       workerIndex: $testInfo.workerIndex,
       account: recovered.account,
+      saveCredentials: recovered.save,
       invite: async () => {
         throw new Error("Retry must not need another Registration Link")
       },

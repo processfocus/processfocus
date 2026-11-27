@@ -59,6 +59,7 @@ export async function withRegularRuntime(
       PF_AUTH_MODE: "local-dummy",
       PF_BYPASS_AUTH: "",
       INTERNAL_API_SECRET: randomUUID(),
+      PF_MCP_STORAGE_SECRET: randomUUID(),
       REVALIDATE_SECRET: randomUUID(),
     }
     // Never copy a developer's database. Import the same MCP-extended demo

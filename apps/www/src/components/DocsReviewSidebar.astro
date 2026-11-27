@@ -1,0 +1,72 @@
+---
+// biome-ignore lint/correctness/noUnusedImports: Used in the Astro template below.
+import Sidebar from "@astrojs/starlight/components/Sidebar.astro"
+import { getCollection } from "astro:content"
+
+const route = Astro.locals.starlightRoute
+type Entry = (typeof route.sidebar)[number]
+
+const remaining = new Set<string>()
+
+if (import.meta.env.DEV) {
+  const pages = new Map(
+    (await getCollection("docs")).map(({ id, data }) => [
+      `/${id.replace(/(^|\/)index$/, "")}`.replace(/\/$/, ""),
+      data.reviewed === true,
+    ]),
+  )
+
+  function markReviewed(entry: Entry): Entry {
+    if (entry.type === "group") {
+      return { ...entry, entries: entry.entries.map(markReviewed) }
+    }
+
+    const path = entry.href.replace(/\/$/, "")
+    const reviewed = pages.get(path)
+    if (reviewed === undefined) return entry
+    if (!reviewed) {
+      remaining.add(path)
+      return entry
+    }
+
+    return {
+      ...entry,
+      badge: { text: "✓", class: "docs-review-tick" },
+      attrs: {
+        ...entry.attrs,
+        "aria-label": `${entry.attrs["aria-label"] ?? entry.label} (reviewed)`,
+      },
+    }
+  }
+
+  route.sidebar = route.sidebar.map(markReviewed)
+}
+---
+
+{import.meta.env.DEV && (
+  <p class="review-progress">
+    {remaining.size} {remaining.size === 1 ? "page" : "pages"} left to review
+  </p>
+)}
+<Sidebar />
+
+<style>
+  :global(.sidebar-content a > .docs-review-tick) {
+    margin-inline-start: 0.375rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--sl-color-white);
+    font-size: inherit;
+  }
+
+  :global(.sidebar-content a[aria-current="page"] > .docs-review-tick) {
+    color: inherit;
+  }
+
+  .review-progress {
+    margin-block-end: 1rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+  }
+</style>

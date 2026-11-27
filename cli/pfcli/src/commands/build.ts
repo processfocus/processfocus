@@ -42,6 +42,7 @@ import {
   isOrganisation,
 } from "@pf/process"
 import { BuildError, GraphqlSchemaError, PolicyFileError } from "../errors"
+import { installedSdkVersion } from "../installed-sdk-version"
 import { CLI_PRODUCER } from "../producer"
 import { validateFlows } from "../utils/validate-flows"
 import { buildBrowserForms } from "./build-browser-forms"
@@ -689,13 +690,19 @@ export const runBuild = (orgPath: string, outputDir = "dist") =>
     )
 
     const deployManifest = yield* Effect.try({
-      try: () =>
-        buildOrganisationDeployManifest({
+      try: () => {
+        const processfocusVersion =
+          org.platformRef === undefined && org.platformSource === undefined
+            ? installedSdkVersion(absoluteOrgPath)
+            : undefined
+        return buildOrganisationDeployManifest({
           org,
           orgBundleSha256,
           producer: CLI_PRODUCER,
           customAwsRuntimeConfig,
-        }),
+          processfocusVersion,
+        })
+      },
       catch: (error) =>
         new BuildError({
           message: "Failed to generate deploy manifest",

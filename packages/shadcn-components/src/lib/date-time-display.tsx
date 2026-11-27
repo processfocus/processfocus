@@ -22,7 +22,7 @@ export type DateTimeDisplayProps = { className?: string } & (
       value: string | Date | number
       initialMode?: DateTimeDisplayMode
       eventTimeZone?: string
-      seconds?: boolean
+      seconds?: boolean | "milliseconds"
     }
 )
 
@@ -117,7 +117,7 @@ function absolute(
   date: Date,
   locale: string,
   timeZone: string,
-  seconds: boolean,
+  seconds: boolean | "milliseconds",
   calendar = false,
 ) {
   return new Intl.DateTimeFormat(locale, {
@@ -131,6 +131,7 @@ function absolute(
           hour: "numeric",
           minute: "2-digit",
           ...(seconds ? { second: "2-digit" } : {}),
+          ...(seconds === "milliseconds" ? { fractionalSecondDigits: 3 } : {}),
           timeZoneName: "short",
         } satisfies Intl.DateTimeFormatOptions)),
   }).format(date)

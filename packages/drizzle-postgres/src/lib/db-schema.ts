@@ -617,6 +617,24 @@ export const oauthStorage = pgTable("pf_oauth_storage", {
   updatedAtIdIdx: index("pf_oauth_storage_updated_at_id_idx").on(table.updatedAt, table.id),
 }))
 
+export const mcpOauthRecord = pgTable("pf_mcp_oauth_record", {
+  id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `mco-${ulid()}`),
+  mcpPartition: varchar("mcp_partition", { length: 2048 }).notNull(),
+  mcpRecordKey: varchar("mcp_record_key", { length: 64 }).notNull(),
+  mcpRevision: varchar("mcp_revision", { length: 36 }).notNull(),
+  keyValue: jsonb("key_value").$type<Record<string, unknown> | unknown[]>().notNull(),
+  keyExpiry: effectDateTime("key_expiry"),
+  createdAt: effectDateTime("created_at").notNull().default(sql`now()`),
+  updatedAt: effectDateTime("updated_at").notNull().default(sql`now()`),
+  createdBy: text("created_by").notNull().default("SYSTEM"),
+  updatedBy: text("updated_by").notNull().default("SYSTEM"),
+  _deleted: boolean("_deleted").notNull().default(false),
+}, (table) => ({
+  expiryidxIdx: index("pf_mcp_oauth_record_expiryidx_idx").on(table.keyExpiry).where(sql`_deleted = false`),
+  partitionkeyidxIdx: uniqueIndex("pf_mcp_oauth_record_partitionkeyidx_idx").on(table.mcpPartition, table.mcpRecordKey).where(sql`_deleted = false`),
+  updatedAtIdIdx: index("pf_mcp_oauth_record_updated_at_id_idx").on(table.updatedAt, table.id),
+}))
+
 export const oauthProvider = pgTable("pf_oauth_provider", {
   id: varchar("id", { length: 41 }).primaryKey().$defaultFn(() => `opr-${ulid()}`),
   providerName: varchar("provider_name", { length: 64 }).notNull(),
@@ -959,6 +977,8 @@ export type InvitationRole = typeof invitationRole.$inferSelect
 export type NewInvitationRole = typeof invitationRole.$inferInsert
 export type OauthStorage = typeof oauthStorage.$inferSelect
 export type NewOauthStorage = typeof oauthStorage.$inferInsert
+export type McpOauthRecord = typeof mcpOauthRecord.$inferSelect
+export type NewMcpOauthRecord = typeof mcpOauthRecord.$inferInsert
 export type OauthProvider = typeof oauthProvider.$inferSelect
 export type NewOauthProvider = typeof oauthProvider.$inferInsert
 export type OauthClient = typeof oauthClient.$inferSelect

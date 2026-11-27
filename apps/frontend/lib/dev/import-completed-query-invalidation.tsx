@@ -1,12 +1,22 @@
 "use client"
 
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffect, useEffectEvent } from "react"
+import { usePathname } from "next/navigation"
+import {
+  type ReactNode,
+  createContext,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react"
 import type { ImportCompletedPayload } from "./import-completed-events"
 import {
   invalidateImportCompletedQueries,
   refreshImportCompletedCollections,
 } from "./import-completed-refresh"
+import { parseListReturnDestination } from "@/app/(protected)/lists/lib/list-refresh"
 import { useSession } from "@/components/auth-provider"
 import { useRuntimeConfig } from "@/components/config-provider"
 
@@ -26,10 +36,42 @@ const parseImportCompletedPayload = (
   }
 }
 
-export function DevImportCompletedQueryInvalidation() {
+const ImportRevision = createContext<string | null>(null)
+
+export const useDevImportRevision = () => useContext(ImportRevision)
+
+export function DevImportCompletedProvider({
+  children,
+}: {
+  children: ReactNode
+}) {
   const queryClient = useQueryClient()
   const runtimeConfig = useRuntimeConfig()
   const session = useSession()
+  const pathname = usePathname()
+  const deferredProcessImport = useRef<ImportCompletedPayload | null>(null)
+  const lastEventId = useRef<string | null>(null)
+  const [revision, setRevision] = useState<string | null>(null)
+  const refreshImport = useEffectEvent((payload: ImportCompletedPayload) => {
+    void invalidateImportCompletedQueries(queryClient, payload)
+    void refreshImportCompletedCollections(
+      runtimeConfig,
+      session.userId,
+      payload,
+    )
+  })
+
+  // Refetching form defaults or recreating draft replication can reset inputs in a
+  // retained List's process dialog. Apply the latest import after leaving the form.
+  useEffect(() => {
+    if (
+      !pathname.startsWith("/processes/start/") &&
+      deferredProcessImport.current
+    ) {
+      refreshImport(deferredProcessImport.current)
+      deferredProcessImport.current = null
+    }
+  }, [pathname])
 
   const handleMessage = useEffectEvent((event: MessageEvent<string>) => {
     let payload: ImportCompletedPayload | null
@@ -40,12 +82,23 @@ export function DevImportCompletedQueryInvalidation() {
     }
 
     if (payload) {
-      void invalidateImportCompletedQueries(queryClient, payload)
-      void refreshImportCompletedCollections(
-        runtimeConfig,
-        session.userId,
-        payload,
-      )
+      if (event.lastEventId) {
+        if (event.lastEventId === lastEventId.current) return
+        // The first receipt establishes the baseline for this connection.
+        if (lastEventId.current !== null) setRevision(event.lastEventId)
+        lastEventId.current = event.lastEventId
+      }
+      const url = new URL(window.location.href)
+      if (
+        payload.processPaths.length &&
+        url.pathname.startsWith("/processes/start/") &&
+        parseListReturnDestination(url.searchParams.get("returnTo"), url.origin)
+      ) {
+        deferredProcessImport.current = payload
+        void invalidateImportCompletedQueries(queryClient, { processPaths: [] })
+      } else {
+        refreshImport(payload)
+      }
     }
   })
 
@@ -58,5 +111,9 @@ export function DevImportCompletedQueryInvalidation() {
     return () => events.close()
   }, [])
 
-  return null
+  return (
+    <ImportRevision.Provider value={revision}>
+      {children}
+    </ImportRevision.Provider>
+  )
 }

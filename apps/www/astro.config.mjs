@@ -8,12 +8,20 @@ import cedar from "./src/syntax/cedar.mjs"
 
 export default defineConfig({
   redirects: {
-    "/docs/concepts/visualisation/": "/docs/frontend/visualisation/",
+    "/docs/concepts/frontend/": "/docs/concepts/dashboard/",
+    "/docs/frontend/": "/docs/dashboard/",
+    "/docs/frontend/notifications/": "/docs/dashboard/notifications/",
+    "/docs/frontend/process-execution/": "/docs/dashboard/process-execution/",
+    "/docs/frontend/retrying-a-process-execution/":
+      "/docs/dashboard/retrying-a-process-execution/",
+    "/docs/frontend/todos/": "/docs/dashboard/todos/",
+    "/docs/frontend/visualisation/": "/docs/dashboard/visualisation/",
+    "/docs/concepts/visualisation/": "/docs/dashboard/visualisation/",
     "/docs/concepts/system-steps/":
       "/docs/reference/process-steps/system-steps/",
-    "/docs/concepts/process-execution/": "/docs/frontend/process-execution/",
+    "/docs/concepts/process-execution/": "/docs/dashboard/process-execution/",
     "/docs/reference/retrying-a-process-execution/":
-      "/docs/frontend/retrying-a-process-execution/",
+      "/docs/dashboard/retrying-a-process-execution/",
     "/docs/concepts/starting-processes-on-a-schedule/":
       "/docs/reference/starting-processes-on-a-schedule/",
     "/docs/reference/processes/steps/": "/docs/reference/process-steps/",
@@ -81,18 +89,20 @@ export default defineConfig({
             { label: "Authentication", slug: "docs/concepts/authentication" },
             { label: "Authorisation", slug: "docs/concepts/authorisation" },
             { label: "Runtime", slug: "docs/concepts/runtime" },
+            { label: "Dashboard", slug: "docs/concepts/dashboard" },
+            { label: "MCP", slug: "docs/concepts/mcp" },
             { label: "API", slug: "docs/concepts/api" },
           ],
         },
         {
-          label: "Frontend",
+          label: "Dashboard",
           items: [
-            { slug: "docs/frontend" },
-            { slug: "docs/frontend/process-execution" },
-            { slug: "docs/frontend/retrying-a-process-execution" },
-            { slug: "docs/frontend/visualisation" },
-            { slug: "docs/frontend/todos" },
-            { slug: "docs/frontend/notifications" },
+            { slug: "docs/dashboard" },
+            { slug: "docs/dashboard/process-execution" },
+            { slug: "docs/dashboard/retrying-a-process-execution" },
+            { slug: "docs/dashboard/visualisation" },
+            { slug: "docs/dashboard/todos" },
+            { slug: "docs/dashboard/notifications" },
           ],
         },
         {
@@ -223,6 +233,7 @@ export default defineConfig({
               ],
             },
             { label: "GraphQL API", slug: "docs/reference/graphql" },
+            { label: "MCP", slug: "docs/reference/mcp" },
             { label: "Lists", slug: "docs/reference/lists" },
             { label: "Charts", slug: "docs/reference/charts" },
             {
@@ -256,6 +267,16 @@ export default defineConfig({
           label: "Cloud",
           items: [
             {
+              label: "Console",
+              items: [
+                { slug: "docs/cloud/console" },
+                { slug: "docs/cloud/console/projects-and-environments" },
+                { slug: "docs/cloud/console/deployments" },
+                { slug: "docs/cloud/console/stage-configuration" },
+                { slug: "docs/cloud/console/usage-and-balance" },
+              ],
+            },
+            {
               label: "Deploy your project",
               slug: "docs/cloud/deploy-your-project",
             },
@@ -277,6 +298,7 @@ export default defineConfig({
       customCss: ["./src/styles/starlight-custom.css"],
       components: {
         SiteTitle: "./src/components/DocsTitle.astro",
+        Sidebar: "./src/components/DocsReviewSidebar.astro",
       },
       tableOfContents: {
         minHeadingLevel: 2,

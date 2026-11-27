@@ -8,6 +8,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  Plug,
   Sun,
   UserCog,
   UserRoundKey,
@@ -45,6 +46,7 @@ import { useRxDb } from "@/lib/collections/rxdb-provider"
 import type { CurrentProviderUser } from "@/lib/current-provider-user"
 import { useGraphqlClient } from "@/lib/graphql/client-provider"
 import { fetchCurrentProviderUser } from "@/lib/graphql/provider-user-queries"
+import { connectedAppsPath } from "@/lib/mcp/origin"
 import {
   type ShellNavigationItem,
   getShellPolicy,
@@ -451,6 +453,14 @@ export function Header({
                 <Link href="/passkeys" data-testid="header-passkeys-link">
                   <Fingerprint className="mr-2 h-4 w-4" aria-hidden="true" />
                   <span>Passkeys</span>
+                </Link>
+              </DropdownMenuItem>
+            ) : null}
+            {isProviderUser && !delegation && !session.workload ? (
+              <DropdownMenuItem asChild>
+                <Link href={connectedAppsPath} prefetch={false}>
+                  <Plug className="mr-2 h-4 w-4" aria-hidden="true" />
+                  <span>Connected apps</span>
                 </Link>
               </DropdownMenuItem>
             ) : null}

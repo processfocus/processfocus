@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+import { join, resolve } from "node:path"
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk"
 import { NodeFileSystem } from "@effect/platform-node"
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http"
@@ -12,6 +14,7 @@ import {
   DateTime,
   Effect,
   Exit,
+  FileSystem,
   Layer,
   Logger,
   ManagedRuntime,
@@ -55,7 +58,9 @@ import {
 import { UserDetails } from "@pf/graphql-db-operations"
 import {
   OrganisationProvider,
+  OrganisationProviderFromPath,
   OrganisationProviderFromPathDev,
+  normalizePath,
 } from "@pf/process"
 import { RequestTime } from "@pf/request-time"
 import { TypedSqliteDrizzleLayer } from "@pf/service-drizzle-sqlite"
@@ -66,6 +71,7 @@ import {
   SqliteFileOperationsLive,
   SqliteFlowExecutionOperationsLive,
   SqliteGraphqlDbOperationsLive,
+  SqliteMcpOAuthRecordsLive,
   SqliteScheduledFlowOperationsLive,
 } from "@pf/sqlite-operations"
 import { TodoSummaryComputationLive } from "@pf/todo-summary"
@@ -262,10 +268,36 @@ const main = Effect.gen(function* () {
   // Without memoization, each Layer.provide/Effect.provide creates a new instance,
   // which can cause Cedar WASM initialization issues when multiple parses happen
   // in rapid succession before the module is fully loaded.
-  // Uses Dev variant which provides empty org on load failure (for bun --watch).
-  const OrgProviderLayer = OrganisationProviderFromPathDev(cliConfig.org).pipe(
-    Layer.provide(NodeFileSystem.layer),
-  )
+  // A published slot must load successfully before signalling readiness.
+  // Only direct source watching falls back to an empty organisation on failure.
+  const importDir =
+    process.env["PF_LOCAL_GRAPHQL_IMPORT"] === "1"
+      ? resolve(cliConfig.org, ".processfocus/local-graphql")
+      : undefined
+  const OrgProviderLayer = (
+    importDir
+      ? Layer.effect(
+          OrganisationProvider,
+          Effect.gen(function* () {
+            // Import (rather than read) the pointer so bun --watch restarts on publication.
+            const slot: unknown = (yield* Effect.promise(
+              () => import(join(importDir, "active.json")),
+            )).default
+            if (slot !== "a" && slot !== "b")
+              return yield* Effect.fail(
+                new Error("Invalid local GraphQL import slot"),
+              )
+            const loaded = yield* OrganisationProvider.pipe(
+              Effect.provide(
+                OrganisationProviderFromPath(join(importDir, slot)),
+              ),
+            )
+            // Policies, documents and other project-relative resources still belong to the source org.
+            return { ...loaded, orgPath: resolve(cliConfig.org) }
+          }),
+        )
+      : OrganisationProviderFromPathDev(cliConfig.org)
+  ).pipe(Layer.provide(NodeFileSystem.layer))
 
   const CedarPoliciesLayer = OrgCedarPoliciesProvider.pipe(
     Layer.provide(OrgProviderLayer),
@@ -389,6 +421,7 @@ const main = Effect.gen(function* () {
       Layer.provide(AuthorizationLive),
     ),
     SqliteGraphqlDbOperationsLive,
+    SqliteMcpOAuthRecordsLive,
     SqliteFileOperationsLive,
     SqliteFlowExecutionOperationsLive,
     SqliteCompletedJobOperationsLive,
@@ -441,6 +474,22 @@ const main = Effect.gen(function* () {
       // Only write port file if not using explicit port (fallback mode)
       if (Option.isNone(cliConfig.port)) {
         yield* writePortFile(GRAPHQL_PORT_FILE, server.port)
+      }
+      if (importDir) {
+        const fs = yield* FileSystem.FileSystem.pipe(
+          Effect.provide(NodeFileSystem.layer),
+        )
+        const ready = join(importDir, "ready.json")
+        yield* fs.writeFileString(
+          `${ready}.tmp`,
+          JSON.stringify({
+            revision: randomUUID(),
+            processPaths: orgProvider.organisation
+              .processes()
+              .map((p) => normalizePath(p.node.path)),
+          }),
+        )
+        yield* fs.rename(`${ready}.tmp`, ready)
       }
       return yield* Effect.never
     }),

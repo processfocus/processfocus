@@ -4,7 +4,6 @@ import {
   authorize,
   challenge,
   consent,
-  manageConnections,
   readMcpAccess,
   register,
   resourceMetadata,
@@ -23,8 +22,6 @@ async function handle(
   if (!origin) return new Response(null, { status: 404 })
   const path = (await context.params).endpoint?.join("/") ?? ""
   if (path === "consent" && request.method !== "DELETE") return consent(request)
-  if (path === "connections" && request.method !== "DELETE")
-    return manageConnections(request, origin)
   if (request.method === "GET") {
     if (path === "authorize") return authorize(request, origin)
     if (path === "metadata") return authMetadata(origin)

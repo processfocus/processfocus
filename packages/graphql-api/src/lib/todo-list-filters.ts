@@ -2,15 +2,17 @@ import { Effect } from "effect"
 import type { TodoListStatePredicate, TodoRow } from "@pf/graphql-db-operations"
 import { InputValidationError } from "@pf/graphql-schema"
 
-type TodoListStatus = TodoRow["status"]
+type TodoListStatus = TodoRow["status"] | "Actionable"
 
 const STATUS_PREDICATES = {
+  Actionable: { kind: "open" },
   Active: { kind: "correction-free", deleted: false },
   Completed: { kind: "correction-free", deleted: true },
   "Correction Required": { kind: "correction-required" },
 } as const satisfies Record<TodoListStatus, TodoListStatePredicate>
 
 const isTodoListStatus = (status: string): status is TodoListStatus =>
+  status === "Actionable" ||
   status === "Active" ||
   status === "Completed" ||
   status === "Correction Required"
@@ -26,7 +28,7 @@ export const parseTodoListStatusPredicate = (
           {
             field: "status",
             message:
-              'Status must be "Active", "Completed", or "Correction Required".',
+              'Status must be "Actionable", "Active", "Completed", or "Correction Required".',
           },
         ],
       })

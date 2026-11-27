@@ -33,11 +33,17 @@ frontend changes require rebuilding it.
 
 | Change | How it becomes visible during repository development |
 | --- | --- |
-| Runtime or imported organisation code | The affected backend process restarts. |
+| Runtime code | The affected backend process restarts. |
 | Process definitions and form metadata | Import watch refreshes database state and notifies connected views. |
-| Generated GraphQL schema shape | Wait for import, then restart GraphQL and reload the view. |
+| Lists, their queries and generated GraphQL fields | `serve` publishes the imported organisation bundle and SDL together. Once GraphQL restarts, the open Dashboard refetches the Lists available to the current role and refreshes the open table's rows and columns. A List dialog defers the table refresh until it closes. A failed import leaves the previous GraphQL revision running. |
 | Custom Cedar policies | Policies reload in place; frontend permission caches are invalidated. |
 | Cedar schema | Restart GraphQL and the worker. |
+
+The importer alternates between two directories under `.processfocus/local-graphql/`
+in the organisation project. Bun watches the active-directory pointer. The
+authenticated Dashboard development event stream watches the GraphQL readiness
+file, including on reconnect, so no browser session is needed by the importer.
+The installed runtime still requires a restart for generated schema changes.
 
 If a watched import fails, correct the error and save again. Public and embedded
 forms may need rebuilding/importing and reopening to load their updated inputs.

@@ -101,6 +101,7 @@ export const startLocalRuntime = async (
   let graphqlUrl = `http://localhost:${graphqlPort}/graphql`
   const dashboardUrl = `http://localhost:${dashboardPort}`
   const cli = resolveCli()
+  const mcpStorageSecret = randomBytes(32).toString("hex")
   const env: RuntimeEnvironment = {
     ...process.env,
     NODE_ENV: process.env["NODE_ENV"] ?? "development",
@@ -212,6 +213,7 @@ export const startLocalRuntime = async (
         "--org",
         orgPath,
       ],
+      childEnv: { ...env, PF_MCP_STORAGE_SECRET: mcpStorageSecret },
     })
     graphqlUrl = `http://localhost:${options.graphqlPort ?? (await waitForPort(".graphql-port.json", graphql))}/graphql`
     env["GRAPHQL_ENDPOINT"] = graphqlUrl
@@ -302,7 +304,10 @@ export const startLocalRuntime = async (
           "127.0.0.1",
         ],
         cwd: dashboardDirectory(runtimeRoot),
-        childEnv: dashboardEnvironment(env),
+        childEnv: {
+          ...dashboardEnvironment(env),
+          PF_MCP_STORAGE_SECRET: mcpStorageSecret,
+        },
         executable: "node",
       })
       await waitForHttp(`${dashboardUrl}/_pf/health`)

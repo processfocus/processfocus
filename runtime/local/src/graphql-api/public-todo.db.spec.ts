@@ -72,6 +72,8 @@ import {
   PUBLIC_TODO_TOKEN_AUDIENCE,
   encryptPublicTodoToken,
 } from "@pf/public-completion/credentials"
+import { RequestTime } from "@pf/request-time"
+import { TodoSummaryComputationLive } from "@pf/todo-summary"
 import { executionIdentity } from "../../../../packages/graphql-api/src/lib/execution-adapter"
 import {
   completeStep,
@@ -767,6 +769,119 @@ const runSuite = <R>(db: GraphqlDbCase<R>) => {
         status: "COMPLETED",
         completionMessage: "Thanks. Your public to-do was submitted.",
       })
+    })
+
+    it("pages actionable To-Dos across normal work and authorized corrections", async () => {
+      const seed = makePublicTodoOrganisation(
+        `${db.name}-actionable-${uniqueSuffix()}`,
+        false,
+        true,
+      )
+      const contextFor = (email: string): UserContext => ({
+        ...makeContext(),
+        userId: email,
+        _userDetails: { by: email, id: email },
+        jwt: {
+          mode: "access",
+          type: "user",
+          properties: {
+            userId: email,
+            email,
+            roles: [seed.rolePath],
+            orgUnitPath: seed.orgUnitPath,
+            orgUnitId: seed.orgUnitPath,
+          },
+          aud: "graphql-api",
+          iss: "test",
+          sub: email,
+          exp: 0,
+        },
+      })
+      const normalOnly = "normal-only@example.com"
+      const cedar = LocalCedarAuthorizationLive.pipe(
+        Layer.provide(
+          Layer.effect(
+            LocalCedarConfig,
+            Effect.gen(function* () {
+              const defaults = yield* LocalCedarConfig
+              return {
+                ...defaults,
+                policiesText: [
+                  ...defaults.policiesText,
+                  `forbid (
+                    principal == PF::ProviderUser::"${normalOnly}",
+                    action == PF::Action::"publicCompletionCorrection",
+                    resource
+                  );`,
+                ],
+              }
+            }),
+          ).pipe(Layer.provide(LocalCedarConfigDefault())),
+        ),
+      )
+      const seedTodo = seedActiveTodo(db, { ...seed, organisation: seed.org })
+
+      await runPublicTodoEffect(
+        db,
+        [],
+        seed.org,
+        Effect.gen(function* () {
+          const schema = yield* systemSchema
+          const query = schema.resolvers?.Query?.["todos"] as unknown as (
+            parent: unknown,
+            args: { page: number; limit: number; status: string },
+            context: UserContext,
+          ) => Effect.Effect<unknown, unknown>
+          const readPage = (page: number, context: UserContext) =>
+            query(undefined, { page, limit: 1, status: "Actionable" }, context)
+          const reader = contextFor("employee@example.com")
+          const normal = yield* seedTodo.pipe(
+            Effect.provideService(
+              RequestTime,
+              DateTime.makeUnsafe("2026-04-06T11:00:00.000Z"),
+            ),
+          )
+          const activeNode = { id: normal.todoId, status: "Active" }
+          const stepCompletionOps = yield* StepCompletionOperations
+          const completed = yield* seedTodo
+          yield* stepCompletionOps.completeToDo(
+            completed.todoId,
+            reader.userId ?? null,
+            null,
+          )
+          expect(yield* readPage(1, reader)).toMatchObject({
+            nodes: [activeNode],
+            hasNextPage: false,
+          })
+
+          const correction = yield* seedTodo
+          const attemptId =
+            yield* stepCompletionOps.createPublicCompletionInvitationAttempt({
+              todoId: correction.todoId,
+              recipientEmail: "wrong@example.com",
+            })
+          yield* stepCompletionOps.enterPublicCompletionCorrectionRequired({
+            todoId: correction.todoId,
+            invitationAttemptId: attemptId,
+            failureReason: "Recipient address rejected",
+          })
+          expect(yield* readPage(1, reader)).toMatchObject({
+            nodes: [activeNode],
+            hasNextPage: true,
+          })
+          expect(yield* readPage(2, reader)).toMatchObject({
+            nodes: [{ id: correction.todoId, status: "Correction Required" }],
+            hasNextPage: false,
+          })
+          expect(yield* readPage(1, contextFor(normalOnly))).toMatchObject({
+            nodes: [activeNode],
+            hasNextPage: false,
+          })
+        }).pipe(
+          Effect.provide(TodoSummaryComputationLive),
+          Effect.provide(cedar),
+        ),
+      )
     })
 
     it("submits correction and reissues the public completion invitation", async () => {

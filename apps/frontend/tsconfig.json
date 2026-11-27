@@ -61,6 +61,12 @@
   ],
   "references": [
     {
+      "path": "../../packages/sqlite-operations"
+    },
+    {
+      "path": "../../packages/service-drizzle-sqlite"
+    },
+    {
       "path": "../../packages/graphql-api"
     },
     {
@@ -83,6 +89,9 @@
     },
     {
       "path": "../../packages/project-accounting"
+    },
+    {
+      "path": "../../packages/runtime"
     },
     {
       "path": "../../packages/frontend-endpoints"
@@ -113,9 +122,6 @@
     },
     {
       "path": "../../packages/shadcn-components"
-    },
-    {
-      "path": "../../packages/runtime"
     }
   ]
 }

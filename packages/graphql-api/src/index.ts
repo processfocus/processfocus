@@ -71,6 +71,7 @@ export {
   ListExportServiceLive,
 } from "./lib/list-export.js"
 export { rolePathsForList } from "./lib/list-field-authorization.js"
+export { makeMcpOAuthStorageRoute } from "./lib/mcp-oauth-storage-route"
 export {
   ProcessDurationService,
   ProcessDurationServiceLive,

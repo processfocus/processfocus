@@ -72,3 +72,35 @@ Keep datasource queries and eligibility checks on the server. For a
 server lookup, resolve an existing selection by ID separately from the
 search query: the selected record might not appear in the current search
 results. The server validates that the submitted lookup ID is still eligible.
+
+## Form structures
+
+Choose a structure based on what the form needs to submit:
+
+| Structure | Use it for | Submitted value |
+| --- | --- | --- |
+| `Wrapper` | A visual group, such as **Order details**. | Its fields are submitted at the surrounding level, without a group object. |
+| Nested `Schema.Struct` | A single object, such as a delivery address. | An object under the field name, such as `deliveryAddress`. |
+| `ListField` | An editable list of items with the same fields, such as order lines. People can add or remove items. | An array of objects under the field name. |
+| `TableField` | Read-only rows, such as previous shipments. The row field labels become the column headings. | Nothing; the table is for display only. |
+
+For an order with one delivery address and any number of order lines:
+
+```typescript
+import { ListField, NumberField, TextField } from "@pf/form-schema"
+import { Schema } from "effect"
+
+const orderForm = Schema.Struct({
+  deliveryAddress: Schema.Struct({
+    street: TextField({ label: "Street address" }),
+    city: TextField({ label: "City" }),
+  }),
+  orderLines: ListField(
+    {
+      sku: TextField({ label: "SKU" }),
+      quantity: NumberField({ label: "Quantity" }),
+    },
+    { label: "Order lines", addButtonLabel: "Add order line" },
+  ),
+})
+```
