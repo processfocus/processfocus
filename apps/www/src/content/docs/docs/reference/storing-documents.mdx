@@ -2,19 +2,46 @@
 title: Storing documents
 ---
 
-A [document store](/docs/concepts/document-store/) is a named place to keep
-files used by your organisation’s processes.
+A [document store](/docs/concepts/document-store/) is a named location
+to store files used by your organisation’s processes. You can have
+separate locations, and permissions, for invoices, receipts,
+contracts, etc.
 
 ## Defining a document store
 
-Define it with `DocumentStore` from `@pf/process`, then reference it
-from the form’s `FileField`.
+Define a document store with `DocumentStore` from `@pf/process`, then
+reference it from the form’s `FileField`.
 
-Configure accepted file types, a maximum file size, and how long to retain
-files on the store. The runtime provides the storage: the local runtime uses
-the filesystem, and the AWS runtime uses Amazon S3.
+For example, define a receipts store on your existing `org` and use it
+in a receipt field:
 
-## File uploads
+```typescript
+import { DocumentStore } from "@pf/process"
+
+const receipts = new DocumentStore(org, "receipts")
+```
+
+You can configure which file types the store accepts, the maximum file
+size, and when files expire. This version of the receipts store accepts
+only PDFs up to 5 MiB and sets a 90-day expiration:
+
+```typescript
+const receipts = new DocumentStore(org, "receipts", {
+  acceptedTypes: ["application/pdf"],
+  maxFileSize: 5 * 1024 * 1024, // bytes
+  expirationDays: 90,
+})
+```
+
+## Runtime
+
+Where files are stored depends on the runtime. The local runtime uses
+the file system. The local runtime also ignores expiration.
+
+The Process Focus cloud stores files in highly durable storage and
+applies the document store’s configured expiration.
+
+## File upload field
 
 Use `FileField` from `@pf/form-schema` to collect a file in a form. For
 example, an expense claim form can include a receipt field that points to
@@ -50,8 +77,44 @@ const uploadReceipt = new Form(expenseClaim, "Upload receipt", {
 expenseClaim.start(uploadReceipt).end()
 ```
 
-When someone selects a file, Process Focus provides a time-limited upload
-URL. The form submits the uploaded file’s ID as `receiptId`, not the file’s
-contents. A later step can use that reference to read the receipt or attach
-it to an email. Uploading to the store requires permission to complete the
-step, and the step must reference that store.
+## How file upload works
+
+1. When someone selects a file, the browser requests an upload URL.
+   Process Focus returns a time-limited URL and a file ID.
+2. The browser sends the file contents directly to the upload URL in an
+   HTTP `PUT` request.
+3. The form submits only the file ID (`receiptId` in the example above).
+   A later step can use that ID to read the file or attach it to an email.
+
+## Permissions
+
+Set who can upload through a form by assigning roles to the step. A user
+can request an upload URL only if they can complete the step and the step
+references the store. There is no separate upload permission on `DocumentStore`.
+
+To request a download URL, a user must also be allowed to complete a step
+that references the store. Process Focus then checks whether Cedar permits
+the user to download that file. The default policies allow users to
+download and delete files they uploaded. Deleting a file checks Cedar's
+`delete` permission on the file without checking step permissions.
+
+To share files in one store with a role, add a
+[custom Cedar policy](/docs/reference/authorisation/custom-cedar-permissions/)
+that matches the store's full path. For example, this policy lets users with
+the `/Finance` role download files in `/receipts`, including files uploaded
+by other users. They still need permission to complete a step that references
+the receipts store.
+
+```cedar
+permit (
+    principal is PF::ProviderUser in PF::Role::"/Finance",
+    action == PF::Action::"download",
+    resource is PF::File
+)
+when {
+    resource.documentStore == "/receipts"
+};
+```
+
+A file ID identifies a file without granting access. Anyone who has a signed
+upload or download URL can use it until it expires.

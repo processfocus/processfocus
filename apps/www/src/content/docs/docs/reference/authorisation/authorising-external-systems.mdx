@@ -1,16 +1,18 @@
 ---
 title: Authorising external systems
+reviewed: true
 description: Authorisation for external systems.
 ---
 
-See [System identities](/docs/reference/authentication/system-identities/) to
-set up authentication for an external system. Cedar policies grant access to
-the resulting service account. If the system authenticates as the same
-service account, the policy stays the same regardless of how it authenticates.
+See [System
+identities](/docs/reference/authentication/system-identities/) to set
+up authentication for an external system. Every service identity has
+its own name. Cedar policies grant access to the service account by
+its name.
 
-For example, suppose a website backend submits orders to a process. Give it a
-service-account identity named `web-order`, rather than using a person's
-credentials. In Cedar, that identity is `PF::ServiceAccount::"web-order"`.
+For example, suppose a website backend submits orders to a
+process. Give it a service-account identity named `web-order`. In
+Cedar, that identity is `PF::ServiceAccount::"web-order"`.
 
 ## Grant access with Cedar
 

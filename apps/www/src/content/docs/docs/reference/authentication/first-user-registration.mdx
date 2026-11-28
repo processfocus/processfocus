@@ -31,7 +31,7 @@ members of selected [organisational units](/docs/reference/authentication/sso/go
 Make sure the user has the roles needed for administrator permissions; being
 implicitly invited does not itself grant those permissions.
 
-Start your project, open the frontend, and sign in using the configured
+Start your project, open the Dashboard, and sign in using the configured
 identity provider. No registration link is needed. When an explicit invitation
 is accepted, Process Focus creates your provider user and assigns the
 invitation's roles. What you can do depends on your project's authorisation
@@ -62,7 +62,7 @@ http://localhost:3000/register/passkey#token=<token>
 expires at: 2026-11-19T01:57:28.000Z
 ```
 
-If your frontend uses a different host or port, pass its origin:
+If your Dashboard uses a different host or port, pass its origin:
 
 ```bash
 pfcli invitation registration-link ./my-org --email alice@example.com --frontend-url https://app.example.com

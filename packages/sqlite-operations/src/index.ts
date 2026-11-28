@@ -13,6 +13,7 @@ export { SqliteExternalParticipantOperationsLive } from "./lib/external-particip
 export { SqliteFileOperationsLive } from "./lib/file-operations"
 export { SqliteFlowExecutionOperationsLive } from "./lib/flow-execution"
 export * from "./lib/graphql-db-operations"
+export { SqliteMcpOAuthRecordsLive } from "./lib/mcp-oauth-records"
 export * from "./lib/org-to-db"
 export { SqliteFlowQueriesLive } from "./lib/query-flows"
 export { SqliteOAuthClientQueriesLive } from "./lib/query-oauth-client"

@@ -1,6 +1,7 @@
 ---
 title: Google
 description: Google single sign-on reference.
+reviewed: true
 ---
 
 Google is an identity-provider option for Process Focus. For the shared
@@ -103,6 +104,43 @@ export const configureOrg = Effect.gen(function* () {
   return org
 })
 ```
+
+### Configure Google Directory access
+
+The OAuth client signs users in. Process Focus uses a separate service
+account to look up their organisational unit in Google Directory.
+
+1. In Google Cloud, enable the **Admin SDK API** in the project that
+   owns the service account. Create a service account and download a
+   JSON key for it.
+2. In the Google Admin console, have a Workspace super administrator
+   [set up domain-wide delegation](https://knowledge.workspace.google.com/admin/apps/control-api-access-with-domain-wide-delegation)
+   for the service account's numeric client ID. Grant it only
+   `https://www.googleapis.com/auth/admin.directory.user.readonly`.
+   Leave the sign-in `scopes` in the example unchanged.
+3. In your Process Focus environment, set `GOOGLE_SERVICE_ACCOUNT_KEY`
+   to the Base64-encoded contents of the downloaded JSON key and store
+   it as a secret. Set `GOOGLE_ADMIN_EMAIL` to the email address of a
+   Workspace administrator who can read the relevant users in Directory.
+   Process Focus makes the lookup on behalf of that administrator.
+
+List the exact Google organisational unit paths in `invitedOrgUnits`.
+Set `orgUnitAsRole: true` if you also want to assign matching Process
+Focus roles on first sign-in.
+
+## Seamless invitations
+
+In the example above, `invitedOrgUnits` acts as an invitation for anyone
+whose Google Workspace organisational unit exactly matches a listed path.
+On their first Google sign-in, Process Focus checks their unit in Google
+Directory. Someone in `/Office Staff` can sign in to the Dashboard
+without a separate invitation or registration link. With `orgUnitAsRole`
+enabled, they also receive the matching **Office Staff** role unless an
+explicit invitation supplies their roles.
+
+Listing `/Office Staff` does not invite members of its child units. Add
+each child path separately or create an [individual
+invitation](/docs/reference/authentication/invitations/).
 
 ## Allowing access to Gmail accounts
 

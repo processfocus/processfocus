@@ -2,7 +2,6 @@
 
 import { useQuery } from "@tanstack/react-query"
 import { ClientError } from "graphql-request"
-import { useState } from "react"
 import type { FieldError, FormActionsContext } from "@pf/form"
 import { Button } from "@pf/shadcn-components"
 import { ListSchemaForm } from "./list-schema-form"
@@ -29,15 +28,18 @@ function objectValue(value: unknown): Record<string, unknown> | null {
 export function ListCreateButton({
   listPath,
   name,
+  open,
+  onOpenChange,
 }: {
   listPath: string
   name: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
   return (
     <>
-      <Button onClick={() => setOpen(true)}>Create record</Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Button onClick={() => onOpenChange(true)}>Create record</Button>
+      <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create {name}</DialogTitle>
@@ -45,7 +47,7 @@ export function ListCreateButton({
           {open ? (
             <ListCreateForm
               listPath={listPath}
-              onClose={() => setOpen(false)}
+              onClose={() => onOpenChange(false)}
             />
           ) : null}
         </DialogContent>

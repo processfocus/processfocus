@@ -250,6 +250,14 @@ BEGIN
   UPDATE "pf_oauth_storage" SET updated_at = julianday('now') WHERE id = NEW.id;
 END;
 --> statement-breakpoint
+CREATE TRIGGER IF NOT EXISTS pf_mcp_oauth_record_updated_at_trigger
+AFTER UPDATE ON "pf_mcp_oauth_record"
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+  UPDATE "pf_mcp_oauth_record" SET updated_at = julianday('now') WHERE id = NEW.id;
+END;
+--> statement-breakpoint
 CREATE TRIGGER IF NOT EXISTS pf_oauth_provider_updated_at_trigger
 AFTER UPDATE ON "pf_oauth_provider"
 FOR EACH ROW

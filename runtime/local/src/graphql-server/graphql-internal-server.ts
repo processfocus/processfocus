@@ -36,6 +36,7 @@ import {
   TodoCollectionOps,
   TodoEvents,
   Yoga,
+  makeMcpOAuthStorageRoute,
 } from "@pf/graphql-api"
 import { FileOperations } from "@pf/graphql-db-operations"
 import { PullCheckpointMode } from "@pf/graphql-schema"
@@ -202,6 +203,9 @@ export const makeServerEffect = (port: Option.Option<number>) =>
     const routeServerPluginWebhook = yield* makeServerPluginWebhookRouter
 
     const callbackSecret = yield* CallbackSecret
+    const routeMcpOAuthStorage = yield* makeMcpOAuthStorageRoute(
+      process.env["PF_MCP_STORAGE_SECRET"],
+    )
 
     const docStoreConfig = yield* LocalDocumentStoreConfig
 
@@ -373,6 +377,10 @@ export const makeServerEffect = (port: Option.Option<number>) =>
         srv: Bun.Server<{ request: Request }>,
       ) => {
         const url = new URL(request.url)
+
+        const mcpOAuthEffect = routeMcpOAuthStorage(request)
+        if (mcpOAuthEffect !== undefined)
+          return resolverRuntime.runPromise(mcpOAuthEffect)
 
         const webhookEffect = routeServerPluginWebhook(request)
         if (webhookEffect !== undefined) {

@@ -6,24 +6,32 @@ export const loopback = (url: URL): boolean =>
   !url.username &&
   !url.password
 
-export const mcpOrigin = (request: Request): string | undefined => {
-  const url = new URL(request.url)
-  const host = request.headers.get("host")
+export const mcpOriginForHost = (host: string | null): string | undefined => {
+  if (!host) return undefined
   if (process.env["PF_RUNTIME_MODE"] === "local") {
-    if (!loopback(url) || host !== url.host) return undefined
-  } else if (process.env["PF_RUNTIME_MODE"] === "deployed") {
-    // OpenNext restores Host from CloudFront's viewer-request function.
-    // Neither header nor the request URL can choose a different issuer.
-    const domain = process.env["PF_MCP_DOMAIN"]
-    if (!domain || host !== domain || url.origin !== `https://${domain}`)
+    try {
+      const url = new URL(`http://${host}`)
+      return loopback(url) && host === url.host ? url.origin : undefined
+    } catch {
       return undefined
-  } else {
-    return undefined
+    }
   }
-  const origin = request.headers.get("origin")
-  return origin === null || origin === url.origin ? url.origin : undefined
+  if (process.env["PF_RUNTIME_MODE"] === "deployed") {
+    // OpenNext restores Host from CloudFront's viewer-request function.
+    const domain = process.env["PF_MCP_DOMAIN"]
+    if (domain && host === domain) return `https://${domain}`
+  }
+  return undefined
 }
 
+export const mcpOrigin = (request: Request): string | undefined => {
+  const origin = mcpOriginForHost(request.headers.get("host"))
+  if (!origin || new URL(request.url).origin !== origin) return undefined
+  const requestOrigin = request.headers.get("origin")
+  return requestOrigin === null || requestOrigin === origin ? origin : undefined
+}
+
+export const connectedAppsPath = "/connected-apps"
 export const consentPath = "/mcp/consent"
 export const opaque = /^[A-Za-z0-9_-]{43}$/
 export const cookieName = (origin: string, id: string): string =>

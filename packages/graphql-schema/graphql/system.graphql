@@ -805,6 +805,7 @@ type Query {
     page: Int! = 1
     limit: Int! = 50
     processPath: String
+    "Actionable includes open normal and correction work, each subject to its own authorization."
     status: String
   ): TodoListPage!
   """

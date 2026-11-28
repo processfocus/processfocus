@@ -1,10 +1,11 @@
 ---
 title: System identities
 description: Authentication and authority for systems accessing Process Focus.
+reviewed: true
 ---
 
 System identities, also known as workload identities, identify
-software accessing Process Focus. Authentication verifies the system's
+computers accessing Process Focus. Authentication verifies the system's
 identity; [Cedar
 policies](/docs/reference/authorisation/cedar-policies/) determine
 what it can do.
@@ -19,7 +20,6 @@ what it can do.
 - **AWS role authentication:** An AWS assumed-role workload can authenticate
   GraphQL requests using a signed STS `GetCallerIdentity` request. An explicit
   binding maps the AWS account and role name or immutable role ID to a service account.
-  Cedar service-account permissions govern access.
 
 In the next sections we will configure the `web-order` system identity
 for these three cases. Authentication establishes the service-account
@@ -95,7 +95,7 @@ environment with those of your GitHub Actions workload. Set `targetIssuer` to
 the target Process Focus environment's authentication URL. The workload must
 request a GitHub OIDC assertion with the configured `assertionAudience` and
 exchange it for Process Focus access. The resulting access lasts up to the
-configured lifetime; Cedar policies determine what `web-order` can do.
+configured lifetime.
 
 ## AWS IAM roles
 
@@ -231,5 +231,6 @@ Specify exactly one of `roleName` and `roleId`.
 ## Delegated access
 
 Unlike an independent system identity, a [delegated
-identity](/docs/reference/authentication/delegated-identities/) acts on behalf
-of an existing user while retaining its own identity.
+identity](/docs/reference/authentication/delegated-identities/) acts
+on behalf of an existing user while retaining its own
+identity. Usually these are agents working autonomously.

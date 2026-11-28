@@ -70,7 +70,10 @@
     "import:bootstrap": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun cli/pfcli/src/main.ts import"
+        "command": "bun cli/pfcli/src/main.ts import",
+        "env": {
+          "PF_LOCAL_GRAPHQL_IMPORT": "1"
+        }
       }
     },
     "job-worker:check": {
@@ -90,7 +93,10 @@
     "import:watch": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun cli/pfcli/src/main.ts import --watch --watch-skip-initial"
+        "command": "bun cli/pfcli/src/main.ts import --watch --watch-skip-initial",
+        "env": {
+          "PF_LOCAL_GRAPHQL_IMPORT": "1"
+        }
       },
       "continuous": true,
       "dependsOn": [
@@ -103,7 +109,8 @@
       "options": {
         "command": "bun --watch runtime/local/src/graphql-server/graphql-server.ts",
         "env": {
-          "NODE_ENV": "development"
+          "NODE_ENV": "development",
+          "PF_LOCAL_GRAPHQL_IMPORT": "1"
         }
       },
       "continuous": true,
@@ -144,7 +151,10 @@
     "serve": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun runtime/local/src/serve-frontend.ts"
+        "command": "bun runtime/local/src/serve-frontend.ts",
+        "env": {
+          "PF_LOCAL_GRAPHQL_IMPORT": "1"
+        }
       },
       "dependsOn": [
         "@pf/frontend:build-deps",

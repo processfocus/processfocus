@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process"
-import { existsSync, unlinkSync } from "node:fs"
+import { existsSync, rmSync, unlinkSync } from "node:fs"
 import {
   mkdir,
   mkdtemp,
@@ -516,21 +516,15 @@ const killServer = (server: Server | null) => {
   }
 }
 
-/**
- * Clean up temp database and associated WAL/SHM files
- */
 const cleanupDatabase = (path: string | null) => {
-  if (path && existsSync(path)) {
-    try {
-      unlinkSync(path)
-      const walPath = `${path}-wal`
-      const shmPath = `${path}-shm`
-      if (existsSync(walPath)) unlinkSync(walPath)
-      if (existsSync(shmPath)) unlinkSync(shmPath)
-      console.log(`[e2e] Deleted temp database: ${path}`)
-    } catch (err) {
-      console.warn(`[e2e] Failed to delete temp database: ${err}`)
+  if (!path) return
+  try {
+    for (const suffix of ["", "-wal", "-shm", "-tshm", "-twal"]) {
+      rmSync(`${path}${suffix}`, { force: true })
     }
+    console.log(`[e2e] Cleaned up temp database files: ${path}`)
+  } catch (err) {
+    console.warn(`[e2e] Failed to delete temp database: ${err}`)
   }
 }
 

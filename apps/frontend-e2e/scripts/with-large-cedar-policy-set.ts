@@ -5,12 +5,14 @@ import { appendFileSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 
-// Run only inside run-temp-org's disposable copy. These policies exercise the
+// Run only against a disposable demo or lifecycle copy. These policies exercise the
 // real parser without granting any additional rights to the browser persona.
 const org = realpathSync(process.env["PF_ORG"] ?? "")
 if (
   dirname(org) !== realpathSync(tmpdir()) ||
-  !basename(org).startsWith("pf-temp-org-demo-")
+  !["pf-temp-org-demo-", "pf-lifecycle-org-"].some((prefix) =>
+    basename(org).startsWith(prefix),
+  )
 ) {
   throw new Error("The large Cedar fixture requires a disposable demo copy")
 }

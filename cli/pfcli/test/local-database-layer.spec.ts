@@ -1,19 +1,14 @@
-import { existsSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ConfigProvider, Effect, Layer } from "effect"
 import { SqlError } from "effect/sql/SqlError"
+import { cleanupTestDatabase } from "./cleanup-test-database"
 import { afterEach, describe, expect, it } from "bun:test"
 
 const dbPaths: string[] = []
 
 afterEach(() => {
-  for (const dbPath of dbPaths) {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      const file = `${dbPath}${suffix}`
-      if (existsSync(file)) unlinkSync(file)
-    }
-  }
+  for (const dbPath of dbPaths) cleanupTestDatabase(dbPath)
   dbPaths.length = 0
 })
 

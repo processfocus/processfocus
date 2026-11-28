@@ -391,7 +391,8 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
       try {
         await Promise.all([
           previousState.replicationState.cancel(),
-          previousState.collection.cleanup(),
+          // Logout runs while the Dashboard's live queries are still mounted.
+          previousState.collection.cleanup({ dependents: true }),
         ])
       } catch (error) {
         console.error(
@@ -435,7 +436,7 @@ export function createCollectionProvider<TDoc extends RxDbDocumentBase>(
     if (previousState.status === "ready") {
       return Promise.all([
         previousState.replicationState.cancel(),
-        previousState.collection.cleanup(),
+        previousState.collection.cleanup({ dependents: true }),
       ])
         .then(() => undefined)
         .catch((error: unknown) => {

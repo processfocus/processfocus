@@ -1,0 +1,45 @@
+---
+title: Connect an MCP client
+description: Connect OpenCode to a local or hosted Process Focus environment.
+---
+
+Use an MCP client that supports Streamable HTTP and OAuth. The MCP URL is
+your environment’s main Dashboard URL with `/mcp` appended.
+
+- **Local runtime:** Start your organisation with the Dashboard running. Use
+  `http://localhost:3000/mcp`, replacing `3000` if your Dashboard uses a
+  different port.
+- **Process Focus Cloud:** Find the environment’s site URL in the
+  [Console’s Info tab](/docs/cloud/console/projects-and-environments/) and
+  append `/mcp`.
+
+## Connect OpenCode
+
+From the project where you want to use the connection, run:
+
+```sh
+opencode mcp add processfocus --url http://localhost:3000/mcp
+opencode mcp list
+```
+
+Substitute your environment’s MCP URL. In OpenCode, run `/mcps`, select
+`processfocus`, and sign in through your organisation in the browser.
+Confirm the client, environment, and account, then choose **View work**
+for read-only access or **View and act** to allow changes that your
+organisation permissions permit. Select **Allow access** to connect.
+
+![Process Focus consent screen for OpenCode with View work selected and View and act available.](/images/docs/mcp-opencode-consent.webp)
+
+Once connected, try asking “What To-Dos can I act on?”
+
+## Reconnect or disconnect
+
+If OpenCode asks you to sign in again, select the same connection in
+`/mcps` and use the same account. Connections survive local Dashboard
+restarts. To clear OpenCode's saved credentials or switch accounts, run
+`opencode mcp logout processfocus`, then sign in again.
+
+To revoke access, open the profile menu in the Dashboard for that
+environment and choose **Connected apps**. Use the **Authorised on**
+date to identify the connection if several share a name, then choose
+**Disconnect**. This leaves your Dashboard session and other clients connected.

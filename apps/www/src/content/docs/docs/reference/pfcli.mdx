@@ -17,7 +17,7 @@ pfcli invitation registration-link ./my-org --email alice@example.com --frontend
 ```
 
 Use `--database-path` for a local database outside the organisation's default
-`db/pf.db`. `--issuer-url` sets the frontend JWT issuer. `--frontend-url` sets
+`db/pf.db`. `--issuer-url` sets the Dashboard’s JWT issuer. `--frontend-url` sets
 the local registration link's HTTP(S) origin, including its port if needed.
 For a different Console endpoint, use `pfcli auth login --base-url <url>`.
 Use each command's help to check which options it accepts.
@@ -28,8 +28,8 @@ Some commands also accept environment variables as fallbacks. Explicit options
 take precedence: for example, `--database-path` overrides
 `SQLITE_DATABASE_PATH`, `--issuer-url` overrides `OAUTH_ISSUER_URL`, and
 `--frontend-url` overrides `FRONTEND_BASE_URL`, `BASE_URL`, and
-`NEXT_PUBLIC_FRONTEND_URL`. Without a frontend URL override, the local
-registration-link command discovers the frontend port or falls back to 3000.
+`NEXT_PUBLIC_FRONTEND_URL`. Without a Dashboard URL override, the local
+registration-link command discovers the Dashboard port or falls back to 3000.
 
 For a stage secret, avoid putting its value in command arguments, which can be
 exposed in shell history or process listings. Instead, set an environment

@@ -52,6 +52,7 @@ export interface CronEntryMetadata {
 export interface OrganisationDeployManifest {
   readonly platformRef?: string | undefined
   readonly platformSource?: Organisation["platformSource"]
+  readonly processfocusVersion?: string | undefined
   readonly format?: string | undefined
   readonly version: typeof ORGANISATION_DEPLOY_MANIFEST_VERSION
   readonly producer?: ArtifactProducer | undefined
@@ -690,6 +691,12 @@ export const parseOrganisationDeployManifest = (
         ? undefined
         : ensureString(record["platformRef"], "platformRef"),
     ...(platformSource !== undefined && { platformSource }),
+    ...(record["processfocusVersion"] !== undefined && {
+      processfocusVersion: ensureString(
+        record["processfocusVersion"],
+        "processfocusVersion",
+      ),
+    }),
     extensions: normalizedExtensions,
   }
 }
@@ -699,6 +706,7 @@ export const buildOrganisationDeployManifest = (options: {
   readonly orgBundleSha256: string
   readonly producer?: ArtifactProducer | undefined
   readonly customAwsRuntimeConfig?: unknown
+  readonly processfocusVersion?: string | undefined
 }): OrganisationDeployManifest => {
   const allConstructs = options.org.node.findAll()
 
@@ -823,6 +831,9 @@ export const buildOrganisationDeployManifest = (options: {
     ),
     cronEntries: buildCronEntries(options.org),
     platformRef: options.org.platformRef,
+    ...(options.processfocusVersion !== undefined && {
+      processfocusVersion: options.processfocusVersion,
+    }),
     ...(options.org.platformSource !== undefined && {
       platformSource: options.org.platformSource,
     }),

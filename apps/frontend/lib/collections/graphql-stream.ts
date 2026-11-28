@@ -102,7 +102,27 @@ export function createGraphQLStream<TDoc>({
         active = false
         unsubscribe()
         removeConnected()
-        removeGraphQLWebSocketRef(url)
+        const shared = GRAPHQL_WEBSOCKET_BY_URL.get(url)
+        if (shared?.refCount !== 1) {
+          removeGraphQLWebSocketRef(url)
+          return
+        }
+        // RxDB drops the dispose promise on final release. Evict synchronously
+        // so the replacement gets a new client, then observe the pending retry.
+        shared.refCount = 0
+        GRAPHQL_WEBSOCKET_BY_URL.delete(url)
+        void Promise.resolve(client.dispose()).catch((error: unknown) => {
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === 1000 &&
+            "reason" in error &&
+            error.reason === "All Subscriptions Gone"
+          )
+            return
+          onError(error)
+        })
       }
     },
   }

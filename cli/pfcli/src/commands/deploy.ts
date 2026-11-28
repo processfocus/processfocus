@@ -67,15 +67,28 @@ const REQUEST_UPLOAD_URL_MUTATION = `
   }
 `
 
-// Omit the new input field entirely against Backends with the older schema.
-const startDeployMutation = (selectSource: boolean) => `
-  mutation StartDeploy($projectId: String!, $environmentId: String!, $fileId: String!, $platformRef: String!, $executionId: ID${selectSource ? ", $platformSource: String!" : ""}) {
-    startOperationsDeploy(input: { projectId: $projectId, environmentId: $environmentId, fileId: $fileId, platformRef: $platformRef${selectSource ? ", platformSource: $platformSource" : ""} }, executionId: $executionId) {
+// Keep legacy deploys compatible with Backends that don't have the newer fields.
+const startDeployMutation = (platform: {
+  platformRef?: string
+  platformSource?: "public"
+  processfocusVersion?: string
+}) => {
+  const fields = Object.keys(platform)
+  return `
+  mutation StartDeploy($projectId: String!, $environmentId: String!, $fileId: String!, $executionId: ID, ${fields.map((field) => `$${field}: String!`).join(", ")}) {
+    startOperationsDeploy(input: { projectId: $projectId, environmentId: $environmentId, fileId: $fileId, ${fields.map((field) => `${field}: $${field}`).join(", ")} }, executionId: $executionId) {
       executionId
       processPath
     }
   }
 `
+}
+
+const DeployPlatform = Schema.Struct({
+  platformRef: Schema.optional(Schema.Trim.check(Schema.isMinLength(1))),
+  platformSource: Schema.optional(Schema.Literals(["private", "public"])),
+  processfocusVersion: Schema.optional(Schema.NonEmptyString),
+})
 
 const ACTIVE_DEPLOY_QUERY = `
   query ActiveDeploy($projectId: String!, $environmentId: String!) {
@@ -558,24 +571,27 @@ export const runDeploy = (
     })
 
     yield* Console.log(`Creating artifact from ${distPath}`)
-    const { platformRef, platformSource } = yield* Effect.try({
-      try: () =>
-        Schema.decodeUnknownSync(
-          Schema.Struct({
-            platformRef: Schema.Trim.check(Schema.isMinLength(1)),
-            platformSource: Schema.optional(
-              Schema.Literals(["private", "public"]),
+    const platform = yield* Effect.try({
+      try: () => {
+        const { platformRef, platformSource, processfocusVersion } =
+          Schema.decodeUnknownSync(DeployPlatform)(
+            JSON.parse(
+              readFileSync(path.join(distPath, "deploy-manifest.json"), "utf8"),
             ),
-          }),
-        )(
-          JSON.parse(
-            readFileSync(path.join(distPath, "deploy-manifest.json"), "utf8"),
-          ),
-        ),
+          )
+        if (processfocusVersion && !platformRef && !platformSource)
+          return { processfocusVersion }
+        if (platformRef && !processfocusVersion)
+          return {
+            platformRef,
+            ...(platformSource === "public" && { platformSource }),
+          }
+        throw new Error("Expected exactly one platform selection")
+      },
       catch: (cause) =>
         new CliError({
           message:
-            'Set Organisation.platformRef to a branch or exact commit and, if set, Organisation.platformSource to "private" or "public".',
+            'Install processfocus from the npm registry with Bun, npm, pnpm, or Yarn with node_modules, or set Organisation.platformRef to a branch or exact commit and optionally set Organisation.platformSource to "private" or "public".',
           cause,
         }),
     })
@@ -653,13 +669,12 @@ export const runDeploy = (
         const deployResult = yield* graphqlRequest<StartDeployResponse>(
           endpoint,
           acquireAccessToken(credentials),
-          startDeployMutation(platformSource === "public"),
+          startDeployMutation(platform),
           {
             projectId,
             environmentId,
             fileId: uploadInfo.requestUploadUrl.fileId,
-            platformRef,
-            ...(platformSource === "public" && { platformSource }),
+            ...platform,
             executionId: options.executionId,
           },
         ).pipe(

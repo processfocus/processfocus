@@ -12,9 +12,17 @@ import {
 } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 
 const root = resolve(import.meta.dir, "../../..")
+const args = process.argv.slice(2)
+const useTempOrg = args[0] === "--from-temp-org"
+if (useTempOrg) args.shift()
+const sourceOrg = useTempOrg
+  ? process.env["PF_ORG"]
+  : join(root, "examples/demo")
+if (!sourceOrg || (useTempOrg && dirname(sourceOrg) !== tmpdir()))
+  throw new Error("--from-temp-org requires a disposable organisation")
 const org = mkdtempSync(join(tmpdir(), "pf-delegation-e2e-"))
 const portFiles = [
   ".auth-port.json",
@@ -76,9 +84,11 @@ const freePort = async (): Promise<string> => {
 try {
   const port = await freePort()
   const authPort = await freePort()
-  cpSync(join(root, "examples/demo"), org, { recursive: true })
-  rmSync(join(org, "db"), { recursive: true, force: true })
-  rmSync(join(org, "dist"), { recursive: true, force: true })
+  cpSync(sourceOrg, org, {
+    recursive: true,
+    filter: (path) =>
+      path !== join(sourceOrg, "db") && path !== join(sourceOrg, "dist"),
+  })
   const source = join(org, "src/org.ts")
   writeFileSync(
     source,
@@ -102,15 +112,19 @@ try {
     "FRONTEND_E2E_INVITATION_EMAIL",
   ])
     delete env[key]
+  // CI prepares BDD specs and dependencies once for all browser suites.
+  const [executable, ...commandArgs] = args
   child = spawn(
-    "bun",
-    [
-      "scripts/nx-quiet.ts",
-      "run",
-      "@pf/frontend-e2e:e2e",
-      "--retries=0",
-      "--workers=1",
-    ],
+    executable ?? "bun",
+    executable
+      ? commandArgs
+      : [
+          "scripts/nx-quiet.ts",
+          "run",
+          "@pf/frontend-e2e:e2e",
+          "--retries=0",
+          "--workers=1",
+        ],
     {
       cwd: root,
       detached: true,
@@ -135,13 +149,14 @@ try {
           "./src/{features-delegated-access,features-passkey}/*.feature",
         FRONTEND_E2E_BROWSERS: "chromium",
         FRONTEND_E2E_SERVER_COMMAND:
+          env["FRONTEND_E2E_SERVER_COMMAND"] ??
           "env -u NX_INVOCATION_ROOT_PID bun scripts/nx-quiet.ts run @processfocus/runtime-local:serve",
         PLAYWRIGHT_REUSE_EXISTING_SERVER: "0",
         GOOGLE_CLIENT_ID: "ci-google-client-id",
         GOOGLE_CLIENT_SECRET: "ci-google-client-secret",
         CI_PIPELINE_SECRET: "ci-pipeline-secret",
         RESEND_ENABLED: "false",
-        E2E_SKIP_DELAYS: "true",
+        E2E_SKIP_DELAYS: useTempOrg ? env["E2E_SKIP_DELAYS"] : "true",
         NX_DAEMON: "false",
       },
     },

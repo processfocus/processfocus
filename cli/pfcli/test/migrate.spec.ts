@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, unlinkSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, Fiber, Layer, Result } from "effect"
@@ -13,6 +13,7 @@ import {
   executeMigrationStatements,
   runDrizzleMigrations,
 } from "../src/utils/migration-layer"
+import { cleanupTestDatabase } from "./cleanup-test-database"
 import {
   DEMO_ORG,
   captureStdout,
@@ -34,13 +35,6 @@ useSerializedTestState()
 const makeDbPath = () =>
   join(tmpdir(), `test-pfcli-migrate-${Date.now()}-${randomSuffix()}.db`)
 
-const cleanupDb = (dbPath: string) => {
-  for (const suffix of ["", "-wal", "-shm"]) {
-    const file = `${dbPath}${suffix}`
-    if (existsSync(file)) unlinkSync(file)
-  }
-}
-
 type RunImport = (orgPath: string) => import("effect").Effect.Effect<unknown>
 type RunMigrate = (orgPath: string) => import("effect").Effect.Effect<unknown>
 
@@ -59,7 +53,7 @@ describe("pfcli migrate", () => {
   const tempOrgPaths: string[] = []
 
   afterEach(() => {
-    for (const p of dbPaths) cleanupDb(p)
+    for (const p of dbPaths) cleanupTestDatabase(p)
     dbPaths.length = 0
 
     for (const p of tempOrgPaths) {

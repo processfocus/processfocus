@@ -42,6 +42,12 @@ const getAuthCookieCount = async (page: Page): Promise<number> => {
   ).length
 }
 
+Given("the Dashboard live metrics are visible", async ({ page }) => {
+  await expect(page.getByRole("heading", { name: "Throughput" })).toBeVisible({
+    timeout: 30_000,
+  })
+})
+
 Given("I wait for RxDB to populate local storage", async ({ page }) => {
   await expect
     .poll(() => getRxdbKeyCount(page), {
@@ -49,6 +55,22 @@ Given("I wait for RxDB to populate local storage", async ({ page }) => {
       timeout: 30_000,
     })
     .toBeGreaterThan(0)
+})
+
+Given("I am watching for logout errors", async ({ page, scenarioState }) => {
+  const logoutErrors: string[] = []
+  scenarioState.set("logoutErrors", logoutErrors)
+  page.on("console", (message) => {
+    const text = message.text()
+    if (
+      message.type() === "error" &&
+      (/^Failed to cancel .* replication during cleanup:/.test(text) ||
+        text.startsWith("Failed to cleanup during logout:"))
+    ) {
+      logoutErrors.push(text)
+    }
+  })
+  page.on("pageerror", (error) => logoutErrors.push(error.message))
 })
 
 When("I click the sidebar logout button", async ({ page }) => {
@@ -87,3 +109,10 @@ Then("all authentication cookies should be cleared", async ({ page }) => {
     })
     .toBe(0)
 })
+
+Then(
+  "logout should report no cleanup errors or uncaught exceptions",
+  async ({ scenarioState }) => {
+    expect(scenarioState.get("logoutErrors")).toEqual([])
+  },
+)

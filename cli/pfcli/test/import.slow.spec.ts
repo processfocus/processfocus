@@ -420,6 +420,58 @@ describe("pfcli import", () => {
   )
 
   it(
+    "keeps serving the last complete local GraphQL import when schema preparation fails",
+    async () => {
+      const org = await createTempOrgFromSharedBuild()
+      const databasePath = join(org, "pf.db")
+      await copySharedImportedDemoDatabase(databasePath)
+      const runImport = await loadRunImport()
+      const schema = join(org, "dist/graphql/org.graphql")
+      const directory = join(org, ".processfocus/local-graphql")
+      const active = () =>
+        JSON.parse(
+          readFileSync(join(directory, "active.json"), "utf8"),
+        ) as string
+      await withEnv(
+        {
+          SQLITE_DATABASE_PATH: databasePath,
+          PF_IMPORT_MODE: "deploy-artifact",
+          PF_LOCAL_GRAPHQL_IMPORT: "1",
+          GOOGLE_CLIENT_ID: "google-client-id",
+          GOOGLE_CLIENT_SECRET: "google-client-secret",
+          OAUTH_ISSUER_URL: "http://issuer.test",
+        },
+        async () => {
+          const publish = () =>
+            Effect.runPromise(
+              runImport(org, {
+                runMigrations: false,
+                ensureFrontendJwt: false,
+              }).pipe(Effect.provide(NodeServices.layer)),
+            )
+          mkdirSync(directory, { recursive: true })
+          writeFileSync(join(directory, "active.json"), JSON.stringify("a"))
+          const updated = `${readFileSync(schema, "utf8")}\n# next revision\n`
+          writeFileSync(schema, updated)
+          await publish()
+          const second = active()
+          expect(second).toBe("b")
+          rmSync(schema)
+          await expect(publish()).rejects.toThrow()
+          expect(active()).toBe(second)
+          expect(
+            readFileSync(
+              join(directory, second, "graphql/org.graphql"),
+              "utf8",
+            ),
+          ).toBe(updated)
+        },
+      )
+    },
+    { timeout: IMPORT_TEST_TIMEOUT_MS },
+  )
+
+  it(
     "refreshes the stored frontend JWT when the issuer changes",
     async () => {
       const artifactRoot = await createTempOrgFromSharedBuild()

@@ -1,13 +1,13 @@
 ---
 title: Forms
+reviewed: true
 ---
 
 A `Form` step collects information from a person. This can be an
 employee or someone outside the organisation.
 
 Use `role` to specify who is responsible for the step and `form` to
-define its fields. See [Adding steps](/docs/reference/processes/#adding-steps)
-for how to connect the form to a process.
+define its fields.
 
 ## Form example
 
@@ -59,9 +59,10 @@ common fields and ways to organise them.
 
 ## Add validation
 
-As our form is a schema, it's easy to add validation. Below we trim
-the SKU and make sure it is not blank. The quantity is required and
-must be a positive whole number. The process and role stay the same.
+A form is a schema. Validation is therefore schema validation. Below
+we trim the SKU and make sure it is not blank. The quantity is
+required and must be a positive whole number. The process and role
+stay the same.
 
 ```typescript
 import { NumberFieldFrom, NumberFromString, TextFieldFrom } from "@pf/form-schema"
@@ -81,6 +82,41 @@ const orderForm = Schema.Struct({
 })
 ```
 
+The Dashboard runs these field checks during data entry. The backend
+runs them again on submission.
+
+### Check stock on submission
+
+Use the `Form` step's `validate` callback for schema checks that need
+database access. The backend runs it after decoding the form fields,
+so `sku` is already trimmed and `quantity` is a positive whole number.
+The Dashboard does not run this callback during data entry.
+
+Replace the `captureOrder` step above with this version, using the
+validated `orderForm`. In this example, `getAvailableStock` is your
+application's database lookup. It returns an Effect that yields the
+available quantity, or `undefined` if the SKU is unknown.
+
+```typescript
+import { Effect } from "effect"
+import { getAvailableStock } from "./inventory"
+
+const captureOrder = new Form(webOrder, "Capture order", {
+  role: sales,
+  form: orderForm,
+  validate: ({ sku, quantity }) =>
+    Effect.gen(function* () {
+      const available = yield* getAvailableStock(sku)
+      if (available === undefined) return `Unknown SKU: ${sku}.`
+      if (quantity > available) return `Only ${available} units of ${sku} are available.`
+      return undefined
+    }),
+})
+```
+
+Return a message to reject the submission with a schema validation error,
+or `undefined` to let the submission proceed.
+
 ## Default values
 
 Set `default` on a field to prefill it when the form opens. For example,
@@ -99,7 +135,7 @@ not the string `"1"`.
 
 ## Form rules
 
-Use a [Form Rule](/docs/concepts/forms/#form-rules) to change a field's
+Use a **form rule** to change a field's
 behaviour based on what the person enters. For example, show and require
 a delivery address only when the order will be shipped:
 

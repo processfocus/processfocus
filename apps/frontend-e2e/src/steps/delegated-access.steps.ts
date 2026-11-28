@@ -116,9 +116,7 @@ Given(
     await page
       .getByRole("button", { name: "Create passkey", exact: true })
       .click()
-    await expect(page.getByTestId("header-profile-button")).toBeVisible({
-      timeout: 15_000,
-    })
+    await expect(page.getByTestId("header-profile-button")).toBeVisible()
   },
 )
 
@@ -235,6 +233,9 @@ Then(
       throw new Error(
         "This journey requires a localhost BASE_URL and disposable organisation.",
       )
+    // Leave the live Dashboard before clearing its session. An in-flight
+    // client redirect from the protected page can abort the logout navigation.
+    await page.goto("about:blank")
     await page.goto(`${baseURL}/api/auth/logout`)
     await expect(page).toHaveURL(/\/login(?:\?|$)/)
     const output = execFileSync(
@@ -275,7 +276,7 @@ Then(
       .getByRole("button", { name: "Create passkey", exact: true })
       .click()
     const profile = page.getByTestId("header-profile-button")
-    await expect(profile).toBeVisible({ timeout: 15_000 })
+    await expect(profile).toBeVisible()
     await profile.click()
     await expect(
       page.getByRole("menuitem", { name: "Act on behalf" }),

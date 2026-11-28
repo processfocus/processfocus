@@ -1,5 +1,7 @@
 ---
 title: Runtime
+description: Shows how we run a Process Focus system
+reviewed: true
 ---
 
 Process Focus implements [framework-defined
@@ -18,7 +20,7 @@ The diagram below shows how the runtime components work together:
 
 ```mermaid
 flowchart TB
-    frontend["Frontend (Dashboard)"]
+    dashboard["Dashboard"]
     auth["Authentication server"]
     graphql["GraphQL server"]
     worker["Job worker"]
@@ -26,8 +28,8 @@ flowchart TB
     queue["Job queue"]
     identity["External identity providers (optional)"]
 
-    frontend <-->|Sign-in| auth
-    frontend <-->|Authenticated queries and mutations| graphql
+    dashboard <-->|Sign-in| auth
+    dashboard <-->|Authenticated queries and mutations| graphql
     auth <-->|Identity verification| identity
     auth <-->|Users and roles| database
     graphql <-->|Read and write| database

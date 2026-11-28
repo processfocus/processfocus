@@ -130,7 +130,18 @@ export async function createPasskeyUser(
     }
     const logout = async () => {
       await page.getByTestId("header-profile-button").click()
-      await page.getByTestId("header-logout-button").click()
+      const [request] = await Promise.all([
+        page.waitForRequest(
+          (req) =>
+            req.method() === "POST" &&
+            new URL(req.url()).pathname === "/api/auth/logout",
+        ),
+        page.getByTestId("header-logout-button").click(),
+      ])
+      // A failed logout never redirects. Let the caller recover its device
+      // immediately rather than waiting out the login URL assertion.
+      if (!(await request.response())?.ok())
+        throw new Error("Dashboard logout request failed")
       await expect(page).toHaveURL(/\/login(?:\?|$)/)
     }
     const signIn = async () => {

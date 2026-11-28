@@ -1,5 +1,6 @@
 ---
 title: Authentication
+reviewed: true
 description: Understanding authentication in Process Focus.
 ---
 
@@ -26,3 +27,12 @@ We use the term identity provider for a service that provides
 identities. Google Workspace and Entra are examples of such providers.
 
 Any OAuth2 service should work with Process Focus.
+
+## Invitations
+
+Users may present a valid identity from an identity provider, but that
+is not sufficient. Permission to access the system is done via
+invitations: only users with a valid identity, and an invitation can
+authenticate themselves.
+
+What they can do subsequently is determined by their authorisation.

@@ -26,9 +26,17 @@ outside the organisation's default `db/pf.db` location.
 
 ## Cloud hosting
 
-Hosted builds require `platformRef` on the authored `Organisation`. To verify
-merged public-package changes, use an authorized existing Backend and set
-`platformRef: "trunk"`. For a reproducible deployment, select a full commit SHA.
+With no Git selection, `pfcli build` records the exact installed `processfocus`
+version from a Bun, npm, pnpm, or Yarn registry install with a lockfile. Yarn
+must install into `node_modules`. The Backend verifies the release's npm
+provenance and deploys the attested public source revision.
+A frozen install keeps selecting the same release even if the npm tag changes.
+The Deploy Attempt log records the npm version, public SHA and Backend SHA.
+
+Use `platformRef` for a workspace checkout or unpublished rehearsal tarballs.
+To verify merged public-package changes, use an authorized existing Backend
+and set `platformRef: "trunk"`. For a reproducible Git deployment, select a full
+commit SHA.
 The CLI builds with `PF_ENV` set to the target customer environment, so the org
 can select a different ref per environment, for example
 `platformRef: process.env["PF_ENV"] === "prd" ? releaseCommit : "trunk"`.
@@ -43,7 +51,7 @@ the revision supplying the AWS deployment code. To reproduce the public inputs
 after the branch advances, keep `platformSource: "public"` and set `platformRef`
 to the logged platform SHA.
 
-Omitting `platformSource` resolves `platformRef` in the private monorepo
+Setting `platformRef` without `platformSource` selects the private monorepo
 (`processfocus/monorepo`). If the selected ref cannot be checked out, the
 deployment stops without falling back to another source or to published packages.
 

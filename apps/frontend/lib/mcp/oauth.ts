@@ -1,17 +1,24 @@
 import "server-only"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
-import { Result, Schema } from "effect"
+import { DateTime, Result, Schema } from "effect"
 import { type NextRequest, NextResponse } from "next/server"
 import { type ProviderUserSession, subjects } from "@pf/auth-session"
 import { type Tokens, createClient } from "@pf/openauth/client"
 import { OAuthMetadataFetchError } from "@pf/openauth/error"
-import { consentPath, cookieName, loopback, mcpOrigin, opaque } from "./origin"
+import {
+  connectedAppsPath,
+  consentPath,
+  cookieName,
+  loopback,
+  mcpOrigin,
+  opaque,
+} from "./origin"
 import { bucket } from "./store"
 import { getAuthClient } from "@/lib/auth/client"
 import { getFrontendAuthClientConfig } from "@/lib/auth/issuer"
 import { decodeJwtPayload } from "@/lib/auth/jwt"
-import { getCookieNamesFromHost } from "@/lib/auth/session"
 import { acceptVerifiedSession } from "@/lib/auth/ssr-session"
+import { getFrontendManifest } from "@/lib/frontend-manifest-store"
 
 const VIEW = "work:read"
 const ACT = "work:act"
@@ -35,6 +42,7 @@ const Grant = Schema.Struct({
   clientId: Schema.String,
   userId: Schema.String,
   scope: Schema.Literals([VIEW, `${VIEW} ${ACT}`]),
+  authorisedAt: Schema.Int,
 })
 type Grant = typeof Grant.Type
 const Client = Schema.Struct({
@@ -390,75 +398,51 @@ const sameOriginForm = (request: Request, origin: string) =>
   request.headers.get("content-type")?.split(";")[0] ===
     "application/x-www-form-urlencoded"
 
-export const manageConnections = async (
-  request: NextRequest,
-  origin: string,
-): Promise<Response> => {
-  const path = "/mcp/connections"
-  const { accessToken } = getCookieNamesFromHost(new URL(origin).host)
-  const token = request.cookies.get(accessToken)?.value
-  if (request.method === "POST" && !sameOriginForm(request, origin))
-    return oauthError("invalid_request", 403)
-  const verified = token
-    ? await getAuthClient().verify(subjects, token, undefined)
-    : undefined
-  if (!token || !verified || verified.err) {
-    const login = new URL("/login", origin)
-    login.searchParams.set("redirect", path)
-    return request.method === "GET"
-      ? location(login)
-      : oauthError("access_denied", 401)
+export const listConnections = async (origin: string, userId: string) => {
+  const connections = []
+  for await (const { value } of clients(origin).entries()) {
+    const grant = value.grants.find((grant) => grant.userId === userId)
+    if (grant) {
+      connections.push({
+        id: grant.id,
+        clientId: grant.clientId,
+        name: value.name,
+        access: grant.scope === VIEW ? "View work" : "View and act",
+        authorisedAt: grant.authorisedAt,
+      })
+    }
   }
-  const session = verified.subject.properties
-  if (
-    !("email" in session) ||
-    !session.humanSession ||
-    session.delegation ||
-    !(await acceptVerifiedSession(session, token))
-  )
-    return oauthError("access_denied", 403)
+  return connections
+}
 
-  const store = clients(origin)
-  const owned = []
-  for await (const client of store.entries()) {
-    const grant = client.value.grants.find(
-      (grant) => grant.userId === session.userId,
+export const disconnectConnection = async ({
+  origin,
+  userId,
+  clientId,
+  grantId,
+}: {
+  origin: string
+  userId: string
+  clientId: string
+  grantId: string
+}): Promise<boolean> => {
+  const client = await registeredClient(origin, clientId)
+  if (
+    !client?.value.grants.some(
+      (grant) => grant.userId === userId && grant.id === grantId,
     )
-    if (grant) owned.push({ client, grant })
-  }
-  if (request.method === "POST") {
-    const id = (await request.formData().catch(() => null))?.get("grant")
-    const connection = owned.find(({ grant }) => grant.id === id)
-    if (!connection) return oauthError("invalid_grant", 404)
-    const { client, grant } = connection
-    const grants = client.value.grants.filter(({ id }) => id !== grant.id)
-    // Codes and tokens check the current grant ID, not just the registration.
-    // Revoking it invalidates every credential without touching Dashboard cookies.
-    if (
-      !(await store.put(
-        grant.clientId,
-        { ...client.value, grants },
-        grants.length === 0 ? Date.now() + registrationLifetime : undefined,
-        client,
-      ))
-    )
-      return oauthError("invalid_grant", 409)
-    return location(new URL(path, origin))
-  }
-  const list = owned.map(({ client, grant }) => {
-    const name = escapeHtml(client.value.name)
-    const scope = grant.scope === VIEW ? "View work" : "View and act"
-    return `<li><form method="post" action="${path}" aria-labelledby="${grant.id}"><p id="${grant.id}">${name} — ${scope}</p><button type="submit" name="grant" value="${grant.id}">Disconnect ${name}</button></form></li>`
-  })
-  return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MCP connections</title></head><body><main><h1>MCP connections</h1><p>Environment: ${escapeHtml(origin)}</p><p>Signed in as ${escapeHtml(session.email)}</p>${list.length ? `<ul>${list.join("")}</ul>` : "<p>No connected clients.</p>"}<a href="/">Back to Dashboard</a></main></body></html>`,
-    {
-      headers: {
-        ...headers,
-        "Referrer-Policy": "same-origin",
-        "Content-Type": "text/html; charset=utf-8",
-      },
-    },
+  )
+    return false
+  const grants = client.value.grants.filter((grant) => grant.id !== grantId)
+  // Codes and tokens check the current grant ID, not just the registration.
+  // Revoking it invalidates every credential without touching Dashboard cookies.
+  return Boolean(
+    await clients(origin).put(
+      clientId,
+      { ...client.value, grants },
+      grants.length === 0 ? Date.now() + registrationLifetime : undefined,
+      client,
+    ),
   )
 }
 
@@ -570,7 +554,11 @@ export const consent = async (request: NextRequest): Promise<Response> => {
   )
     return oauthError("invalid_request")
   if (request.method === "GET") {
-    const name = escapeHtml(client.value.name)
+    const clientName = escapeHtml(client.value.name)
+    const { organisation } = getFrontendManifest()
+    const organisationName = escapeHtml(
+      organisation.acronym ?? organisation.name,
+    )
     const accessDetails = existing
       ? `<p>Existing access: ${existing.scope === VIEW ? "View work" : "View and act"}.</p>
          <p class="notice">Reconnecting only restores access. It does not run an interrupted action.</p>`
@@ -606,7 +594,7 @@ export const consent = async (request: NextRequest): Promise<Response> => {
     <header>
       <div class="brand"><span class="mark" aria-hidden="true">PF</span> Process Focus</div>
       <p class="eyebrow">MCP connection</p>
-      <h1>${existing ? "Reconnect" : "Connect"} ${name} to Process Focus?</h1>
+      <h1>${existing ? "Reconnect" : "Connect"} ${clientName} to ${organisationName}?</h1>
     </header>
     <div class="details">
       <p><strong>Environment:</strong> ${escapeHtml(origin)}</p>
@@ -620,7 +608,7 @@ export const consent = async (request: NextRequest): Promise<Response> => {
         <button type="submit" name="action" value="deny">Deny</button>
       </div>
     </form>
-    <p class="manage"><a href="/mcp/connections">Manage MCP connections</a></p>
+    <p class="manage"><a href="${connectedAppsPath}">Manage MCP connections</a></p>
   </main>
 </body>
 </html>`,
@@ -664,6 +652,7 @@ export const consent = async (request: NextRequest): Promise<Response> => {
     clientId: entry.clientId,
     userId: human.userId,
     scope: choice === "act" ? `${VIEW} ${ACT}` : VIEW,
+    authorisedAt: DateTime.toEpochMillis(DateTime.nowUnsafe()),
   }
   if (
     !(await clients(origin).put(

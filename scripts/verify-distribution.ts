@@ -9,26 +9,18 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { PRIVATE_SOURCE_PROJECT_ROOTS } from "../tools/project-boundaries/policy"
+import {
+  PRIVATE_SOURCE_PROJECT_ROOTS,
+  PUBLISHABLE_PROJECTS,
+} from "../tools/project-boundaries/policy"
 import { assertDashboardPackageFile } from "./dashboard-package-policy"
 
 const packageName = process.argv[2]
 if (!packageName) throw new Error("Package name is required")
 
-const PACKAGE_ROOTS: Record<string, string> = {
-  processfocus: "packages/sdk",
-  "@processfocus/runtime": "packages/runtime",
-  "@processfocus/hosting-contract": "packages/hosting-contract",
-  "@processfocus/cli": "cli/pfcli",
-  "@processfocus/pforg": "cli/pforg",
-  "@processfocus/runtime-local": "runtime/local",
-  "@processfocus/plugin-aws-lambda": "plugins/aws",
-  "@processfocus/plugin-docker": "plugins/docker",
-  "@processfocus/plugin-google-drive": "plugins/google-drive",
-  "@processfocus/plugin-posthog": "plugins/posthog",
-  "@processfocus/plugin-resend": "plugins/resend",
-  "@processfocus/plugin-xero": "plugins/xero",
-}
+const packageRoots = new Map<string, string>(
+  Object.entries(PUBLISHABLE_PROJECTS).map(([root, name]) => [name, root]),
+)
 
 const EXTRA_PACKED_PREFIXES: Record<string, readonly string[]> = {
   "@processfocus/plugin-docker": ["assets/"],
@@ -39,14 +31,9 @@ const unpublishedImplementationImport =
   /(?:from|import|require)\s*\(?\s*["']@pf\//
 const PUBLIC_INTERNAL_TAG_PREFIX = "processfocus:internal-tag/"
 
-const PLUGIN_CONTRACT_DEPENDENCIES = {
-  processfocus: "0.1.0-next.3",
-  "@processfocus/runtime": "0.1.0-next.3",
-} as const
-
 const isPluginPackage = (name: string): boolean =>
   name.startsWith("@processfocus/plugin-")
-const packageRoot = PACKAGE_ROOTS[packageName]
+const packageRoot = packageRoots.get(packageName)
 if (!packageRoot)
   throw new Error(`No package root configured for ${packageName}`)
 const packageFilePrefix = packageName.replace("@", "").replace("/", "-")
@@ -125,92 +112,94 @@ const manifest = JSON.parse(
   await readFile(manifestPath, "utf8"),
 ) as PackageManifest
 const stagingDirectory = await mkdtemp(join(tmpdir(), "processfocus-package-"))
-
-await cp(resolve(packageRoot, "dist"), join(stagingDirectory, "dist"), {
-  recursive: true,
-})
-if (isPluginPackage(packageName)) {
-  const finalize = Bun.spawnSync(
-    [
-      "bun",
-      resolve("scripts/finalize-plugin-distribution.ts"),
-      join(stagingDirectory, "dist"),
-    ],
-    { stdout: "pipe", stderr: "pipe" },
-  )
-  if (finalize.exitCode !== 0) {
-    throw new Error(finalize.stderr.toString() || finalize.stdout.toString())
-  }
-}
-await normalizePublishedImplementationIdentifiers(
-  join(stagingDirectory, "dist"),
-)
-for (const file of ["README.md", "LICENSE.md"]) {
-  await cp(resolve(packageRoot, file), join(stagingDirectory, file))
-}
-for (const extra of EXTRA_PACKED_PREFIXES[packageName] ?? []) {
-  await cp(resolve(packageRoot, extra), join(stagingDirectory, extra), {
-    recursive: extra.endsWith("/"),
+try {
+  await cp(resolve(packageRoot, "dist"), join(stagingDirectory, "dist"), {
+    recursive: true,
   })
-}
-
-for (const [subpath, target] of Object.entries(manifest.exports)) {
-  if (typeof target === "string") continue
-  const next = Object.fromEntries(
-    Object.entries(target).filter(
-      ([, path]) => !/\.tsx?$/.test(path) || /\.d\.[cm]?tsx?$/.test(path),
-    ),
-  )
-  if (Object.keys(next).length === 0) delete manifest.exports[subpath]
-  else manifest.exports[subpath] = next
-}
-if (isPluginPackage(packageName)) {
-  delete manifest.private
-  const publicDependencies: Record<string, string> = {}
-  for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
-    if (name.startsWith("@pf/") || version.startsWith("workspace:")) continue
-    publicDependencies[name] = version
+  if (isPluginPackage(packageName)) {
+    const finalize = Bun.spawnSync(
+      [
+        "bun",
+        resolve("scripts/finalize-plugin-distribution.ts"),
+        join(stagingDirectory, "dist"),
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    )
+    if (finalize.exitCode !== 0) {
+      throw new Error(finalize.stderr.toString() || finalize.stdout.toString())
+    }
   }
-  const publicPeerDependencies = Object.fromEntries(
-    Object.entries(manifest.peerDependencies ?? {}).filter(
-      ([name, version]) =>
-        !name.startsWith("@pf/") && !version.startsWith("workspace:"),
-    ),
+  await normalizePublishedImplementationIdentifiers(
+    join(stagingDirectory, "dist"),
   )
-  manifest.peerDependencies = {
-    ...publicPeerDependencies,
-    processfocus: PLUGIN_CONTRACT_DEPENDENCIES.processfocus,
-    ...(packageName === "@processfocus/plugin-google-drive" ||
-    packageName === "@processfocus/plugin-resend"
-      ? {
-          "@processfocus/runtime":
-            PLUGIN_CONTRACT_DEPENDENCIES["@processfocus/runtime"],
-        }
-      : {}),
+  for (const file of ["README.md", "LICENSE.md"]) {
+    await cp(resolve(packageRoot, file), join(stagingDirectory, file))
   }
-  manifest.dependencies = publicDependencies
-} else {
-  manifest.dependencies = Object.fromEntries(
-    Object.entries(manifest.dependencies ?? {}).map(([name, version]) => [
-      name,
-      version.startsWith("workspace:") && PACKAGE_ROOTS[name] !== undefined
-        ? manifest.version
-        : version,
-    ]),
-  )
-}
-delete manifest.devDependencies
-await writeFile(
-  join(stagingDirectory, "package.json"),
-  `${JSON.stringify(manifest, null, 2)}\n`,
-)
+  for (const extra of EXTRA_PACKED_PREFIXES[packageName] ?? []) {
+    await cp(resolve(packageRoot, extra), join(stagingDirectory, extra), {
+      recursive: extra.endsWith("/"),
+    })
+  }
 
-const pack = Bun.spawnSync(
-  ["bun", "pm", "pack", "--destination", outputDirectory, "--ignore-scripts"],
-  { cwd: stagingDirectory, stdout: "pipe", stderr: "pipe" },
-)
-if (pack.exitCode !== 0) {
-  throw new Error(pack.stderr.toString())
+  for (const [subpath, target] of Object.entries(manifest.exports)) {
+    if (typeof target === "string") continue
+    const next = Object.fromEntries(
+      Object.entries(target).filter(
+        ([, path]) => !/\.tsx?$/.test(path) || /\.d\.[cm]?tsx?$/.test(path),
+      ),
+    )
+    if (Object.keys(next).length === 0) delete manifest.exports[subpath]
+    else manifest.exports[subpath] = next
+  }
+  if (isPluginPackage(packageName)) {
+    delete manifest.private
+    const publicDependencies: Record<string, string> = {}
+    for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
+      if (name.startsWith("@pf/") || version.startsWith("workspace:")) continue
+      publicDependencies[name] = version
+    }
+    const publicPeerDependencies = Object.fromEntries(
+      Object.entries(manifest.peerDependencies ?? {}).filter(
+        ([name, version]) =>
+          !name.startsWith("@pf/") && !version.startsWith("workspace:"),
+      ),
+    )
+    manifest.peerDependencies = {
+      ...publicPeerDependencies,
+      processfocus: manifest.version,
+      ...(packageName === "@processfocus/plugin-google-drive" ||
+      packageName === "@processfocus/plugin-resend"
+        ? {
+            "@processfocus/runtime": manifest.version,
+          }
+        : {}),
+    }
+    manifest.dependencies = publicDependencies
+  } else {
+    manifest.dependencies = Object.fromEntries(
+      Object.entries(manifest.dependencies ?? {}).map(([name, version]) => [
+        name,
+        version.startsWith("workspace:") && packageRoots.has(name)
+          ? manifest.version
+          : version,
+      ]),
+    )
+  }
+  delete manifest.devDependencies
+  await writeFile(
+    join(stagingDirectory, "package.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  )
+
+  const pack = Bun.spawnSync(
+    ["bun", "pm", "pack", "--destination", outputDirectory, "--ignore-scripts"],
+    { cwd: stagingDirectory, stdout: "pipe", stderr: "pipe" },
+  )
+  if (pack.exitCode !== 0) {
+    throw new Error(pack.stderr.toString())
+  }
+} finally {
+  await rm(stagingDirectory, { recursive: true, force: true })
 }
 
 const tarballName = (await readdir(outputDirectory)).find(

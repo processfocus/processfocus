@@ -1,5 +1,6 @@
 ---
 title: Invitations
+reviewed: true
 description: Define user invitations in code in Process Focus.
 ---
 
@@ -8,8 +9,8 @@ Focus does not have a mechanism to create users. Users are always
 verified identities. Users must identify themselves first.
 
 But identification is not enough: they also must have permission to
-log in. This permission can be explicitly granted by creating
-invitations in code or via the frontend. It can also be implicitly
+access the system. This permission can be explicitly granted by creating
+invitations in code or in the Dashboard. It can also be implicitly
 granted to those who are members of a group, for example. Support for
 this depends on [SSO providers](/docs/reference/authentication/sso/).
 
@@ -45,7 +46,7 @@ the invitation without a registration link. For passkeys, create a
 [registration link](/docs/reference/authentication/passkeys/#creating-a-registration-link-with-pfcli)
 afterwards.
 
-## Creating invitations in the frontend
+## Creating invitations in the Dashboard
 
 Click on "Users & Sign-in" on the sidebar to see pending invitations:
 

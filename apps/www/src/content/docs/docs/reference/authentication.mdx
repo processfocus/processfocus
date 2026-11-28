@@ -1,5 +1,6 @@
 ---
 title: Authentication
+reviewed: true
 description: Identities, invitations, and passkeys in Process Focus.
 ---
 
@@ -9,7 +10,7 @@ For an introduction, see [Authentication concepts](/docs/concepts/authentication
 Authentication is always a two-step process:
 
 1. Verifying the identity through an identity provider.
-2. Verifying that the identity is allowed to authenticate.
+2. Verifying that the identity is allowed to access the system.
 
 Only when both pass is a user or system considered authenticated.
 
@@ -49,8 +50,7 @@ authenticate. This involves a few steps:
 2. If the identity is new, is there an invitation waiting for the user to proceed?
 3. Otherwise, the identity is blocked.
 
-Note that "log in frontend" is seen as an action and is a separate
-check a user must pass. Actions are subject to authorisation checks.
+Signing in to the Dashboard requires a separate authorisation check.
 
 ### Inviting users
 
@@ -59,4 +59,4 @@ create an invitation. The user is created when the invitation is
 accepted and the recipient has logged in via the enabled
 identification mechanism.
 
-You can create invitations via the frontend or [in code](/docs/reference/authentication/invitations/#invitations-in-code).
+You can create invitations in the Dashboard or [in code](/docs/reference/authentication/invitations/#invitations-in-code).

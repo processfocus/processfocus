@@ -89,32 +89,20 @@ export const assertExecutableBins = ({
   }
 }
 
-export const prepareRelease = (output: string): void => {
-  if (!existsSync("public-source.json"))
-    throw new Error("Release preparation requires an exported public workspace")
-  if (run(["git", "status", "--porcelain"]).trim())
-    throw new Error("Release preparation requires a clean source checkout")
-  const nx = parseManifest(readFileSync("nx.json", "utf8"))
-  if (JSON.stringify(nx["release"]) !== JSON.stringify(releaseConfiguration))
-    throw new Error("Nx Release must contain exactly the fixed initial group")
-  if (existsSync(output)) throw new Error(`Release output exists: ${output}`)
+type PackedReleasePackage = {
+  name: string
+  tarball: string
+  sha256: string
+  manifest: Record<string, unknown>
+  files: ReturnType<typeof inventory>
+}
+
+export const packRelease = (
+  output: string,
+  mirrorLicense?: Buffer,
+): PackedReleasePackage[] => {
   mkdirSync(output, { recursive: true })
-  // No release/changelog/publish umbrella command: version planning has no writes.
-  const plan = run([
-    "bun",
-    "scripts/nx-quiet.ts",
-    "release",
-    "version",
-    RELEASE_VERSION,
-    "--dry-run",
-    "--first-release",
-    "--git-commit=false",
-    "--git-tag=false",
-  ])
-  writeFileSync(join(output, "nx-version-plan.txt"), plan)
-  console.info(
-    "Nx release plan validated; building and packing the fixed group",
-  )
+  console.info("Building and packing the fixed release group")
   console.info(
     run([
       "bun",
@@ -141,10 +129,10 @@ export const prepareRelease = (output: string): void => {
       readFileSync(join(unpacked, "package.json"), "utf8"),
     )
     assertReleaseManifest(manifest, name)
+    // The reviewed mirror export normalizes each package to the root license.
     if (
-      !readFileSync(join(unpacked, "LICENSE.md")).equals(
-        readFileSync("LICENSE.md"),
-      )
+      mirrorLicense &&
+      !readFileSync(join(unpacked, "LICENSE.md")).equals(mirrorLicense)
     )
       throw new Error(`License differs from reviewed source: ${name}`)
     const files = inventory(unpacked)
@@ -205,6 +193,33 @@ export const prepareRelease = (output: string): void => {
   } finally {
     rmSync(consumer, { recursive: true, force: true })
   }
+  return packages
+}
+
+export const prepareRelease = (output: string): void => {
+  if (!existsSync("public-source.json"))
+    throw new Error("Release preparation requires an exported public workspace")
+  if (run(["git", "status", "--porcelain"]).trim())
+    throw new Error("Release preparation requires a clean source checkout")
+  const nx = parseManifest(readFileSync("nx.json", "utf8"))
+  if (JSON.stringify(nx["release"]) !== JSON.stringify(releaseConfiguration))
+    throw new Error("Nx Release must contain exactly the fixed initial group")
+  if (existsSync(output)) throw new Error(`Release output exists: ${output}`)
+  mkdirSync(output, { recursive: true })
+  // No release/changelog/publish umbrella command: version planning has no writes.
+  const plan = run([
+    "bun",
+    "scripts/nx-quiet.ts",
+    "release",
+    "version",
+    RELEASE_VERSION,
+    "--dry-run",
+    "--first-release",
+    "--git-commit=false",
+    "--git-tag=false",
+  ])
+  writeFileSync(join(output, "nx-version-plan.txt"), plan)
+  const packages = packRelease(output, readFileSync("LICENSE.md"))
   console.info("Exercising standalone authoring and plugin consumers")
   writeFileSync(
     join(output, "external-fixtures.txt"),

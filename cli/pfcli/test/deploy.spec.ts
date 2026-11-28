@@ -131,6 +131,7 @@ const createTempOrg = (
     includeCustomMigrations?: boolean
     platformRef?: string
     platformSource?: "public" | "private" | undefined
+    processfocusVersion?: string
   } = {},
 ) => {
   const orgPath = mkdtempSync(join(tmpdir(), "pfcli-deploy-org-"))
@@ -143,8 +144,12 @@ const createTempOrg = (
     `${JSON.stringify(
       {
         version: ORGANISATION_DEPLOY_MANIFEST_VERSION,
-        platformRef: options.platformRef ?? "trunk",
+        platformRef:
+          options.processfocusVersion === undefined
+            ? (options.platformRef ?? "trunk")
+            : undefined,
         platformSource: options.platformSource,
+        processfocusVersion: options.processfocusVersion,
         orgBundleSha256: createHash("sha256").update(orgBundle).digest("hex"),
         awsFunctionNames: [],
         hasLongDurationSteps: false,
@@ -1049,10 +1054,11 @@ process.start(entry).end()
   })
 
   it.each([
-    { platformRef: "trunk", platformSource: undefined },
+    { platformRef: "trunk" },
     { platformRef: "release/candidate", platformSource: "public" as const },
     { platformRef: "1".repeat(40), platformSource: "public" as const },
-  ])("uploads artifact and deploys $platformRef", async (platform) => {
+    { processfocusVersion: "0.1.0-next.3" },
+  ])("uploads artifact and deploys with %o", async (platform) => {
     const testDir = mkdtempSync(join(tmpdir(), "pfcli-deploy-test-"))
     tempPaths.push(testDir)
     const receiptPath = join(testDir, "start.json")
@@ -1090,6 +1096,7 @@ process.start(entry).end()
           documentStore?: string
           platformRef?: string
           platformSource?: string
+          processfocusVersion?: string
           stepPath?: string
           executionId?: string
         }
@@ -1132,6 +1139,12 @@ process.start(entry).end()
         expect(body.query.includes("platformSource: $platformSource")).toBe(
           platform.platformSource !== undefined,
         )
+        expect(body.variables?.processfocusVersion).toBe(
+          platform.processfocusVersion,
+        )
+        expect(
+          body.query.includes("processfocusVersion: $processfocusVersion"),
+        ).toBe(platform.processfocusVersion !== undefined)
         expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual({
           executionId: "pex-durable-canary-receipt",
           attempted: true,

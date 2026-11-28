@@ -8,14 +8,18 @@ export const invalidateImportCompletedQueries = (
   queryClient: QueryClient,
   payload: ImportCompletedPayload,
 ) => {
-  if (payload.processPaths.length === 0) {
-    return Promise.resolve()
-  }
-
-  return queryClient.invalidateQueries({
-    queryKey: formMetadataQueryKey,
+  const lists = queryClient.invalidateQueries({
+    queryKey: ["availableLists"],
     refetchType: "active",
   })
+  if (payload.processPaths.length === 0) return lists
+  return Promise.all([
+    lists,
+    queryClient.invalidateQueries({
+      queryKey: formMetadataQueryKey,
+      refetchType: "active",
+    }),
+  ])
 }
 
 export const refreshImportCompletedCollections = async (

@@ -3,6 +3,7 @@ import { type ReactNode, act } from "react"
 import { type Root, createRoot, hydrateRoot } from "react-dom/client"
 import { renderToString } from "react-dom/server"
 import { DateTimeDisplay, DateTimeDisplayProvider } from "@pf/shadcn-components"
+import { DisconnectForm } from "../app/(protected)/connected-apps/disconnect-form"
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 
 const instant = "2026-01-02T03:04:05.000Z"
@@ -144,6 +145,31 @@ describe("read-only date/time display", () => {
     await click(2)
     await click(2)
     expect(button(2).getAttribute("aria-label")).toContain("Show Relative time")
+  })
+
+  test("same-name MCP grants authorised within one second show distinct dates", async () => {
+    const second = Date.parse(instant)
+    await mount(
+      [second + 123, second + 456].map((authorisedAt) => (
+        <DisconnectForm
+          key={authorisedAt}
+          action={async () => null}
+          name="opencode"
+          access="View work"
+          authorisedAt={authorisedAt}
+          clientId={`client-${authorisedAt}`}
+          grantId={`grant-${authorisedAt}`}
+        />
+      )),
+    )
+    const dates = Array.from(
+      container.querySelectorAll("time"),
+      (time) => time.textContent,
+    )
+    expect(dates).toEqual([
+      expect.stringContaining("10:04:05.123 PM"),
+      expect.stringContaining("10:04:05.456 PM"),
+    ])
   })
 
   test.each(["browser-local", "utc"] as const)(

@@ -29,13 +29,18 @@ describe("import-completed query invalidation", () => {
     })
   })
 
-  test("ignores empty import payloads", async () => {
+  test("refreshes list discovery even when the organisation has no processes", async () => {
     const queryClient = new QueryClient()
-    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries")
+    const lists = ["availableLists", "user", "/staff"]
+    queryClient.setQueryData(lists, [])
+    queryClient.setQueryData(formMetadataQueryKey, {})
 
     await invalidateImportCompletedQueries(queryClient, { processPaths: [] })
 
-    expect(invalidateQueries).not.toHaveBeenCalled()
+    expect(queryClient.getQueryState(lists)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(formMetadataQueryKey)?.isInvalidated).toBe(
+      false,
+    )
   })
 
   test("recreates active replications after import completes", async () => {

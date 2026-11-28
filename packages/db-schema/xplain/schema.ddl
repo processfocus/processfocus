@@ -342,6 +342,14 @@ unique index invitation role its invitationroleidx = invitation, role.
 type oauth storage "oas" = oauth key, key kind, key value, optional key expiry.
 unique index oauth storage its keyidx = oauth key.
 
+# Dashboard MCP OAuth records are separate from issuer credentials.
+base mcp partition (A2048).
+base mcp record key (A64).
+base mcp revision (A36).
+type mcp oauth record "mco" = mcp partition, mcp record key, mcp revision, key value, optional key expiry.
+unique index mcp oauth record its partitionkeyidx = mcp partition, mcp record key.
+index mcp oauth record its expiryidx = key expiry.
+
 # OAuth provider configuration
 base provider name (A64). # OAuth provider name: google, github, etc.
 base provider config (J). # Full Oauth2WrappedConfig as JSON

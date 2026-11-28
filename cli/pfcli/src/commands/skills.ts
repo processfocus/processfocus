@@ -63,7 +63,8 @@ pfcli deploy status --project <project-number> --env <environment-name>
 \`\`\`
 
 - Requires \`pfcli auth login\` credentials.
-- Set \`Organisation.platformRef\` to a branch or full commit SHA. Use \`trunk\` to test merged public-package changes through an authorized existing Backend. The hosted build logs the resolved platform SHA.
+- With no Git selection, deploy uses the exact installed \`processfocus\` release from a Bun, npm, pnpm, or Yarn registry install with a lockfile. Yarn must install into \`node_modules\`. The Backend verifies npm provenance and logs the release and both SHAs.
+- For workspace builds or unpublished packages, set \`Organisation.platformRef\` to a branch or full commit SHA. Set \`platformSource: "public"\` to select the public mirror.
 - Builds the org, uploads the dist artifact, starts the backend deploy process, and waits by default.
 - Ctrl-C stops waiting, not deployment. Check Backend execution status before retrying.
 - Project numbers and internal IDs are accepted. Prefer project numbers in user-facing examples.
